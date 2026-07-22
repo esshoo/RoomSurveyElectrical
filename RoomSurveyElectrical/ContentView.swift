@@ -488,31 +488,35 @@ private struct NewProjectSheet: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section {
-                    CentimeterField(
-                        title: "المفاتيح",
-                        systemImage: "lightswitch.on.fill",
-                        meters: $settings.switchHeightMeters
-                    )
-                    CentimeterField(
-                        title: "الأفياش",
-                        systemImage: "powerplug.fill",
-                        meters: $settings.socketHeightMeters
-                    )
-                    CentimeterField(
-                        title: "الإضاءة الجدارية",
-                        systemImage: "light.beacon.max.fill",
-                        meters: $settings.wallLightHeightMeters
-                    )
-                    CentimeterField(
-                        title: "بعد المفتاح عن الباب",
-                        systemImage: "arrow.left.and.right",
-                        meters: $settings.switchDoorOffsetMeters
-                    )
-                } header: {
-                    Text("ارتفاعات المشروع")
-                } footer: {
-                    Text("القياسات من الأرضية النهائية إلى مركز العنصر، ما عدا بُعد الباب فهو أفقي.")
+                if settings.designMode == .existing {
+                    AsBuiltPlacementNotice()
+                } else {
+                    Section {
+                        CentimeterField(
+                            title: "المفاتيح",
+                            systemImage: "lightswitch.on.fill",
+                            meters: $settings.switchHeightMeters
+                        )
+                        CentimeterField(
+                            title: "الأفياش",
+                            systemImage: "powerplug.fill",
+                            meters: $settings.socketHeightMeters
+                        )
+                        CentimeterField(
+                            title: "الإضاءة الجدارية",
+                            systemImage: "light.beacon.max.fill",
+                            meters: $settings.wallLightHeightMeters
+                        )
+                        CentimeterField(
+                            title: "بعد المفتاح عن الباب",
+                            systemImage: "arrow.left.and.right",
+                            meters: $settings.switchDoorOffsetMeters
+                        )
+                    } header: {
+                        Text("ارتفاعات المشروع")
+                    } footer: {
+                        Text("القياسات من الأرضية النهائية إلى مركز العنصر، ما عدا بُعد الباب فهو أفقي.")
+                    }
                 }
             }
             .navigationTitle("مشروع جديد")
@@ -661,31 +665,35 @@ private struct ElectricalSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section {
-                    CentimeterField(
-                        title: "ارتفاع المفاتيح",
-                        systemImage: "lightswitch.on.fill",
-                        meters: $settings.switchHeightMeters
-                    )
-                    CentimeterField(
-                        title: "ارتفاع الأفياش",
-                        systemImage: "powerplug.fill",
-                        meters: $settings.socketHeightMeters
-                    )
-                    CentimeterField(
-                        title: "الإضاءة الجدارية",
-                        systemImage: "light.beacon.max.fill",
-                        meters: $settings.wallLightHeightMeters
-                    )
-                    CentimeterField(
-                        title: "بعد المفتاح عن الباب",
-                        systemImage: "arrow.left.and.right",
-                        meters: $settings.switchDoorOffsetMeters
-                    )
-                } header: {
-                    Text("الارتفاعات والأبعاد")
-                } footer: {
-                    Text("تظهر القيم بالسنتيمتر، ويحفظها التطبيق داخليًا بالمتر.")
+                if settings.designMode == .existing {
+                    AsBuiltPlacementNotice()
+                } else {
+                    Section {
+                        CentimeterField(
+                            title: "ارتفاع المفاتيح",
+                            systemImage: "lightswitch.on.fill",
+                            meters: $settings.switchHeightMeters
+                        )
+                        CentimeterField(
+                            title: "ارتفاع الأفياش",
+                            systemImage: "powerplug.fill",
+                            meters: $settings.socketHeightMeters
+                        )
+                        CentimeterField(
+                            title: "الإضاءة الجدارية",
+                            systemImage: "light.beacon.max.fill",
+                            meters: $settings.wallLightHeightMeters
+                        )
+                        CentimeterField(
+                            title: "بعد المفتاح عن الباب",
+                            systemImage: "arrow.left.and.right",
+                            meters: $settings.switchDoorOffsetMeters
+                        )
+                    } header: {
+                        Text("الارتفاعات والأبعاد")
+                    } footer: {
+                        Text("تظهر القيم بالسنتيمتر، ويحفظها التطبيق داخليًا بالمتر.")
+                    }
                 }
 
                 Section("قواعد التثبيت") {
@@ -738,6 +746,25 @@ private struct CentimeterField: View {
             .frame(width: 72)
             Text("سم")
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct AsBuiltPlacementNotice: View {
+    var body: some View {
+        Section("المقاسات الفعلية") {
+            Label {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("سيتم تسجيل العناصر في أماكنها الحالية")
+                        .font(.headline)
+                    Text("لن يغيّر التطبيق الارتفاع أو البُعد عن الباب. سيقارن التقرير لاحقًا المقاسات الفعلية بالمقاسات القياسية ويُظهر مقدار الاختلاف.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "ruler.fill")
+                    .foregroundStyle(.blue)
+            }
         }
     }
 }
