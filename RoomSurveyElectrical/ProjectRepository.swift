@@ -71,7 +71,11 @@ enum ProjectRepository {
         }
     }
 
-    static func createProject(room: CapturedRoom, rawData: CapturedRoomData?) throws -> RoomProject {
+    static func createProject(
+        room: CapturedRoom,
+        rawData: CapturedRoomData?,
+        name requestedName: String? = nil
+    ) throws -> RoomProject {
         let id = UUID()
         let projectDirectory = try directory(for: id, create: true)
         let processedFile = "room.json"
@@ -122,9 +126,13 @@ enum ProjectRepository {
             + room.windows.map { SurfaceSnapshot(surface: $0, kind: .window) }
             + room.openings.map { SurfaceSnapshot(surface: $0, kind: .opening) }
 
+        let cleanName = requestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scanName = cleanName.flatMap { $0.isEmpty ? nil : $0 }
+            ?? "غرفة \(formatter.string(from: Date()))"
+
         let project = RoomProject(
             id: id,
-            name: "غرفة \(formatter.string(from: Date()))",
+            name: scanName,
             createdAt: Date(),
             walls: room.walls.map { WallSnapshot(surface: $0) },
             surfaces: surfaces,
@@ -163,6 +171,16 @@ enum ProjectRepository {
             return try? decoder.decode(RoomProject.self, from: data)
         }
         .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    static func load(projectID: UUID) -> RoomProject? {
+        guard let projectDirectory = try? directory(for: projectID, create: false),
+              let data = try? Data(
+                contentsOf: projectDirectory.appendingPathComponent("project.json")
+              ) else {
+            return nil
+        }
+        return try? decoder.decode(RoomProject.self, from: data)
     }
 
     static func fileURL(projectID: UUID, fileName: String) throws -> URL {

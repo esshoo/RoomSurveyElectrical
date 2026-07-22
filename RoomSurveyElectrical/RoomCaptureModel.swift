@@ -21,8 +21,19 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
 
     private let configuration = RoomCaptureSession.Configuration()
     private var rawRoomData: CapturedRoomData?
+    private let destination: ScanDestination?
 
     override init() {
+        destination = nil
+        let sharedSession = ARSession()
+        arSession = sharedSession
+        roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
+        super.init()
+        roomCaptureView.delegate = self
+    }
+
+    init(destination: ScanDestination) {
+        self.destination = destination
         let sharedSession = ARSession()
         arSession = sharedSession
         roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
@@ -31,6 +42,7 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
     }
 
     required init?(coder: NSCoder) {
+        destination = nil
         let sharedSession = ARSession()
         arSession = sharedSession
         roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
@@ -106,10 +118,15 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
             }
 
             do {
-                self.project = try ProjectRepository.createProject(
+                let roomProject = try ProjectRepository.createProject(
                     room: processedResult,
-                    rawData: self.rawRoomData
+                    rawData: self.rawRoomData,
+                    name: self.destination?.scanName
                 )
+                if let destination = self.destination {
+                    _ = try WorkspaceRepository.attachScan(roomProject, to: destination)
+                }
+                self.project = roomProject
                 self.phase = .ready
             } catch {
                 self.phase = .failed("فشل حفظ نتيجة المسح: \(error.localizedDescription)")
