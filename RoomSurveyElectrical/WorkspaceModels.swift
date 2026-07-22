@@ -108,20 +108,25 @@ struct WorkspaceItem: Codable, Identifiable, Equatable {
     var name: String
     let kind: WorkspaceItemKind
     let createdAt: Date
+    var isArchived: Bool?
 
     init(
         id: UUID = UUID(),
         parentID: UUID?,
         name: String,
         kind: WorkspaceItemKind,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        isArchived: Bool? = nil
     ) {
         self.id = id
         self.parentID = parentID
         self.name = name
         self.kind = kind
         self.createdAt = createdAt
+        self.isArchived = isArchived
     }
+
+    var archived: Bool { isArchived ?? false }
 }
 
 struct ScanReference: Codable, Identifiable, Equatable {
@@ -129,13 +134,17 @@ struct ScanReference: Codable, Identifiable, Equatable {
     var parentID: UUID?
     var name: String
     let createdAt: Date
+    var isArchived: Bool?
 
-    init(roomProject: RoomProject, parentID: UUID?) {
+    init(roomProject: RoomProject, parentID: UUID?, isArchived: Bool? = nil) {
         id = roomProject.id
         self.parentID = parentID
         name = roomProject.name
         createdAt = roomProject.createdAt
+        self.isArchived = isArchived
     }
+
+    var archived: Bool { isArchived ?? false }
 }
 
 struct SurveyProject: Codable, Identifiable, Equatable {
@@ -149,6 +158,7 @@ struct SurveyProject: Codable, Identifiable, Equatable {
     var items: [WorkspaceItem]
     var scans: [ScanReference]
     var isImportedArchive: Bool
+    var isArchived: Bool?
 
     init(
         id: UUID = UUID(),
@@ -159,7 +169,8 @@ struct SurveyProject: Codable, Identifiable, Equatable {
         updatedAt: Date = Date(),
         items: [WorkspaceItem] = [],
         scans: [ScanReference] = [],
-        isImportedArchive: Bool = false
+        isImportedArchive: Bool = false,
+        isArchived: Bool? = nil
     ) {
         formatVersion = 1
         self.id = id
@@ -171,6 +182,7 @@ struct SurveyProject: Codable, Identifiable, Equatable {
         self.items = items
         self.scans = scans
         self.isImportedArchive = isImportedArchive
+        self.isArchived = isArchived
     }
 
     var roomCount: Int {
@@ -178,10 +190,13 @@ struct SurveyProject: Codable, Identifiable, Equatable {
     }
 
     var scanCount: Int { scans.count }
+    var archived: Bool { isArchived ?? false }
+    var archivedItemCount: Int { items.filter(\.archived).count }
+    var archivedScanCount: Int { scans.filter(\.archived).count }
 
     func children(of parentID: UUID?) -> [WorkspaceItem] {
         items
-            .filter { $0.parentID == parentID }
+            .filter { $0.parentID == parentID && !$0.archived }
             .sorted {
                 if $0.kind.rawValue == $1.kind.rawValue {
                     return $0.createdAt < $1.createdAt
@@ -192,8 +207,25 @@ struct SurveyProject: Codable, Identifiable, Equatable {
 
     func scans(in parentID: UUID?) -> [ScanReference] {
         scans
-            .filter { $0.parentID == parentID }
+            .filter { $0.parentID == parentID && !$0.archived }
             .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func item(id: UUID) -> WorkspaceItem? {
+        items.first { $0.id == id }
+    }
+
+    func descendantIDs(of itemID: UUID) -> Set<UUID> {
+        var result: Set<UUID> = []
+        var pending = [itemID]
+        while let current = pending.popLast() {
+            let childIDs = items.filter { $0.parentID == current }.map(\.id)
+            for childID in childIDs where !result.contains(childID) {
+                result.insert(childID)
+                pending.append(childID)
+            }
+        }
+        return result
     }
 }
 

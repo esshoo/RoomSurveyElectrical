@@ -22,11 +22,24 @@ struct ViewerLayerVisibility: Equatable {
 }
 
 struct RoomViewerView: View {
-    let project: RoomProject
+    @EnvironmentObject private var store: ProjectStore
+    @Environment(\.dismiss) private var dismiss
+
+    let surveyProjectID: UUID
+    @State private var project: RoomProject
 
     @State private var mode: ScanPresentationMode = .plan2D
     @State private var layers = ViewerLayerVisibility()
     @State private var showInformation = false
+    @State private var showRename = false
+    @State private var showMove = false
+    @State private var showDeleteConfirmation = false
+    @State private var errorMessage: String?
+
+    init(initialProject: RoomProject, surveyProjectID: UUID) {
+        self.surveyProjectID = surveyProjectID
+        _project = State(initialValue: initialProject)
+    }
 
     var body: some View {
         ZStack {
@@ -52,6 +65,65 @@ struct RoomViewerView: View {
         }
         .sheet(isPresented: $showInformation) {
             ScanInformationSheet(project: project)
+        }
+        .sheet(isPresented: $showRename) {
+            RenameSheet(title: "إعادة تسمية المسح", initialName: project.name) { name in
+                do {
+                    try store.renameScan(
+                        projectID: surveyProjectID,
+                        scanID: project.id,
+                        name: name
+                    )
+                    reloadProject()
+                    return nil
+                } catch {
+                    return error.localizedDescription
+                }
+            }
+        }
+        .sheet(isPresented: $showMove) {
+            if let workspaceProject = store.project(id: surveyProjectID) {
+                MoveDestinationSheet(
+                    project: workspaceProject,
+                    excludedItemIDs: [],
+                    currentParentID: scanReference?.parentID
+                ) { destinationID in
+                    do {
+                        try store.moveScan(
+                            projectID: surveyProjectID,
+                            scanID: project.id,
+                            destinationParentID: destinationID
+                        )
+                        return nil
+                    } catch {
+                        return error.localizedDescription
+                    }
+                }
+            }
+        }
+        .alert("تعذر تنفيذ العملية", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("حسنًا", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .confirmationDialog(
+            "حذف المسح نهائيًا",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("حذف نهائيًا", role: .destructive) {
+                deleteScan()
+            }
+            Button("إلغاء", role: .cancel) {}
+        } message: {
+            Text("سيتم حذف بيانات المسح وملفات JSON وUSDZ، ولا يمكن التراجع عن ذلك.")
+        }
+        .onAppear {
+            store.reload()
+            reloadProject()
         }
     }
 
@@ -134,6 +206,46 @@ struct RoomViewerView: View {
                 Label("معلومات المسح والحصر", systemImage: "info.circle")
             }
 
+            Section("إدارة المسح") {
+                Button {
+                    showRename = true
+                } label: {
+                    Label("إعادة تسمية", systemImage: "pencil")
+                }
+
+                Button {
+                    duplicateScan()
+                } label: {
+                    Label("إنشاء نسخة", systemImage: "plus.square.on.square")
+                }
+
+                Button {
+                    showMove = true
+                } label: {
+                    Label("نقل", systemImage: "folder")
+                }
+
+                if scanIsArchived {
+                    Button {
+                        setScanArchived(false)
+                    } label: {
+                        Label("استعادة من الأرشيف", systemImage: "arrow.uturn.backward.circle")
+                    }
+
+                    Button(role: .destructive) {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Label("حذف نهائي", systemImage: "trash")
+                    }
+                } else {
+                    Button {
+                        setScanArchived(true)
+                    } label: {
+                        Label("أرشفة", systemImage: "archivebox")
+                    }
+                }
+            }
+
             Section("تصدير الملفات الأصلية") {
                 if let url = try? ProjectRepository.fileURL(
                     projectID: project.id,
@@ -164,6 +276,50 @@ struct RoomViewerView: View {
             }
         } label: {
             Image(systemName: "ellipsis.circle")
+        }
+    }
+
+    private var scanReference: ScanReference? {
+        store.project(id: surveyProjectID)?.scans.first { $0.id == project.id }
+    }
+
+    private var scanIsArchived: Bool {
+        scanReference?.archived ?? false
+    }
+
+    private func reloadProject() {
+        if let updatedProject = ProjectRepository.load(projectID: project.id) {
+            project = updatedProject
+        }
+    }
+
+    private func duplicateScan() {
+        do {
+            try store.duplicateScan(projectID: surveyProjectID, scanID: project.id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func setScanArchived(_ archived: Bool) {
+        do {
+            try store.setScanArchived(
+                projectID: surveyProjectID,
+                scanID: project.id,
+                archived: archived
+            )
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteScan() {
+        do {
+            try store.deleteScan(projectID: surveyProjectID, scanID: project.id)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }
@@ -214,7 +370,7 @@ private struct Plan2DView: View {
         DragGesture()
             .onChanged { value in
                 offset = CGSize(
-                    width: committedOffset.width + value.translation.width,
+                    width: committedOffset.width - value.translation.width,
                     height: committedOffset.height + value.translation.height
                 )
             }
@@ -479,7 +635,7 @@ private struct PlanProjection {
         let midZ = (minZ + maxZ) / 2
         return CGPoint(
             x: size.width / 2 + CGFloat(point.x - midX) * scale,
-            y: size.height / 2 - CGFloat(point.y - midZ) * scale
+            y: size.height / 2 + CGFloat(point.y - midZ) * scale
         )
     }
 }

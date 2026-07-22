@@ -51,14 +51,14 @@ struct ContentView: View {
                 }
 
                 Section("المشروعات") {
-                    if store.projects.isEmpty {
+                    if store.activeProjects.isEmpty {
                         ContentUnavailableView(
                             "لا توجد مشروعات بعد",
                             systemImage: "folder.badge.plus",
                             description: Text("اضغط زر + لإنشاء أول مشروع.")
                         )
                     } else {
-                        ForEach(store.projects) { project in
+                        ForEach(store.activeProjects) { project in
                             NavigationLink {
                                 ProjectBrowserView(
                                     projectID: project.id,
@@ -68,6 +68,25 @@ struct ContentView: View {
                             } label: {
                                 SurveyProjectRow(project: project)
                             }
+                        }
+                    }
+                }
+
+                Section("المجلدات") {
+                    NavigationLink {
+                        ArchivedProjectsView()
+                    } label: {
+                        Label {
+                            HStack {
+                                Text("الأرشيف")
+                                Spacer()
+                                Text("\(store.archivedProjects.count)")
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                        } icon: {
+                            Image(systemName: "archivebox.fill")
+                                .foregroundStyle(.orange)
                         }
                     }
                 }
@@ -128,6 +147,37 @@ struct ContentView: View {
     }
 }
 
+private struct ArchivedProjectsView: View {
+    @EnvironmentObject private var store: ProjectStore
+
+    var body: some View {
+        List {
+            if store.archivedProjects.isEmpty {
+                ContentUnavailableView(
+                    "الأرشيف فارغ",
+                    systemImage: "archivebox",
+                    description: Text("المشروعات التي تؤرشفها ستظهر هنا، ويمكن حذفها نهائيًا من داخلها.")
+                )
+            } else {
+                ForEach(store.archivedProjects) { project in
+                    NavigationLink {
+                        ProjectBrowserView(
+                            projectID: project.id,
+                            parentItemID: nil,
+                            title: project.name
+                        )
+                    } label: {
+                        SurveyProjectRow(project: project)
+                    }
+                }
+            }
+        }
+        .navigationTitle("أرشيف المشروعات")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: store.reload)
+    }
+}
+
 private struct SurveyProjectRow: View {
     let project: SurveyProject
 
@@ -165,6 +215,7 @@ private struct SurveyProjectRow: View {
 
 private struct ProjectBrowserView: View {
     @EnvironmentObject private var store: ProjectStore
+    @Environment(\.dismiss) private var dismiss
 
     let projectID: UUID
     let parentItemID: UUID?
@@ -175,6 +226,9 @@ private struct ProjectBrowserView: View {
     @State private var pendingScanName: String?
     @State private var activeDestination: ScanDestination?
     @State private var showProjectSettings = false
+    @State private var showRename = false
+    @State private var showMove = false
+    @State private var showDeleteConfirmation = false
     @State private var errorMessage: String?
 
     var body: some View {
@@ -188,23 +242,19 @@ private struct ProjectBrowserView: View {
                 )
             }
         }
-        .navigationTitle(title)
+        .navigationTitle(currentTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    Button {
-                        showProjectSettings = true
-                    } label: {
-                        Label("إعدادات المشروع", systemImage: "slider.horizontal.3")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+                if let project = store.project(id: projectID) {
+                    managementMenu(project)
                 }
             }
         }
         .safeAreaInset(edge: .bottom) {
-            addMenu
+            if canAddContent {
+                addMenu
+            }
         }
         .sheet(item: $selectedItemKind) { kind in
             NewWorkspaceItemSheet(kind: kind) { name in
@@ -241,6 +291,52 @@ private struct ProjectBrowserView: View {
                 }
             }
         }
+        .sheet(isPresented: $showRename) {
+            RenameSheet(title: "إعادة تسمية", initialName: currentTitle) { name in
+                do {
+                    if let parentItemID {
+                        try store.renameItem(projectID: projectID, itemID: parentItemID, name: name)
+                    } else {
+                        try store.renameProject(projectID: projectID, name: name)
+                    }
+                    return nil
+                } catch {
+                    return error.localizedDescription
+                }
+            }
+        }
+        .sheet(isPresented: $showMove) {
+            if let project = store.project(id: projectID) {
+                if let parentItemID {
+                    MoveDestinationSheet(
+                        project: project,
+                        excludedItemIDs: project.descendantIDs(of: parentItemID).union([parentItemID]),
+                        currentParentID: project.item(id: parentItemID)?.parentID
+                    ) { destinationID in
+                        do {
+                            try store.moveItem(
+                                projectID: projectID,
+                                itemID: parentItemID,
+                                destinationParentID: destinationID
+                            )
+                            return nil
+                        } catch {
+                            return error.localizedDescription
+                        }
+                    }
+                } else {
+                    ProjectMoveSheet(isArchived: project.archived) { archived in
+                        do {
+                            try store.setProjectArchived(projectID: projectID, archived: archived)
+                            dismiss()
+                            return nil
+                        } catch {
+                            return error.localizedDescription
+                        }
+                    }
+                }
+            }
+        }
         .fullScreenCover(item: $activeDestination, onDismiss: store.reload) { destination in
             RoomWorkflowView(destination: destination) {
                 activeDestination = nil
@@ -253,6 +349,18 @@ private struct ProjectBrowserView: View {
             Button("حسنًا", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "")
+        }
+        .confirmationDialog(
+            "حذف نهائي",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("حذف نهائيًا", role: .destructive) {
+                deleteCurrent()
+            }
+            Button("إلغاء", role: .cancel) {}
+        } message: {
+            Text("سيتم حذف العنصر وكل المسحات والملفات التابعة له، ولا يمكن التراجع عن ذلك.")
         }
         .onAppear(perform: store.reload)
     }
@@ -295,9 +403,30 @@ private struct ProjectBrowserView: View {
                 Section("المسحات") {
                     ForEach(scans) { scan in
                         NavigationLink {
-                            ScanDetailLoaderView(scanID: scan.id)
+                            ScanDetailLoaderView(projectID: projectID, scanID: scan.id)
                         } label: {
                             ScanReferenceRow(scan: scan)
+                        }
+                    }
+                }
+            }
+
+            if parentItemID == nil {
+                Section("المجلدات") {
+                    NavigationLink {
+                        ProjectArchiveView(projectID: projectID)
+                    } label: {
+                        Label {
+                            HStack {
+                                Text("الأرشيف")
+                                Spacer()
+                                Text("\(project.archivedItemCount + project.archivedScanCount)")
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                        } icon: {
+                            Image(systemName: "archivebox.fill")
+                                .foregroundStyle(.orange)
                         }
                     }
                 }
@@ -308,7 +437,11 @@ private struct ProjectBrowserView: View {
                     ContentUnavailableView(
                         "هذا المجلد فارغ",
                         systemImage: "folder",
-                        description: Text("استخدم زر + لإضافة مستوى تنظيمي أو بدء مسح جديد.")
+                        description: Text(
+                            canAddContent
+                                ? "استخدم زر + لإضافة مستوى تنظيمي أو بدء مسح جديد."
+                                : "استعد هذا العنصر من الأرشيف إذا أردت إضافة محتوى جديد."
+                        )
                     )
                 }
             }
@@ -355,7 +488,127 @@ private struct ProjectBrowserView: View {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "ar")
         formatter.dateFormat = "d MMM - HH:mm"
-        return "مسح \(title) - \(formatter.string(from: Date()))"
+        return "مسح \(currentTitle) - \(formatter.string(from: Date()))"
+    }
+
+    private var currentTitle: String {
+        guard let project = store.project(id: projectID) else { return title }
+        if let parentItemID, let item = project.item(id: parentItemID) {
+            return item.name
+        }
+        return project.name
+    }
+
+    private var canAddContent: Bool {
+        guard let project = store.project(id: projectID), !project.archived else { return false }
+        if let parentItemID {
+            return project.item(id: parentItemID)?.archived == false
+        }
+        return true
+    }
+
+    @ViewBuilder
+    private func managementMenu(_ project: SurveyProject) -> some View {
+        Menu {
+            if parentItemID == nil {
+                Button {
+                    showProjectSettings = true
+                } label: {
+                    Label("إعدادات المشروع", systemImage: "slider.horizontal.3")
+                }
+            }
+
+            Button {
+                showRename = true
+            } label: {
+                Label("إعادة تسمية", systemImage: "pencil")
+            }
+
+            Button {
+                duplicateCurrent()
+            } label: {
+                Label("إنشاء نسخة", systemImage: "plus.square.on.square")
+            }
+
+            Button {
+                showMove = true
+            } label: {
+                Label("نقل", systemImage: "folder")
+            }
+
+            Divider()
+
+            if currentIsArchived(in: project) {
+                Button {
+                    setCurrentArchived(false)
+                } label: {
+                    Label("استعادة من الأرشيف", systemImage: "arrow.uturn.backward.circle")
+                }
+
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("حذف نهائي", systemImage: "trash")
+                }
+            } else {
+                Button {
+                    setCurrentArchived(true)
+                } label: {
+                    Label("أرشفة", systemImage: "archivebox")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+    }
+
+    private func currentIsArchived(in project: SurveyProject) -> Bool {
+        if let parentItemID {
+            return project.item(id: parentItemID)?.archived ?? false
+        }
+        return project.archived
+    }
+
+    private func duplicateCurrent() {
+        do {
+            if let parentItemID {
+                try store.duplicateItem(projectID: projectID, itemID: parentItemID)
+            } else {
+                try store.duplicateProject(projectID: projectID)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func setCurrentArchived(_ archived: Bool) {
+        do {
+            if let parentItemID {
+                try store.setItemArchived(
+                    projectID: projectID,
+                    itemID: parentItemID,
+                    archived: archived
+                )
+            } else {
+                try store.setProjectArchived(projectID: projectID, archived: archived)
+            }
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteCurrent() {
+        do {
+            if let parentItemID {
+                try store.deleteItem(projectID: projectID, itemID: parentItemID)
+            } else {
+                try store.deleteProject(projectID: projectID)
+            }
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func beginPendingScan() {
@@ -431,12 +684,366 @@ private struct ScanReferenceRow: View {
     }
 }
 
+private struct ProjectArchiveView: View {
+    @EnvironmentObject private var store: ProjectStore
+
+    let projectID: UUID
+
+    var body: some View {
+        Group {
+            if let project = store.project(id: projectID) {
+                archiveList(project)
+            } else {
+                ContentUnavailableView(
+                    "المشروع غير موجود",
+                    systemImage: "folder.badge.questionmark"
+                )
+            }
+        }
+        .navigationTitle("أرشيف المشروع")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: store.reload)
+    }
+
+    @ViewBuilder
+    private func archiveList(_ project: SurveyProject) -> some View {
+        let items = project.items
+            .filter { $0.archived && !hasArchivedAncestor($0, in: project) }
+            .sorted { $0.createdAt > $1.createdAt }
+        let scans = project.scans
+            .filter { $0.archived }
+            .sorted { $0.createdAt > $1.createdAt }
+
+        List {
+            if !items.isEmpty {
+                Section("المجلدات والمساحات") {
+                    ForEach(items) { item in
+                        NavigationLink {
+                            ProjectBrowserView(
+                                projectID: projectID,
+                                parentItemID: item.id,
+                                title: item.name
+                            )
+                        } label: {
+                            WorkspaceItemRow(item: item, project: project)
+                        }
+                    }
+                }
+            }
+
+            if !scans.isEmpty {
+                Section("المسحات") {
+                    ForEach(scans) { scan in
+                        NavigationLink {
+                            ScanDetailLoaderView(projectID: projectID, scanID: scan.id)
+                        } label: {
+                            ScanReferenceRow(scan: scan)
+                        }
+                    }
+                }
+            }
+
+            if items.isEmpty && scans.isEmpty {
+                ContentUnavailableView(
+                    "أرشيف المشروع فارغ",
+                    systemImage: "archivebox",
+                    description: Text("العناصر والمسحات التي تؤرشفها من هذا المشروع ستظهر هنا.")
+                )
+            }
+        }
+    }
+
+    private func hasArchivedAncestor(_ item: WorkspaceItem, in project: SurveyProject) -> Bool {
+        var candidate = item
+        var visited: Set<UUID> = []
+        while let parentID = candidate.parentID,
+              !visited.contains(parentID),
+              let parent = project.item(id: parentID) {
+            if parent.archived { return true }
+            visited.insert(parentID)
+            candidate = parent
+        }
+        return false
+    }
+}
+
+struct RenameSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var errorMessage: String?
+
+    let title: String
+    let onSave: (String) -> String?
+
+    init(title: String, initialName: String, onSave: @escaping (String) -> String?) {
+        self.title = title
+        _name = State(initialValue: initialName)
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("الاسم") {
+                    TextField("اكتب الاسم الجديد", text: $name)
+                        .textInputAutocapitalization(.words)
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("حفظ") {
+                        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let error = onSave(cleanName) {
+                            errorMessage = error
+                        } else {
+                            dismiss()
+                        }
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .alert("تعذر الحفظ", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("حسنًا", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+}
+
+struct MoveDestinationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var errorMessage: String?
+
+    let project: SurveyProject
+    let excludedItemIDs: Set<UUID>
+    let currentParentID: UUID?
+    let onMove: (UUID?) -> String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("مكان النقل") {
+                    destinationButton(
+                        title: "مجلد المشروع الرئيسي",
+                        subtitle: project.name,
+                        image: project.kind.systemImage,
+                        destinationID: nil
+                    )
+
+                    ForEach(availableItems) { item in
+                        destinationButton(
+                            title: item.name,
+                            subtitle: item.kind.title,
+                            image: item.kind.systemImage,
+                            destinationID: item.id
+                        )
+                    }
+                }
+            }
+            .navigationTitle("نقل إلى")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+            }
+            .alert("تعذر النقل", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("حسنًا", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+
+    private var availableItems: [WorkspaceItem] {
+        project.items
+            .filter {
+                !excludedItemIDs.contains($0.id)
+                    && !$0.archived
+                    && !hasArchivedAncestor($0)
+            }
+            .sorted {
+                if hierarchyDepth(of: $0) == hierarchyDepth(of: $1) {
+                    return $0.createdAt < $1.createdAt
+                }
+                return hierarchyDepth(of: $0) < hierarchyDepth(of: $1)
+            }
+    }
+
+    private func hasArchivedAncestor(_ item: WorkspaceItem) -> Bool {
+        var candidate = item
+        var visited: Set<UUID> = []
+        while let parentID = candidate.parentID,
+              !visited.contains(parentID),
+              let parent = project.item(id: parentID) {
+            if parent.archived { return true }
+            visited.insert(parentID)
+            candidate = parent
+        }
+        return false
+    }
+
+    private func hierarchyDepth(of item: WorkspaceItem) -> Int {
+        var depth = 0
+        var candidate = item
+        var visited: Set<UUID> = []
+        while let parentID = candidate.parentID,
+              !visited.contains(parentID),
+              let parent = project.item(id: parentID) {
+            depth += 1
+            visited.insert(parentID)
+            candidate = parent
+        }
+        return depth
+    }
+
+    private func destinationButton(
+        title: String,
+        subtitle: String,
+        image: String,
+        destinationID: UUID?
+    ) -> some View {
+        let depth = destinationID.flatMap { id in
+            project.item(id: id).map { hierarchyDepth(of: $0) }
+        } ?? 0
+
+        Button {
+            if let error = onMove(destinationID) {
+                errorMessage = error
+            } else {
+                dismiss()
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: image)
+                    .foregroundStyle(.blue)
+                    .frame(width: 32)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if currentParentID == destinationID {
+                    Label("الحالي", systemImage: "checkmark.circle.fill")
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(.green)
+                } else {
+                    Image(systemName: "chevron.left")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.leading, CGFloat(depth) * 14)
+        }
+        .disabled(currentParentID == destinationID)
+    }
+}
+
+struct ProjectMoveSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var errorMessage: String?
+
+    let isArchived: Bool
+    let onMove: (Bool) -> String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("مكان المشروع") {
+                    moveButton(
+                        title: "المشروعات الحالية",
+                        subtitle: "يظهر المشروع في الصفحة الرئيسية",
+                        image: "folder.fill",
+                        archived: false
+                    )
+                    moveButton(
+                        title: "الأرشيف",
+                        subtitle: "يُحفظ بعيدًا عن قائمة المشروعات الحالية",
+                        image: "archivebox.fill",
+                        archived: true
+                    )
+                }
+            }
+            .navigationTitle("نقل المشروع")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+            }
+            .alert("تعذر النقل", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("حسنًا", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+
+    private func moveButton(
+        title: String,
+        subtitle: String,
+        image: String,
+        archived: Bool
+    ) -> some View {
+        Button {
+            if let error = onMove(archived) {
+                errorMessage = error
+            } else {
+                dismiss()
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: image)
+                    .foregroundStyle(archived ? .orange : .blue)
+                    .frame(width: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if isArchived == archived {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+            }
+        }
+        .disabled(isArchived == archived)
+    }
+}
+
 private struct ScanDetailLoaderView: View {
+    let projectID: UUID
     let scanID: UUID
 
     var body: some View {
         if let project = ProjectRepository.load(projectID: scanID) {
-            ProjectDetailView(project: project)
+            ProjectDetailView(project: project, surveyProjectID: projectID)
         } else {
             ContentUnavailableView(
                 "ملفات المسح غير موجودة",
@@ -866,8 +1473,9 @@ private struct ScanRoomView: View {
 
 private struct ProjectDetailView: View {
     let project: RoomProject
+    let surveyProjectID: UUID
 
     var body: some View {
-        RoomViewerView(project: project)
+        RoomViewerView(initialProject: project, surveyProjectID: surveyProjectID)
     }
 }

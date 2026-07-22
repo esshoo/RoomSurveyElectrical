@@ -5,6 +5,7 @@ enum ProjectRepository {
     enum RepositoryError: LocalizedError {
         case documentsDirectoryUnavailable
         case projectNotFound
+        case invalidName
 
         var errorDescription: String? {
             switch self {
@@ -12,6 +13,8 @@ enum ProjectRepository {
                 "تعذر الوصول إلى مجلد المستندات."
             case .projectNotFound:
                 "ملفات المشروع غير موجودة."
+            case .invalidName:
+                "اكتب اسمًا صحيحًا قبل الحفظ."
             }
         }
     }
@@ -202,11 +205,61 @@ enum ProjectRepository {
         return url
     }
 
-    private static func directory(for projectID: UUID, create: Bool) throws -> URL {
+    static func rename(projectID: UUID, name: String) throws -> RoomProject {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else { throw RepositoryError.invalidName }
+        guard var project = load(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        project.name = cleanName
+        try save(project)
+        return project
+    }
+
+    static func duplicate(projectID: UUID, name: String? = nil) throws -> RoomProject {
+        guard let source = load(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+
+        let newID = UUID()
+        let sourceDirectory = try directory(for: projectID, create: false)
+        let destinationDirectory = try directory(for: newID, create: false, validateExistence: false)
+        try fileManager.copyItem(at: sourceDirectory, to: destinationDirectory)
+
+        let requestedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let copyName = requestedName.flatMap { $0.isEmpty ? nil : $0 }
+            ?? "نسخة من \(source.name)"
+        let copy = RoomProject(
+            id: newID,
+            name: copyName,
+            createdAt: Date(),
+            walls: source.walls,
+            surfaces: source.surfaces,
+            floors: source.floors,
+            objects: source.objects,
+            points: source.points,
+            processedJSONFile: source.processedJSONFile,
+            rawJSONFile: source.rawJSONFile,
+            usdzFile: source.usdzFile
+        )
+        try save(copy)
+        return copy
+    }
+
+    static func delete(projectID: UUID) throws {
+        let projectDirectory = try directory(for: projectID, create: false)
+        try fileManager.removeItem(at: projectDirectory)
+    }
+
+    private static func directory(
+        for projectID: UUID,
+        create: Bool,
+        validateExistence: Bool = true
+    ) throws -> URL {
         let url = try projectsDirectory.appendingPathComponent(projectID.uuidString, isDirectory: true)
         if create {
             try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        } else if !fileManager.fileExists(atPath: url.path) {
+        } else if validateExistence && !fileManager.fileExists(atPath: url.path) {
             throw RepositoryError.projectNotFound
         }
         return url
