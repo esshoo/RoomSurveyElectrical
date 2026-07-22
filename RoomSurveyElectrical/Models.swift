@@ -123,12 +123,75 @@ struct SurfaceSnapshot: Codable, Identifiable, Equatable {
     }
 }
 
+struct FloorSnapshot: Codable, Identifiable, Equatable {
+    let id: UUID
+    let width: Float
+    let depth: Float
+    let transform: [Float]
+
+    init(surface: CapturedRoom.Surface) {
+        id = surface.identifier
+        width = surface.dimensions.x
+        depth = surface.dimensions.y
+        transform = surface.transform.columnMajorValues
+    }
+
+    var matrix: simd_float4x4 {
+        simd_float4x4(columnMajorValues: transform)
+    }
+}
+
+struct RoomObjectSnapshot: Codable, Identifiable, Equatable {
+    let id: UUID
+    let category: String
+    let width: Float
+    let height: Float
+    let depth: Float
+    let transform: [Float]
+
+    init(object: CapturedRoom.Object) {
+        id = object.identifier
+        category = String(describing: object.category)
+        width = object.dimensions.x
+        height = object.dimensions.y
+        depth = object.dimensions.z
+        transform = object.transform.columnMajorValues
+    }
+
+    var matrix: simd_float4x4 {
+        simd_float4x4(columnMajorValues: transform)
+    }
+
+    var title: String {
+        let normalized = category.lowercased()
+        if normalized.contains("bed") { return "سرير" }
+        if normalized.contains("bathtub") { return "بانيو" }
+        if normalized.contains("chair") { return "كرسي" }
+        if normalized.contains("dishwasher") { return "غسالة أطباق" }
+        if normalized.contains("fireplace") { return "مدفأة" }
+        if normalized.contains("oven") { return "فرن" }
+        if normalized.contains("refrigerator") { return "ثلاجة" }
+        if normalized.contains("sink") { return "حوض" }
+        if normalized.contains("sofa") { return "كنبة" }
+        if normalized.contains("stairs") { return "سلم" }
+        if normalized.contains("storage") { return "تخزين" }
+        if normalized.contains("stove") { return "موقد" }
+        if normalized.contains("table") { return "طاولة" }
+        if normalized.contains("television") { return "تلفزيون" }
+        if normalized.contains("toilet") { return "مرحاض" }
+        if normalized.contains("washer") { return "غسالة" }
+        return "أثاث"
+    }
+}
+
 struct RoomProject: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
     let createdAt: Date
     let walls: [WallSnapshot]
     let surfaces: [SurfaceSnapshot]
+    var floors: [FloorSnapshot]?
+    var objects: [RoomObjectSnapshot]?
     var points: [ElectricalPoint]
     let processedJSONFile: String
     let rawJSONFile: String?
@@ -137,6 +200,7 @@ struct RoomProject: Codable, Identifiable, Equatable {
     var wallCount: Int { walls.count }
     var doorCount: Int { surfaces.filter { $0.kind == .door }.count }
     var windowCount: Int { surfaces.filter { $0.kind == .window }.count }
+    var furnitureCount: Int { objects?.count ?? 0 }
 
     var boq: [BOQLine] {
         ElectricalDeviceType.allCases.flatMap { type in

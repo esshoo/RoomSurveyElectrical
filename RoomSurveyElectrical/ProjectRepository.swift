@@ -136,6 +136,8 @@ enum ProjectRepository {
             createdAt: Date(),
             walls: room.walls.map { WallSnapshot(surface: $0) },
             surfaces: surfaces,
+            floors: room.floors.map { FloorSnapshot(surface: $0) },
+            objects: room.objects.map { RoomObjectSnapshot(object: $0) },
             points: [],
             processedJSONFile: processedFile,
             rawJSONFile: savedRawFile,
@@ -166,9 +168,8 @@ enum ProjectRepository {
         }
 
         return directories.compactMap { directory in
-            let metadataURL = directory.appendingPathComponent("project.json")
-            guard let data = try? Data(contentsOf: metadataURL) else { return nil }
-            return try? decoder.decode(RoomProject.self, from: data)
+            guard let id = UUID(uuidString: directory.lastPathComponent) else { return nil }
+            return load(projectID: id)
         }
         .sorted { $0.createdAt > $1.createdAt }
     }
@@ -177,10 +178,20 @@ enum ProjectRepository {
         guard let projectDirectory = try? directory(for: projectID, create: false),
               let data = try? Data(
                 contentsOf: projectDirectory.appendingPathComponent("project.json")
-              ) else {
+              ), var project = try? decoder.decode(RoomProject.self, from: data) else {
             return nil
         }
-        return try? decoder.decode(RoomProject.self, from: data)
+
+        if project.floors == nil || project.objects == nil,
+           let roomData = try? Data(
+            contentsOf: projectDirectory.appendingPathComponent(project.processedJSONFile)
+           ), let capturedRoom = try? decoder.decode(CapturedRoom.self, from: roomData) {
+            project.floors = capturedRoom.floors.map { FloorSnapshot(surface: $0) }
+            project.objects = capturedRoom.objects.map { RoomObjectSnapshot(object: $0) }
+            try? save(project)
+        }
+
+        return project
     }
 
     static func fileURL(projectID: UUID, fileName: String) throws -> URL {

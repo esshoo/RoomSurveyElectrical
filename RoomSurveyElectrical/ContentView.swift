@@ -868,67 +868,6 @@ private struct ProjectDetailView: View {
     let project: RoomProject
 
     var body: some View {
-        List {
-            Section("ملخص المسح") {
-                LabeledContent("الحوائط", value: "\(project.wallCount)")
-                LabeledContent("الأبواب", value: "\(project.doorCount)")
-                LabeledContent("الشبابيك", value: "\(project.windowCount)")
-                LabeledContent("نقاط الكهرباء", value: "\(project.points.count)")
-            }
-
-            Section("الحصر") {
-                if project.boq.isEmpty {
-                    Text("لم تتم إضافة نقاط كهرباء.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(project.boq) { line in
-                        HStack {
-                            Label(line.type.title, systemImage: line.type.systemImage)
-                            Spacer()
-                            Text("\(line.count) • \(line.status.title)")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-
-            Section("تصدير ملفات الإثبات") {
-                if let url = try? ProjectRepository.fileURL(
-                    projectID: project.id,
-                    fileName: "project.json"
-                ) {
-                    ShareLink(item: url) {
-                        Label("مشاركة المشروع والنقاط JSON", systemImage: "list.bullet.rectangle")
-                    }
-                }
-
-                if let url = try? ProjectRepository.fileURL(
-                    projectID: project.id,
-                    fileName: project.processedJSONFile
-                ) {
-                    ShareLink(item: url) {
-                        Label("مشاركة بيانات RoomPlan JSON", systemImage: "doc.text")
-                    }
-                }
-
-                if let rawFile = project.rawJSONFile,
-                   let url = try? ProjectRepository.fileURL(projectID: project.id, fileName: rawFile) {
-                    ShareLink(item: url) {
-                        Label("مشاركة البيانات الخام JSON", systemImage: "doc.badge.gearshape")
-                    }
-                }
-
-                if let url = try? ProjectRepository.fileURL(
-                    projectID: project.id,
-                    fileName: project.usdzFile
-                ) {
-                    ShareLink(item: url) {
-                        Label("مشاركة نموذج USDZ", systemImage: "cube")
-                    }
-                }
-            }
-        }
-        .navigationTitle(project.name)
-        .navigationBarTitleDisplayMode(.inline)
+        RoomViewerView(project: project)
     }
 }
