@@ -12,14 +12,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Show Xcode version
         run: xcodebuild -version
 
       - name: Build for a physical iPhone
+        id: xcodebuild
+        shell: bash
         run: |
-          set -o pipefail
+          mkdir -p build
+          set +e
           xcodebuild \
             -project RoomSurveyElectrical.xcodeproj \
             -scheme RoomSurveyElectrical \
@@ -27,12 +30,21 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/DerivedData \
+            -resultBundlePath build/RoomSurveyElectrical.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' \
-            build | tee build.log
+            build > build.log 2>&1
+          STATUS=$?
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "===== Xcode error summary ====="
+          grep -nEi 'error:|fatal error|failed|failure' build.log | tail -n 120 || true
+          echo "===== Last 250 build-log lines ====="
+          tail -n 250 build.log
+          exit 0
 
       - name: Package unsigned IPA
+        if: steps.xcodebuild.outputs.status == '0'
         run: |
           APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/RoomSurveyElectrical.app"
           test -d "$APP_PATH"
@@ -41,12 +53,21 @@ jobs:
           cd build
           zip -qry RoomSurveyElectrical-unsigned.ipa Payload
 
-      - name: Upload IPA and build log
+      - name: Upload IPA and diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: RoomSurveyElectrical-unsigned
           path: |
             build/RoomSurveyElectrical-unsigned.ipa
             build.log
-          if-no-files-found: error
+            build/RoomSurveyElectrical.xcresult
+          if-no-files-found: warn
           retention-days: 14
+
+      - name: Mark build as failed
+        if: steps.xcodebuild.outputs.status != '0'
+        shell: bash
+        run: |
+          echo "::error::Xcode build failed. Download the RoomSurveyElectrical-unsigned artifact for the complete build.log and xcresult."
+          exit "${{ steps.xcodebuild.outputs.status }}"
