@@ -30,6 +30,20 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
         roomCaptureView.delegate = self
     }
 
+    required init?(coder: NSCoder) {
+        let sharedSession = ARSession()
+        arSession = sharedSession
+        roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
+        super.init()
+        roomCaptureView.delegate = self
+    }
+
+    nonisolated func encode(with coder: NSCoder) {
+        // RoomCaptureViewDelegate inherits from NSCoding. This model has no
+        // state that should be archived, but the protocol requirement must be
+        // implemented for the project to compile.
+    }
+
     var isSupported: Bool {
         RoomCaptureSession.isSupported
     }
