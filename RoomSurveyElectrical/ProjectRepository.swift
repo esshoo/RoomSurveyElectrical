@@ -22,13 +22,41 @@ enum ProjectRepository {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: "Infinity",
+            negativeInfinity: "-Infinity",
+            nan: "NaN"
+        )
         return encoder
     }
 
     private static var decoder: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "Infinity",
+            negativeInfinity: "-Infinity",
+            nan: "NaN"
+        )
         return decoder
+    }
+
+    private struct RoomSummaryExport: Codable {
+        let formatVersion: Int
+        let createdAt: Date
+        let walls: [WallSnapshot]
+        let doors: [SurfaceSnapshot]
+        let windows: [SurfaceSnapshot]
+        let openings: [SurfaceSnapshot]
+
+        init(room: CapturedRoom) {
+            formatVersion = 1
+            createdAt = Date()
+            walls = room.walls.map { WallSnapshot(surface: $0) }
+            doors = room.doors.map { SurfaceSnapshot(surface: $0, kind: .door) }
+            windows = room.windows.map { SurfaceSnapshot(surface: $0, kind: .window) }
+            openings = room.openings.map { SurfaceSnapshot(surface: $0, kind: .opening) }
+        }
     }
 
     static var projectsDirectory: URL {
@@ -50,7 +78,16 @@ enum ProjectRepository {
         let rawFile = "raw-room.json"
         let usdzFile = "room.usdz"
 
-        let processedData = try encoder.encode(room)
+        // A RoomPlan scan may contain non-finite measurements or a newly
+        // introduced value that its Codable implementation cannot serialize.
+        // Keep a stable app-owned snapshot as a fallback so a valid scan is
+        // never discarded just because Apple's diagnostic JSON failed.
+        let processedData: Data
+        do {
+            processedData = try encoder.encode(room)
+        } catch {
+            processedData = try encoder.encode(RoomSummaryExport(room: room))
+        }
         try processedData.write(
             to: projectDirectory.appendingPathComponent(processedFile),
             options: .atomic
@@ -58,12 +95,19 @@ enum ProjectRepository {
 
         var savedRawFile: String?
         if let rawData {
-            let encodedRawData = try encoder.encode(rawData)
-            try encodedRawData.write(
-                to: projectDirectory.appendingPathComponent(rawFile),
-                options: .atomic
-            )
-            savedRawFile = rawFile
+            // Raw CapturedRoomData is useful for diagnostics, but it is not
+            // required by the electrical editor. Some scans contain values
+            // that JSONEncoder cannot represent, so do not fail the project.
+            do {
+                let encodedRawData = try encoder.encode(rawData)
+                try encodedRawData.write(
+                    to: projectDirectory.appendingPathComponent(rawFile),
+                    options: .atomic
+                )
+                savedRawFile = rawFile
+            } catch {
+                savedRawFile = nil
+            }
         }
 
         let usdzURL = projectDirectory.appendingPathComponent(usdzFile)
