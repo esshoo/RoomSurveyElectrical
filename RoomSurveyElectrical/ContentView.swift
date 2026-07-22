@@ -921,7 +921,7 @@ struct MoveDestinationSheet: View {
             project.item(id: id).map { hierarchyDepth(of: $0) }
         } ?? 0
 
-        Button {
+        return Button {
             if let error = onMove(destinationID) {
                 errorMessage = error
             } else {
