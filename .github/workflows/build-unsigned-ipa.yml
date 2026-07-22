@@ -1,0 +1,52 @@
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build for a physical iPhone
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project RoomSurveyElectrical.xcodeproj \
+            -scheme RoomSurveyElectrical \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build | tee build.log
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/RoomSurveyElectrical.app"
+          test -d "$APP_PATH"
+          mkdir -p build/Payload
+          ditto "$APP_PATH" build/Payload/RoomSurveyElectrical.app
+          cd build
+          zip -qry RoomSurveyElectrical-unsigned.ipa Payload
+
+      - name: Upload IPA and build log
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoomSurveyElectrical-unsigned
+          path: |
+            build/RoomSurveyElectrical-unsigned.ipa
+            build.log
+          if-no-files-found: error
+          retention-days: 14
