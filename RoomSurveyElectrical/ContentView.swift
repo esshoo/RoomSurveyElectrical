@@ -488,7 +488,7 @@ private struct NewProjectSheet: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("ارتفاعات المشروع") {
+                Section {
                     CentimeterField(
                         title: "المفاتيح",
                         systemImage: "lightswitch.on.fill",
@@ -509,6 +509,8 @@ private struct NewProjectSheet: View {
                         systemImage: "arrow.left.and.right",
                         meters: $settings.switchDoorOffsetMeters
                     )
+                } header: {
+                    Text("ارتفاعات المشروع")
                 } footer: {
                     Text("القياسات من الأرضية النهائية إلى مركز العنصر، ما عدا بُعد الباب فهو أفقي.")
                 }
@@ -602,8 +604,10 @@ private struct NewScanSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("اسم المسح") {
+                Section {
                     TextField("مثال: غرفة المعيشة", text: $name)
+                } header: {
+                    Text("اسم المسح")
                 } footer: {
                     Text("سيُحفظ JSON وUSDZ ونقاط الكهرباء بهذا الاسم داخل المكان الحالي.")
                 }
@@ -657,7 +661,7 @@ private struct ElectricalSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("الارتفاعات والأبعاد") {
+                Section {
                     CentimeterField(
                         title: "ارتفاع المفاتيح",
                         systemImage: "lightswitch.on.fill",
@@ -678,6 +682,8 @@ private struct ElectricalSettingsView: View {
                         systemImage: "arrow.left.and.right",
                         meters: $settings.switchDoorOffsetMeters
                     )
+                } header: {
+                    Text("الارتفاعات والأبعاد")
                 } footer: {
                     Text("تظهر القيم بالسنتيمتر، ويحفظها التطبيق داخليًا بالمتر.")
                 }
