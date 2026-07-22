@@ -46,20 +46,20 @@ jobs:
       - name: Package unsigned IPA
         if: steps.xcodebuild.outputs.status == '0'
         run: |
-          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/RoomSurveyElectrical.app"
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/3ERoomElectrical.app"
           test -d "$APP_PATH"
           mkdir -p build/Payload
-          ditto "$APP_PATH" build/Payload/RoomSurveyElectrical.app
+          ditto "$APP_PATH" build/Payload/3ERoomElectrical.app
           cd build
-          zip -qry RoomSurveyElectrical-unsigned.ipa Payload
+          zip -qry 3ERoomElectrical-unsigned.ipa Payload
 
       - name: Upload IPA and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RoomSurveyElectrical-unsigned
+          name: 3ERoomElectrical-unsigned
           path: |
-            build/RoomSurveyElectrical-unsigned.ipa
+            build/3ERoomElectrical-unsigned.ipa
             build.log
             build/RoomSurveyElectrical.xcresult
           if-no-files-found: warn
@@ -69,5 +69,5 @@ jobs:
         if: steps.xcodebuild.outputs.status != '0'
         shell: bash
         run: |
-          echo "::error::Xcode build failed. Download the RoomSurveyElectrical-unsigned artifact for the complete build.log and xcresult."
+          echo "::error::Xcode build failed. Download the 3ERoomElectrical-unsigned artifact for the complete build.log and xcresult."
           exit "${{ steps.xcodebuild.outputs.status }}"

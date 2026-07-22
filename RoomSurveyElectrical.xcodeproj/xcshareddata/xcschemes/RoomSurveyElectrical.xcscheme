@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "95411B852D32279800DD79F2"
-               BuildableName = "RoomSurveyElectrical.app"
+               BuildableName = "3ERoomElectrical.app"
                BlueprintName = "RoomSurveyElectrical"
                ReferencedContainer = "container:RoomSurveyElectrical.xcodeproj">
             </BuildableReference>
@@ -44,7 +44,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "95411B852D32279800DD79F2"
-            BuildableName = "RoomSurveyElectrical.app"
+            BuildableName = "3ERoomElectrical.app"
             BlueprintName = "RoomSurveyElectrical"
             ReferencedContainer = "container:RoomSurveyElectrical.xcodeproj">
          </BuildableReference>
@@ -60,7 +60,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "95411B852D32279800DD79F2"
-            BuildableName = "RoomSurveyElectrical.app"
+            BuildableName = "3ERoomElectrical.app"
             BlueprintName = "RoomSurveyElectrical"
             ReferencedContainer = "container:RoomSurveyElectrical.xcodeproj">
          </BuildableReference>
