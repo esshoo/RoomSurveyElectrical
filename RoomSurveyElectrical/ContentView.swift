@@ -32,7 +32,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.5.1 • إصلاح PDF متعدد الصفحات",
+                                    "الإصدار 1.5.2 • طبقات موحّدة وDXF مجمّع",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))

@@ -86,16 +86,11 @@ enum LayeredPlanPDFBuilder {
         }
 
         let layerObjectStart = 3
-        let layerObjectIDsByPage = rooms.indices.map { pageIndex in
-            layers.indices.map { layerIndex in
-                layerObjectStart
-                    + pageIndex * layers.count
-                    + layerIndex
-            }
+        let layerObjectIDs = layers.indices.map {
+            layerObjectStart + $0
         }
-        let allLayerObjectIDs = layerObjectIDsByPage.flatMap { $0 }
         let firstPageObjectID = layerObjectStart
-            + allLayerObjectIDs.count
+            + layerObjectIDs.count
         let pageObjectIDs = rooms.indices.map {
             firstPageObjectID + $0 * 2
         }
@@ -107,16 +102,8 @@ enum LayeredPlanPDFBuilder {
             count: objectCount + 1
         )
 
-        let layerReferences = allLayerObjectIDs.map {
+        let layerReferences = layerObjectIDs.map {
             "\($0) 0 R"
-        }.joined(separator: " ")
-        let layerOrder = layerObjectIDsByPage.enumerated().map {
-            pageIndex,
-            objectIDs in
-            let references = objectIDs.map {
-                "\($0) 0 R"
-            }.joined(separator: " ")
-            return "[(Page \(pageIndex + 1)) \(references)]"
         }.joined(separator: " ")
         objects[1] = Data(
             """
@@ -130,7 +117,9 @@ enum LayeredPlanPDFBuilder {
                        /BaseState /ON
                        /ON [\(layerReferences)]
                        /OFF []
-                       /Order [\(layerOrder)]
+                       /Order [\(layerReferences)]
+                       /Locked []
+                       /RBGroups []
                        /AS [
                            << /Event /View
                               /Category [/View]
@@ -162,33 +151,26 @@ enum LayeredPlanPDFBuilder {
             """.utf8
         )
 
-        for pageIndex in rooms.indices {
-            for (layerIndex, layer) in layers.enumerated() {
-                let objectID = layerObjectIDsByPage[
-                    pageIndex
-                ][layerIndex]
-                objects[objectID] = Data(
-                    """
-                    << /Type /OCG
-                       /Name (Page \(pageIndex + 1) - \(pdfEscaped(layer.name)))
-                       /Intent /View
-                       /Usage <<
-                           /View << /ViewState /ON >>
-                           /Print << /PrintState /ON >>
-                           /Export << /ExportState /ON >>
-                       >>
-                    >>
-                    """.utf8
-                )
-            }
+        for (index, layer) in layers.enumerated() {
+            objects[layerObjectIDs[index]] = Data(
+                """
+                << /Type /OCG
+                   /Name (\(pdfEscaped(layer.name)))
+                   /Intent [/View /Design]
+                   /Usage <<
+                       /View << /ViewState /ON >>
+                       /Print << /PrintState /ON >>
+                       /Export << /ExportState /ON >>
+                   >>
+                >>
+                """.utf8
+            )
         }
 
         for (index, room) in rooms.enumerated() {
             let pageID = pageObjectIDs[index]
             let contentID = contentObjectIDs[index]
-            let propertyEntries = layerObjectIDsByPage[
-                index
-            ].enumerated().map {
+            let propertyEntries = layerObjectIDs.enumerated().map {
                 "/L\($0.offset + 1) \($0.element) 0 R"
             }.joined(separator: " ")
             let content = LayeredPlanPage(

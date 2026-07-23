@@ -59,12 +59,61 @@ extension ProjectExportService {
             extension: "zip"
         )
     }
+
+    static func makeCombinedDXF(
+        title: String,
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
+    ) throws -> URL {
+        guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
+        if rooms.count == 1 {
+            return try makeDXF(
+                title: title,
+                room: rooms[0],
+                metadata: metadata
+            )
+        }
+        let data = Data(
+            DXFPlanBuilder.combined(
+                title: title,
+                rooms: rooms,
+                metadata: metadata
+            ).utf8
+        )
+        return try writeTemporaryFile(
+            data,
+            name: "\(sanitized(title))-Combined-2D",
+            extension: "dxf"
+        )
+    }
 }
 
 private struct DXFPlanBuilder {
     let title: String
     let record: ExportRoomRecord
     let metadata: ExportDocumentMetadata
+    var translation: (x: Double, y: Double) = (0, 0)
+
+    private struct Bounds {
+        let minimumX: Double
+        let maximumX: Double
+        let minimumY: Double
+        let maximumY: Double
+
+        var width: Double {
+            max(maximumX - minimumX, 0.5)
+        }
+
+        var height: Double {
+            max(maximumY - minimumY, 0.5)
+        }
+    }
+
+    private struct Placement {
+        let room: ExportRoomRecord
+        let bounds: Bounds
+        let translation: (x: Double, y: Double)
+    }
 
     private let layers: [(name: String, color: Int, lineWeight: Int)] = [
         ("FLOOR", 8, 15),
@@ -81,33 +130,167 @@ private struct DXFPlanBuilder {
         ("ANNOTATIONS", 7, 13)
     ]
 
+    static func combined(
+        title: String,
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
+    ) -> String {
+        guard let firstRoom = rooms.first else {
+            return ""
+        }
+        let spacing = 2.0
+        var cursorX = 0.0
+        var maximumHeight = 0.0
+        var placements: [Placement] = []
+
+        for room in rooms {
+            let roomBounds = bounds(for: room.project)
+            let roomTranslation = (
+                x: cursorX - roomBounds.minimumX,
+                y: -roomBounds.minimumY
+            )
+            placements.append(
+                Placement(
+                    room: room,
+                    bounds: roomBounds,
+                    translation: roomTranslation
+                )
+            )
+            cursorX += roomBounds.width + spacing
+            maximumHeight = max(
+                maximumHeight,
+                roomBounds.height
+            )
+        }
+
+        let drawingMaximumX = max(cursorX - spacing, 0.5)
+        let drawingMaximumY = max(maximumHeight, 0.5)
+        let firstBuilder = DXFPlanBuilder(
+            title: title,
+            record: firstRoom,
+            metadata: metadata
+        )
+        var dxf = DXFWriter()
+        firstBuilder.addHeader(
+            to: &dxf,
+            bounds: Bounds(
+                minimumX: -1,
+                maximumX: drawingMaximumX + 1,
+                minimumY: -1,
+                maximumY: drawingMaximumY + 2
+            )
+        )
+        firstBuilder.addTables(to: &dxf)
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "ENTITIES")
+
+        for placement in placements {
+            let builder = DXFPlanBuilder(
+                title: placement.room.scan.name,
+                record: placement.room,
+                metadata: metadata,
+                translation: placement.translation
+            )
+            builder.addEntities(to: &dxf)
+            let labelX = placement.bounds.minimumX
+                + placement.translation.x
+            let labelY = placement.bounds.maximumY
+                + placement.translation.y
+                + 0.32
+            dxf.text(
+                placement.room.scan.name,
+                at: (labelX, labelY),
+                height: 0.16,
+                layer: "ANNOTATIONS",
+                horizontalAlignment: 0
+            )
+            if !placement.room.location.isEmpty {
+                dxf.text(
+                    placement.room.location,
+                    at: (labelX, labelY - 0.18),
+                    height: 0.08,
+                    layer: "ANNOTATIONS",
+                    horizontalAlignment: 0
+                )
+            }
+        }
+
+        dxf.text(
+            metadata.brandName,
+            at: (0, drawingMaximumY + 1.42),
+            height: 0.22,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 0
+        )
+        dxf.text(
+            metadata.projectLine,
+            at: (0, drawingMaximumY + 1.15),
+            height: 0.09,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 0
+        )
+        dxf.text(
+            title,
+            at: (0, drawingMaximumY + 0.92),
+            height: 0.14,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 0
+        )
+        dxf.text(
+            metadata.exportLine,
+            at: (drawingMaximumX, -0.55),
+            height: 0.08,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 2
+        )
+        dxf.pair(0, "ENDSEC")
+        dxf.pair(0, "EOF")
+        return dxf.output
+    }
+
     func build() -> String {
         var dxf = DXFWriter()
         addHeader(to: &dxf)
         addTables(to: &dxf)
         dxf.pair(0, "SECTION")
         dxf.pair(2, "ENTITIES")
-        addFloorEntities(to: &dxf)
-        addFurnitureEntities(to: &dxf)
-        addWallEntities(to: &dxf)
-        addOpeningEntities(to: &dxf)
-        addElectricalEntities(to: &dxf)
-        addCeilingLightingEntities(to: &dxf)
+        addEntities(to: &dxf)
         addDrawingInformation(to: &dxf)
         dxf.pair(0, "ENDSEC")
         dxf.pair(0, "EOF")
         return dxf.output
     }
 
-    private func addHeader(to dxf: inout DXFWriter) {
-        let points = ExportGeometry.allPlanPoints(
-            in: record.project
-        )
-        let minimumX = points.map(\.x).min() ?? -5
-        let maximumX = points.map(\.x).max() ?? 5
-        let minimumY = points.map { -$0.y }.min() ?? -5
-        let maximumY = points.map { -$0.y }.max() ?? 5
+    private func addEntities(to dxf: inout DXFWriter) {
+        addFloorEntities(to: &dxf)
+        addFurnitureEntities(to: &dxf)
+        addWallEntities(to: &dxf)
+        addOpeningEntities(to: &dxf)
+        addElectricalEntities(to: &dxf)
+        addCeilingLightingEntities(to: &dxf)
+    }
 
+    private func addHeader(to dxf: inout DXFWriter) {
+        let drawingBounds = Self.bounds(for: record.project)
+        addHeader(
+            to: &dxf,
+            bounds: Bounds(
+                minimumX: drawingBounds.minimumX
+                    + translation.x,
+                maximumX: drawingBounds.maximumX
+                    + translation.x,
+                minimumY: drawingBounds.minimumY
+                    + translation.y,
+                maximumY: drawingBounds.maximumY
+                    + translation.y
+            )
+        )
+    }
+
+    private func addHeader(
+        to dxf: inout DXFWriter,
+        bounds: Bounds
+    ) {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "HEADER")
         dxf.pair(9, "$ACADVER")
@@ -123,14 +306,48 @@ private struct DXFPlanBuilder {
         dxf.pair(9, "$LUPREC")
         dxf.pair(70, 3)
         dxf.pair(9, "$EXTMIN")
-        dxf.pair(10, Double(minimumX - 1))
-        dxf.pair(20, Double(minimumY - 1))
+        dxf.pair(10, bounds.minimumX - 1)
+        dxf.pair(20, bounds.minimumY - 1)
         dxf.pair(30, 0.0)
         dxf.pair(9, "$EXTMAX")
-        dxf.pair(10, Double(maximumX + 4))
-        dxf.pair(20, Double(maximumY + 1))
+        dxf.pair(10, bounds.maximumX + 4)
+        dxf.pair(20, bounds.maximumY + 1)
         dxf.pair(30, 0.0)
         dxf.pair(0, "ENDSEC")
+    }
+
+    private static func bounds(for project: RoomProject) -> Bounds {
+        let points = ExportGeometry.allPlanPoints(in: project)
+            .compactMap { point -> (x: Double, y: Double)? in
+                let x = Double(point.x)
+                let y = Double(-point.y)
+                guard x.isFinite, y.isFinite else {
+                    return nil
+                }
+                return (x, y)
+            }
+        guard let first = points.first else {
+            return Bounds(
+                minimumX: -5,
+                maximumX: 5,
+                minimumY: -5,
+                maximumY: 5
+            )
+        }
+        return Bounds(
+            minimumX: points.dropFirst().reduce(first.x) {
+                min($0, $1.x)
+            },
+            maximumX: points.dropFirst().reduce(first.x) {
+                max($0, $1.x)
+            },
+            minimumY: points.dropFirst().reduce(first.y) {
+                min($0, $1.y)
+            },
+            maximumY: points.dropFirst().reduce(first.y) {
+                max($0, $1.y)
+            }
+        )
     }
 
     private func addTables(to dxf: inout DXFWriter) {
@@ -365,18 +582,14 @@ private struct DXFPlanBuilder {
     }
 
     private func addDrawingInformation(to dxf: inout DXFWriter) {
-        let points = ExportGeometry.allPlanPoints(
-            in: record.project
-        )
-        let minimumX = points.map(\.x).min() ?? 0
-        let maximumX = points.map(\.x).max() ?? 0
-        let minimumY = points.map { -$0.y }.min() ?? 0
-        let maximumY = points.map { -$0.y }.max() ?? 0
+        let drawingBounds = Self.bounds(for: record.project)
         dxf.text(
             metadata.brandName,
-            at: (
-                Double(minimumX),
-                Double(maximumY) + 0.72
+            at: translated(
+                (
+                    drawingBounds.minimumX,
+                    drawingBounds.maximumY + 0.72
+                )
             ),
             height: 0.22,
             layer: "ANNOTATIONS",
@@ -384,9 +597,11 @@ private struct DXFPlanBuilder {
         )
         dxf.text(
             metadata.projectLine,
-            at: (
-                Double(minimumX),
-                Double(maximumY) + 0.48
+            at: translated(
+                (
+                    drawingBounds.minimumX,
+                    drawingBounds.maximumY + 0.48
+                )
             ),
             height: 0.09,
             layer: "ANNOTATIONS",
@@ -394,9 +609,11 @@ private struct DXFPlanBuilder {
         )
         dxf.text(
             title,
-            at: (
-                Double(minimumX),
-                Double(maximumY) + 0.28
+            at: translated(
+                (
+                    drawingBounds.minimumX,
+                    drawingBounds.maximumY + 0.28
+                )
             ),
             height: 0.14,
             layer: "ANNOTATIONS",
@@ -405,9 +622,11 @@ private struct DXFPlanBuilder {
         if !record.location.isEmpty {
             dxf.text(
                 record.location,
-                at: (
-                    Double(minimumX),
-                    Double(maximumY) + 0.10
+                at: translated(
+                    (
+                        drawingBounds.minimumX,
+                        drawingBounds.maximumY + 0.10
+                    )
                 ),
                 height: 0.08,
                 layer: "ANNOTATIONS",
@@ -416,9 +635,11 @@ private struct DXFPlanBuilder {
         }
         dxf.text(
             metadata.exportLine,
-            at: (
-                Double(maximumX),
-                Double(minimumY) - 0.45
+            at: translated(
+                (
+                    drawingBounds.maximumX,
+                    drawingBounds.minimumY - 0.45
+                )
             ),
             height: 0.08,
             layer: "ANNOTATIONS",
@@ -429,7 +650,21 @@ private struct DXFPlanBuilder {
     private func cadPoint(
         _ point: SIMD2<Float>
     ) -> (x: Double, y: Double) {
-        (Double(point.x), Double(-point.y))
+        translated(
+            (
+                Double(point.x),
+                Double(-point.y)
+            )
+        )
+    }
+
+    private func translated(
+        _ point: (x: Double, y: Double)
+    ) -> (x: Double, y: Double) {
+        (
+            point.x + translation.x,
+            point.y + translation.y
+        )
     }
 
     private func midpoint(
@@ -634,6 +869,9 @@ private struct DXFWriter {
     }
 
     private func number(_ value: Double) -> String {
-        String(format: "%.6f", value)
+        guard value.isFinite else {
+            return "0"
+        }
+        return String(format: "%.6f", value)
     }
 }

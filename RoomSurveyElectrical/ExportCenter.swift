@@ -212,10 +212,25 @@ struct ExportCenterView: View {
             }
 
             Section("DXF – مخطط CAD متجه") {
+                if planRooms.count > 1 {
+                    exportButton(
+                        "DXF موحد – المخططات بجوار بعضها",
+                        subtitle: "ملف واحد • أسماء المساحات ظاهرة • 12 طبقة مشتركة",
+                        systemImage: "rectangle.3.group.fill",
+                        disabled: planRooms.isEmpty
+                    ) {
+                        try ProjectExportService.makeCombinedDXF(
+                            title: title,
+                            rooms: planRooms,
+                            metadata: exportMetadata
+                        )
+                    }
+                }
+
                 exportButton(
                     planRooms.count == 1
                         ? "تصدير المخطط DXF"
-                        : "تصدير كل المخططات DXF",
+                        : "DXF منفصل لكل مساحة",
                     subtitle: planRooms.count == 1
                         ? "طبقات CAD مستقلة ووحدة الرسم بالمتر"
                         : "ملف ZIP يحتوي DXF مستقل لكل مسح",
