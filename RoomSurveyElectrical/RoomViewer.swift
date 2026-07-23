@@ -937,27 +937,50 @@ private struct Plan2DView: View {
     private func wallPlacement(
         for surface: SurfaceSnapshot
     ) -> (wall: WallSnapshot, localX: Float, localY: Float)? {
-        project.walls.compactMap { wall in
-            let localCenter = simd_mul(
-                simd_inverse(wall.matrix),
-                surface.matrix.columns.3
-            )
-            guard abs(localCenter.x) <= wall.width / 2 + surface.width / 2,
-                  abs(localCenter.y) <= wall.height / 2 + surface.height / 2 else {
-                return nil
+        var closest: (
+            wall: WallSnapshot,
+            localX: Float,
+            localY: Float,
+            distance: Float
+        )?
+        let surfaceCenter = surface.matrix.columns.3
+
+        for wall in project.walls {
+            let inverseWallMatrix = simd_inverse(wall.matrix)
+            let localCenter = simd_mul(inverseWallMatrix, surfaceCenter)
+            let horizontalLimit = wall.width / 2 + surface.width / 2
+            let verticalLimit = wall.height / 2 + surface.height / 2
+
+            guard abs(localCenter.x) <= horizontalLimit,
+                  abs(localCenter.y) <= verticalLimit else {
+                continue
             }
-            return (
+
+            let distance = abs(localCenter.z)
+            guard distance <= 0.45 else {
+                continue
+            }
+
+            if let current = closest, current.distance <= distance {
+                continue
+            }
+
+            closest = (
                 wall: wall,
                 localX: localCenter.x,
                 localY: localCenter.y,
-                distance: abs(localCenter.z)
+                distance: distance
             )
         }
-        .filter { $0.distance <= 0.45 }
-        .min { $0.distance < $1.distance }
-        .map {
-            (wall: $0.wall, localX: $0.localX, localY: $0.localY)
+
+        guard let closestPlacement = closest else {
+            return nil
         }
+        return (
+            wall: closestPlacement.wall,
+            localX: closestPlacement.localX,
+            localY: closestPlacement.localY
+        )
     }
 
     private func isEditableSurface(_ surface: SurfaceSnapshot) -> Bool {
