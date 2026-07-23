@@ -91,11 +91,18 @@ enum LayeredPlanPDFBuilder {
         }
         let firstPageObjectID = layerObjectStart
             + layerObjectIDs.count
+        let objectsPerPage = layers.count + 2
         let pageObjectIDs = rooms.indices.map {
-            firstPageObjectID + $0 * 2
+            firstPageObjectID + $0 * objectsPerPage
         }
         let contentObjectIDs = pageObjectIDs.map { $0 + 1 }
-        let infoObjectID = firstPageObjectID + rooms.count * 2
+        let formObjectIDsByPage = pageObjectIDs.map { pageID in
+            layers.indices.map {
+                pageID + 2 + $0
+            }
+        }
+        let infoObjectID = firstPageObjectID
+            + rooms.count * objectsPerPage
         let objectCount = infoObjectID
         var objects = Array<Data?>(
             repeating: nil,
@@ -170,14 +177,28 @@ enum LayeredPlanPDFBuilder {
         for (index, room) in rooms.enumerated() {
             let pageID = pageObjectIDs[index]
             let contentID = contentObjectIDs[index]
-            let propertyEntries = layerObjectIDs.enumerated().map {
+            let formObjectIDs = formObjectIDsByPage[index]
+            let xObjectEntries = formObjectIDs.enumerated().map {
                 "/L\($0.offset + 1) \($0.element) 0 R"
             }.joined(separator: " ")
-            let content = LayeredPlanPage(
+            let pageContent = LayeredPlanPage(
                 title: rooms.count == 1 ? title : room.scan.name,
                 record: room,
-                metadata: metadata
+                metadata: metadata,
+                layerNames: layers.map(\.name)
             ).content()
+            var content = pageContent.base
+            for layerIndex in layers.indices {
+                content.append(
+                    Data(
+                        "q /L\(layerIndex + 1) Do Q\n".utf8
+                    )
+                )
+                objects[formObjectIDs[layerIndex]] = formStreamObject(
+                    pageContent.layers[layerIndex],
+                    optionalContentObjectID: layerObjectIDs[layerIndex]
+                )
+            }
             objects[contentID] = streamObject(content)
             objects[pageID] = Data(
                 """
@@ -186,7 +207,7 @@ enum LayeredPlanPDFBuilder {
                    /MediaBox [0 0 \(pdfNumber(pageWidth)) \(pdfNumber(pageHeight))]
                    /Resources <<
                        /ProcSet [/PDF]
-                       /Properties << \(propertyEntries) >>
+                       /XObject << \(xObjectEntries) >>
                    >>
                    /Contents \(contentID) 0 R
                 >>
@@ -210,6 +231,29 @@ enum LayeredPlanPDFBuilder {
             rootObjectID: 1,
             infoObjectID: infoObjectID
         )
+    }
+
+    private static func formStreamObject(
+        _ content: Data,
+        optionalContentObjectID: Int
+    ) -> Data {
+        let dictionary = """
+            << /Type /XObject
+               /Subtype /Form
+               /FormType 1
+               /BBox [0 0 \(pdfNumber(pageWidth)) \(pdfNumber(pageHeight))]
+               /Matrix [1 0 0 1 0 0]
+               /Resources << /ProcSet [/PDF] >>
+               /OC \(optionalContentObjectID) 0 R
+               /Length \(content.count)
+            >>
+            """
+        var data = Data(
+            (dictionary + "\nstream\n").utf8
+        )
+        data.append(content)
+        data.append(Data("\nendstream".utf8))
+        return data
     }
 
     private static func streamObject(_ content: Data) -> Data {
@@ -276,42 +320,34 @@ enum LayeredPlanPDFBuilder {
     }
 }
 
+private struct LayeredPlanPageContent {
+    let base: Data
+    let layers: [Data]
+}
+
 private struct LayeredPlanPage {
     let title: String
     let record: ExportRoomRecord
     let metadata: ExportDocumentMetadata
+    let layerNames: [String]
 
     private let pageWidth: CGFloat = 1190.55
     private let pageHeight: CGFloat = 841.89
 
-    func content() -> Data {
+    func content() -> LayeredPlanPageContent {
+        var commands = PDFLayerCommands(
+            layerNames: layerNames
+        )
+        commands.base(
+            "q 1 1 1 rg 0 0 \(pdfNumber(pageWidth)) \(pdfNumber(pageHeight)) re f Q\n"
+        )
         guard let projection = PDFPlanProjection(
             project: record.project,
             pageWidth: pageWidth,
             pageHeight: pageHeight
         ) else {
-            return Data()
+            return commands.contents()
         }
-        var commands = PDFLayerCommands(
-            layerNames: [
-                "FLOOR",
-                "WALLS",
-                "DOORS",
-                "WINDOWS",
-                "OPENINGS",
-                "FURNITURE",
-                "ELECTRICAL_EXISTING",
-                "ELECTRICAL_PROPOSED",
-                "CEILING_LIGHTING",
-                "DIM_WALLS",
-                "DIM_ELECTRICAL",
-                "ANNOTATIONS"
-            ]
-        )
-
-        commands.base(
-            "q 1 1 1 rg 0 0 \(pdfNumber(pageWidth)) \(pdfNumber(pageHeight)) re f Q\n"
-        )
         addFloors(
             commands: &commands,
             projection: projection
@@ -340,7 +376,7 @@ private struct LayeredPlanPage {
             commands: &commands,
             projection: projection
         )
-        return Data(commands.render().utf8)
+        return commands.contents()
     }
 
     private func addFloors(
@@ -1053,14 +1089,19 @@ private struct PDFLayerCommands {
         )
     }
 
-    func render() -> String {
-        var result = baseCommands
-        for (index, layer) in layerNames.enumerated() {
-            result += "q /OC /L\(index + 1) BDC\n"
-            result += commands[layer] ?? ""
-            result += "EMC Q\n"
-        }
-        return result
+    func contents() -> LayeredPlanPageContent {
+        let usageMarker = "q 0 0 m 0 0 l n Q\n"
+        return LayeredPlanPageContent(
+            base: Data(baseCommands.utf8),
+            layers: layerNames.map {
+                Data(
+                    (
+                        usageMarker
+                            + (commands[$0] ?? "")
+                    ).utf8
+                )
+            }
+        )
     }
 
     private mutating func append(
