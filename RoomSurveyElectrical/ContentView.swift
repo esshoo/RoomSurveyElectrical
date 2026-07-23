@@ -1124,6 +1124,8 @@ private struct NewProjectSheet: View {
                     } footer: {
                         Text("القياسات من الأرضية النهائية إلى مركز العنصر، ما عدا بُعد الباب فهو أفقي.")
                     }
+
+                    SmartPlacementRangeFields(settings: $settings)
                 }
             }
             .navigationTitle("مشروع جديد")
@@ -1301,6 +1303,8 @@ private struct ElectricalSettingsView: View {
                     } footer: {
                         Text("تظهر القيم بالسنتيمتر، ويحفظها التطبيق داخليًا بالمتر.")
                     }
+
+                    SmartPlacementRangeFields(settings: $settings)
                 }
 
                 Section("قواعد التثبيت") {
@@ -1353,6 +1357,39 @@ private struct CentimeterField: View {
             .frame(width: 72)
             Text("سم")
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct SmartPlacementRangeFields: View {
+    @Binding var settings: ElectricalPlacementSettings
+
+    var body: some View {
+        Section {
+            CentimeterField(
+                title: "قرب الباب – من",
+                systemImage: "door.left.hand.open",
+                meters: $settings.doorSuggestionMinimumMeters
+            )
+            CentimeterField(
+                title: "قرب الباب – إلى",
+                systemImage: "arrow.left.and.right",
+                meters: $settings.doorSuggestionMaximumMeters
+            )
+            CentimeterField(
+                title: "قرب المفتاح – من",
+                systemImage: "lightswitch.on.fill",
+                meters: $settings.switchAlignmentMinimumMeters
+            )
+            CentimeterField(
+                title: "قرب المفتاح – إلى",
+                systemImage: "powerplug.fill",
+                meters: $settings.switchAlignmentMaximumMeters
+            )
+        } header: {
+            Text("نطاقات الاقتراح الذكي")
+        } footer: {
+            Text("إذا كان موضع العنصر داخل هذه المسافة، سيسألك التطبيق قبل تغيير مكانه.")
         }
     }
 }

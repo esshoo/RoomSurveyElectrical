@@ -9,6 +9,8 @@ struct ElectricalEditorView: View {
     @State private var showBOQ = false
     @State private var errorMessage: String?
     @State private var placementMessage: String?
+    @State private var placementDraft: PlacementDraft?
+    @State private var smartPrompt: SmartPlacementPrompt?
 
     let arSession: ARSession
     let settings: ElectricalPlacementSettings
@@ -49,7 +51,7 @@ struct ElectricalEditorView: View {
         }
         .sheet(item: $pendingTap) { tap in
             DevicePickerSheet(settings: settings) { type, status in
-                addPoint(type: type, status: status, tap: tap)
+                beginPlacement(type: type, status: status, tap: tap)
                 pendingTap = nil
             }
             .presentationDetents([.medium, .large])
@@ -64,6 +66,23 @@ struct ElectricalEditorView: View {
             Button("حسنًا", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "")
+        }
+        .confirmationDialog(
+            smartPromptTitle,
+            isPresented: Binding(
+                get: { smartPrompt != nil },
+                set: {
+                    if !$0 {
+                        smartPrompt = nil
+                        placementDraft = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            smartPromptButtons
+        } message: {
+            Text(smartPromptMessage)
         }
         .onAppear {
             persistProject()
@@ -147,7 +166,143 @@ struct ElectricalEditorView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    private func addPoint(type: ElectricalDeviceType, status: PlacementStatus, tap: WallTap) {
+    @ViewBuilder
+    private var smartPromptButtons: some View {
+        switch smartPrompt {
+        case .nearDoor:
+            Button("نعم، اتركه في المكان الذي حددته") {
+                resolveDoorPrompt(keepCurrentPosition: true)
+            }
+            Button("لا، اضبطه على بُعد \(doorOffsetCentimeters) سم") {
+                resolveDoorPrompt(keepCurrentPosition: false)
+            }
+            Button("إلغاء الإضافة", role: .cancel) {
+                cancelSmartPlacement()
+            }
+        case .alignSocket:
+            Button("نعم، اجعله أسفل المفتاح مباشرة") {
+                resolveSwitchAlignment(align: true)
+            }
+            Button("لا، اتركه في مكانه") {
+                resolveSwitchAlignment(align: false)
+            }
+            Button("إلغاء الإضافة", role: .cancel) {
+                cancelSmartPlacement()
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var smartPromptTitle: String {
+        switch smartPrompt {
+        case .nearDoor: "العنصر قريب من الباب"
+        case .alignSocket: "الفيش قريب من مفتاح"
+        case nil: ""
+        }
+    }
+
+    private var smartPromptMessage: String {
+        switch smartPrompt {
+        case .nearDoor(let distance):
+            "المسافة الحالية عن حافة الباب \(centimeters(distance)) سم. هل تريد الاحتفاظ بهذا المكان؟"
+        case .alignSocket(let switchPointID, let distance):
+            let switchName = project.points.first(where: { $0.id == switchPointID })?.type.title
+                ?? "المفتاح"
+            return "المسافة الحالية من \(switchName) هي \(centimeters(distance)) سم. هل تريد محاذاة الفيش أسفله؟"
+        case nil:
+            ""
+        }
+    }
+
+    private var doorOffsetCentimeters: String {
+        centimeters(Float(settings.switchDoorOffsetMeters))
+    }
+
+    private func beginPlacement(
+        type: ElectricalDeviceType,
+        status: PlacementStatus,
+        tap: WallTap
+    ) {
+        let draft = PlacementDraft(type: type, status: status, tap: tap)
+        placementDraft = draft
+
+        guard status == .proposed,
+              type.usesDoorSuggestion,
+              let wall = project.walls.first(where: { $0.id == tap.wallID }),
+              let distance = distanceToNearestDoorEdge(localX: tap.localX, wall: wall),
+              isWithin(
+                distance,
+                minimum: settings.doorSuggestionMinimumMeters,
+                maximum: settings.doorSuggestionMaximumMeters
+              ) else {
+            continueToSwitchAlignment(with: draft)
+            return
+        }
+
+        smartPrompt = .nearDoor(distance: distance)
+    }
+
+    private func resolveDoorPrompt(keepCurrentPosition: Bool) {
+        guard var draft = placementDraft else {
+            cancelSmartPlacement()
+            return
+        }
+        draft.horizontalPolicy = keepCurrentPosition ? .keepTapped : .snapToDoor
+        placementDraft = draft
+        smartPrompt = nil
+        continueToSwitchAlignment(with: draft)
+    }
+
+    private func continueToSwitchAlignment(with draft: PlacementDraft) {
+        placementDraft = draft
+        guard draft.status == .proposed,
+              draft.type.usesSocketRules,
+              let match = nearestSwitch(to: draft.tap),
+              isWithin(
+                match.distance,
+                minimum: settings.switchAlignmentMinimumMeters,
+                maximum: settings.switchAlignmentMaximumMeters
+              ) else {
+            finalizePlacement(draft)
+            return
+        }
+
+        smartPrompt = .alignSocket(
+            switchPointID: match.point.id,
+            distance: match.distance
+        )
+    }
+
+    private func resolveSwitchAlignment(align: Bool) {
+        guard var draft = placementDraft else {
+            cancelSmartPlacement()
+            return
+        }
+        if align,
+           case .alignSocket(let switchPointID, _) = smartPrompt {
+            draft.horizontalPolicy = .alignToSwitch(switchPointID)
+        }
+        smartPrompt = nil
+        finalizePlacement(draft)
+    }
+
+    private func finalizePlacement(_ draft: PlacementDraft) {
+        placementDraft = nil
+        smartPrompt = nil
+        addPoint(draft)
+    }
+
+    private func cancelSmartPlacement() {
+        placementDraft = nil
+        smartPrompt = nil
+    }
+
+    private func addPoint(_ draft: PlacementDraft) {
+        let type = draft.type
+        let status = draft.status
+        let tap = draft.tap
+
         guard let wall = project.walls.first(where: { $0.id == tap.wallID }) else {
             errorMessage = "لم يتم العثور على الحائط المحدد."
             return
@@ -163,7 +318,10 @@ struct ElectricalEditorView: View {
             localY = localYForHeight(standardHeight, wall: wall)
             messageParts.append("الارتفاع \(centimeters(standardHeight)) سم")
 
-            if type.usesSwitchRules {
+            switch draft.horizontalPolicy {
+            case .keepTapped:
+                messageParts.append("تم الاحتفاظ بالموضع الأفقي")
+            case .snapToDoor:
                 if let snappedX = switchPositionNearDoor(
                     preferredX: tap.localX,
                     wall: wall,
@@ -175,6 +333,28 @@ struct ElectricalEditorView: View {
                     )
                 } else {
                     messageParts.append("لم يُعثر على باب بهذا الحائط؛ تم تثبيت الارتفاع فقط")
+                }
+            case .alignToSwitch(let switchPointID):
+                if let switchPoint = project.points.first(where: { $0.id == switchPointID }) {
+                    localX = switchPoint.localX
+                    messageParts.append("تمت المحاذاة أسفل \(switchPoint.type.title)")
+                }
+            case .automatic:
+                if type.usesSwitchRules {
+                    if let snappedX = switchPositionNearDoor(
+                        preferredX: tap.localX,
+                        wall: wall,
+                        offset: Float(settings.switchDoorOffsetMeters)
+                    ) {
+                        localX = snappedX
+                        messageParts.append(
+                            "بعد الباب \(centimeters(Float(settings.switchDoorOffsetMeters))) سم"
+                        )
+                    } else {
+                        messageParts.append(
+                            "لم يُعثر على باب بهذا الحائط؛ تم تثبيت الارتفاع فقط"
+                        )
+                    }
                 }
             }
 
@@ -275,6 +455,25 @@ struct ElectricalEditorView: View {
         }
     }
 
+    private func nearestSwitch(to tap: WallTap) -> (point: ElectricalPoint, distance: Float)? {
+        project.points
+            .filter { $0.wallID == tap.wallID && $0.type.usesSwitchRules }
+            .map { point in
+                (point, abs(point.localX - tap.localX))
+            }
+            .min { $0.distance < $1.distance }
+    }
+
+    private func isWithin(
+        _ value: Float,
+        minimum: Double,
+        maximum: Double
+    ) -> Bool {
+        let lower = Float(min(minimum, maximum))
+        let upper = Float(max(minimum, maximum))
+        return value >= lower && value <= upper
+    }
+
     private func nearestDoor(
         to localX: Float,
         wall: WallSnapshot
@@ -334,6 +533,25 @@ struct ElectricalEditorView: View {
     private func centimeters(_ meters: Float) -> String {
         String(format: "%.0f", meters * 100)
     }
+}
+
+private struct PlacementDraft {
+    let type: ElectricalDeviceType
+    let status: PlacementStatus
+    let tap: WallTap
+    var horizontalPolicy: HorizontalPlacementPolicy = .automatic
+}
+
+private enum HorizontalPlacementPolicy {
+    case automatic
+    case keepTapped
+    case snapToDoor
+    case alignToSwitch(UUID)
+}
+
+private enum SmartPlacementPrompt {
+    case nearDoor(distance: Float)
+    case alignSocket(switchPointID: UUID, distance: Float)
 }
 
 private struct WallSurfaceProjection {

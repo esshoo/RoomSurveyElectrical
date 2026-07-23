@@ -91,6 +91,30 @@ struct ElectricalPlacementSettings: Codable, Equatable {
     var switchDoorOffsetMeters: Double
     var designMode: ElectricalDesignMode
     var avoidOpenings: Bool
+    var doorSuggestionMinimumMetersValue: Double?
+    var doorSuggestionMaximumMetersValue: Double?
+    var switchAlignmentMinimumMetersValue: Double?
+    var switchAlignmentMaximumMetersValue: Double?
+
+    var doorSuggestionMinimumMeters: Double {
+        get { doorSuggestionMinimumMetersValue ?? 0.20 }
+        set { doorSuggestionMinimumMetersValue = max(0, newValue) }
+    }
+
+    var doorSuggestionMaximumMeters: Double {
+        get { doorSuggestionMaximumMetersValue ?? 0.50 }
+        set { doorSuggestionMaximumMetersValue = max(0, newValue) }
+    }
+
+    var switchAlignmentMinimumMeters: Double {
+        get { switchAlignmentMinimumMetersValue ?? 0.20 }
+        set { switchAlignmentMinimumMetersValue = max(0, newValue) }
+    }
+
+    var switchAlignmentMaximumMeters: Double {
+        get { switchAlignmentMaximumMetersValue ?? 0.50 }
+        set { switchAlignmentMaximumMetersValue = max(0, newValue) }
+    }
 
     static let standard = ElectricalPlacementSettings(
         switchHeightMeters: 1.20,
@@ -98,7 +122,11 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         wallLightHeightMeters: 1.80,
         switchDoorOffsetMeters: 0.20,
         designMode: .existing,
-        avoidOpenings: true
+        avoidOpenings: true,
+        doorSuggestionMinimumMetersValue: 0.20,
+        doorSuggestionMaximumMetersValue: 0.50,
+        switchAlignmentMinimumMetersValue: 0.20,
+        switchAlignmentMaximumMetersValue: 0.50
     )
 }
 

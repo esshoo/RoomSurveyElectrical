@@ -52,6 +52,14 @@ enum ElectricalDeviceType: String, Codable, CaseIterable, Hashable, Identifiable
         }
     }
 
+    var usesSocketRules: Bool {
+        self == .socket || self == .heaterSocket
+    }
+
+    var usesDoorSuggestion: Bool {
+        usesSwitchRules || usesSocketRules
+    }
+
     func recommendedHeight(using settings: ElectricalPlacementSettings) -> Float {
         if usesSwitchRules {
             return Float(settings.switchHeightMeters)
@@ -156,6 +164,20 @@ struct SurfaceSnapshot: Codable, Identifiable, Equatable {
         transform = surface.transform.columnMajorValues
     }
 
+    init(
+        id: UUID = UUID(),
+        kind: Kind,
+        width: Float,
+        height: Float,
+        matrix: simd_float4x4
+    ) {
+        self.id = id
+        self.kind = kind
+        self.width = width
+        self.height = height
+        transform = matrix.columnMajorValues
+    }
+
     var matrix: simd_float4x4 {
         simd_float4x4(columnMajorValues: transform)
     }
@@ -227,7 +249,7 @@ struct RoomProject: Codable, Identifiable, Equatable {
     var name: String
     let createdAt: Date
     let walls: [WallSnapshot]
-    let surfaces: [SurfaceSnapshot]
+    var surfaces: [SurfaceSnapshot]
     var floors: [FloorSnapshot]?
     var objects: [RoomObjectSnapshot]?
     var points: [ElectricalPoint]

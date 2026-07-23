@@ -48,7 +48,11 @@ struct RoomViewerView: View {
 
             switch mode {
             case .plan2D:
-                Plan2DView(project: project, layers: layers)
+                Plan2DView(
+                    project: $project,
+                    layers: layers,
+                    onProjectChanged: persistViewerProject
+                )
             case .model3D:
                 model3D
             }
@@ -293,6 +297,14 @@ struct RoomViewerView: View {
         }
     }
 
+    private func persistViewerProject() {
+        do {
+            try ProjectRepository.save(project)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func duplicateScan() {
         do {
             try store.duplicateScan(projectID: surveyProjectID, scanID: project.id)
@@ -324,46 +336,289 @@ struct RoomViewerView: View {
     }
 }
 
+private enum Plan2DEditTool: String, Identifiable {
+    case door
+    case window
+    case singleSwitch
+    case socket
+    case wallLight
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .door: "باب"
+        case .window: "شباك"
+        case .singleSwitch: "مفتاح مفرد"
+        case .socket: "فيش كهرباء"
+        case .wallLight: "إضاءة جدارية"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .door: "door.left.hand.open"
+        case .window: "rectangle.split.3x1"
+        case .singleSwitch: ElectricalDeviceType.singleSwitch.systemImage
+        case .socket: ElectricalDeviceType.socket.systemImage
+        case .wallLight: ElectricalDeviceType.wallLight.systemImage
+        }
+    }
+
+    var electricalType: ElectricalDeviceType? {
+        switch self {
+        case .singleSwitch: .singleSwitch
+        case .socket: .socket
+        case .wallLight: .wallLight
+        case .door, .window: nil
+        }
+    }
+}
+
+private enum Plan2DAddition {
+    case surface(UUID)
+    case electricalPoint(UUID)
+}
+
+private struct NearestWallPlacement {
+    let wall: WallSnapshot
+    let localX: Float
+    let distance: Float
+}
+
+private struct Plan2DSurfaceProjection {
+    let kind: SurfaceSnapshot.Kind
+    let centerX: Float
+    let centerY: Float
+    let width: Float
+    let height: Float
+}
+
+private struct Plan2DElectricalDraft {
+    let type: ElectricalDeviceType
+    let placement: NearestWallPlacement
+    var resolvedLocalX: Float
+}
+
+private enum Plan2DSmartPrompt {
+    case nearDoor(distance: Float)
+    case alignSocket(switchPointID: UUID, distance: Float)
+}
+
 private struct Plan2DView: View {
-    let project: RoomProject
+    @Binding var project: RoomProject
     let layers: ViewerLayerVisibility
+    let onProjectChanged: () -> Void
 
     @State private var zoom: CGFloat = 1
     @State private var committedZoom: CGFloat = 1
+    @State private var rotation: Angle = .zero
+    @State private var committedRotation: Angle = .zero
     @State private var offset: CGSize = .zero
     @State private var committedOffset: CGSize = .zero
+    @State private var activeTool: Plan2DEditTool?
+    @State private var lastAddition: Plan2DAddition?
+    @State private var feedbackText: String?
+    @State private var electricalDraft: Plan2DElectricalDraft?
+    @State private var smartPrompt: Plan2DSmartPrompt?
 
     var body: some View {
-        ZStack {
-            Color(uiColor: .secondarySystemGroupedBackground)
+        GeometryReader { geometry in
+            ZStack {
+                Color(uiColor: .secondarySystemGroupedBackground)
 
-            Canvas { context, size in
-                drawPlan(context: &context, size: size)
+                Canvas { context, size in
+                    drawPlan(context: &context, size: size)
+                }
+                .contentShape(Rectangle())
+                .scaleEffect(zoom)
+                .rotationEffect(rotation)
+                .offset(offset)
+                .gesture(dragGesture)
+                .simultaneousGesture(magnificationGesture)
+                .simultaneousGesture(rotationGesture)
+                .simultaneousGesture(
+                    SpatialTapGesture(coordinateSpace: .named("plan2D")).onEnded { value in
+                        guard activeTool != nil else { return }
+                        placeActiveTool(at: value.location, viewSize: geometry.size)
+                    }
+                )
+
+                controlsOverlay
             }
-            .scaleEffect(zoom)
-            .offset(offset)
-            .gesture(dragGesture)
-            .simultaneousGesture(magnificationGesture)
-            .simultaneousGesture(
-                TapGesture(count: 2).onEnded(resetView)
-            )
+            .coordinateSpace(name: "plan2D")
+        }
+        .clipped()
+        .confirmationDialog(
+            smartPromptTitle,
+            isPresented: Binding(
+                get: { smartPrompt != nil },
+                set: {
+                    if !$0 {
+                        smartPrompt = nil
+                        electricalDraft = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            smartPromptButtons
+        } message: {
+            Text(smartPromptMessage)
+        }
+    }
 
-            VStack {
-                HStack {
-                    PlanLegendView(layers: layers)
-                    Spacer()
-                    Button(action: resetView) {
-                        Image(systemName: "arrow.counterclockwise")
+    private var controlsOverlay: some View {
+        VStack(spacing: 10) {
+            HStack {
+                PlanLegendView(layers: layers)
+                Spacer()
+
+                if lastAddition != nil {
+                    Button(action: undoLastAddition) {
+                        Image(systemName: "arrow.uturn.backward")
                             .frame(width: 38, height: 38)
                             .background(.ultraThinMaterial, in: Circle())
                     }
-                    .accessibilityLabel("إعادة ضبط المخطط")
+                    .accessibilityLabel("التراجع عن آخر إضافة")
                 }
-                .padding(12)
+
+                Button(action: resetView) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .frame(width: 38, height: 38)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .accessibilityLabel("إعادة ضبط المخطط")
+            }
+
+            if let tool = activeTool {
+                HStack(spacing: 8) {
+                    Label(
+                        "اضغط قرب الحائط لإضافة \(tool.title)",
+                        systemImage: tool.systemImage
+                    )
+                    .font(.caption.weight(.semibold))
+                    Spacer()
+                    Button("إلغاء") {
+                        activeTool = nil
+                        feedbackText = nil
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+
+            if let feedbackText {
+                Label(
+                    feedbackText,
+                    systemImage: activeTool == nil
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(activeTool == nil ? Color.green : Color.orange)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+
+            Spacer()
+
+            HStack {
                 Spacer()
+                editMenu
             }
         }
-        .clipped()
+        .padding(12)
+    }
+
+    private var editMenu: some View {
+        Menu {
+            Section("فتحات معمارية") {
+                editToolButton(.door)
+                editToolButton(.window)
+            }
+
+            Section("نقاط كهربائية مقترحة") {
+                editToolButton(.singleSwitch)
+                editToolButton(.socket)
+                editToolButton(.wallLight)
+            }
+        } label: {
+            Label("إضافة", systemImage: "plus")
+                .font(.headline)
+                .padding(.horizontal, 16)
+                .frame(height: 44)
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
+    private func editToolButton(_ tool: Plan2DEditTool) -> some View {
+        Button {
+            activeTool = tool
+            feedbackText = nil
+        } label: {
+            Label(tool.title, systemImage: tool.systemImage)
+        }
+    }
+
+    @ViewBuilder
+    private var smartPromptButtons: some View {
+        switch smartPrompt {
+        case .nearDoor:
+            Button("نعم، اتركه في المكان الذي حددته") {
+                resolveDoorPrompt(keepCurrentPosition: true)
+            }
+            Button("لا، اضبطه على بُعد \(doorOffsetCentimeters) سم") {
+                resolveDoorPrompt(keepCurrentPosition: false)
+            }
+            Button("إلغاء الإضافة", role: .cancel) {
+                cancelSmartPlacement()
+            }
+        case .alignSocket:
+            Button("نعم، اجعله أسفل المفتاح مباشرة") {
+                resolveSwitchAlignment(align: true)
+            }
+            Button("لا، اتركه في مكانه") {
+                resolveSwitchAlignment(align: false)
+            }
+            Button("إلغاء الإضافة", role: .cancel) {
+                cancelSmartPlacement()
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var smartPromptTitle: String {
+        switch smartPrompt {
+        case .nearDoor: "العنصر قريب من الباب"
+        case .alignSocket: "الفيش قريب من مفتاح"
+        case nil: ""
+        }
+    }
+
+    private var smartPromptMessage: String {
+        switch smartPrompt {
+        case .nearDoor(let distance):
+            "المسافة الحالية عن حافة الباب \(centimeters(distance)) سم. هل تريد الاحتفاظ بهذا المكان؟"
+        case .alignSocket(let switchPointID, let distance):
+            let switchName = project.points.first(where: { $0.id == switchPointID })?.type.title
+                ?? "المفتاح"
+            return "المسافة الحالية من \(switchName) هي \(centimeters(distance)) سم. هل تريد محاذاة الفيش أسفله؟"
+        case nil:
+            ""
+        }
+    }
+
+    private var doorOffsetCentimeters: String {
+        centimeters(Float(electricalSettings.switchDoorOffsetMeters))
+    }
+
+    private var electricalSettings: ElectricalPlacementSettings {
+        project.electricalSettings ?? .standard
     }
 
     private var dragGesture: some Gesture {
@@ -389,12 +644,401 @@ private struct Plan2DView: View {
             }
     }
 
+    private var rotationGesture: some Gesture {
+        RotationGesture()
+            .onChanged { value in
+                rotation = committedRotation + value
+            }
+            .onEnded { _ in
+                committedRotation = rotation
+            }
+    }
+
     private func resetView() {
         withAnimation(.easeInOut(duration: 0.2)) {
             zoom = 1
             committedZoom = 1
+            rotation = .zero
+            committedRotation = .zero
             offset = .zero
             committedOffset = .zero
+        }
+    }
+
+    private func placeActiveTool(at location: CGPoint, viewSize: CGSize) {
+        guard let tool = activeTool else { return }
+        let projection = PlanProjection(project: project, size: viewSize)
+        let canvasPoint = untransformedCanvasPoint(location, size: viewSize)
+        let planPoint = projection.unmap(canvasPoint)
+
+        guard let placement = nearestWallPlacement(to: planPoint),
+              placement.distance <= 0.40 else {
+            feedbackText = "اضغط أقرب إلى خط الحائط."
+            return
+        }
+
+        if let type = tool.electricalType {
+            beginElectricalPlacement(type, placement: placement)
+            return
+        }
+
+        guard addOpening(tool, placement: placement) else { return }
+        activeTool = nil
+        onProjectChanged()
+    }
+
+    private func beginElectricalPlacement(
+        _ type: ElectricalDeviceType,
+        placement: NearestWallPlacement
+    ) {
+        var draft = Plan2DElectricalDraft(
+            type: type,
+            placement: placement,
+            resolvedLocalX: placement.localX
+        )
+        electricalDraft = draft
+
+        if type.usesDoorSuggestion,
+           let distance = distanceToNearestDoorEdge(
+               localX: draft.resolvedLocalX,
+               wall: placement.wall
+           ),
+           isWithin(
+               distance,
+               minimum: electricalSettings.doorSuggestionMinimumMeters,
+               maximum: electricalSettings.doorSuggestionMaximumMeters
+           ) {
+            smartPrompt = .nearDoor(distance: distance)
+            return
+        }
+
+        if type.usesSwitchRules,
+           let snappedX = positionNearDoor(
+               preferredX: draft.resolvedLocalX,
+               wall: placement.wall
+           ) {
+            draft.resolvedLocalX = snappedX
+            electricalDraft = draft
+        }
+        continueToSwitchAlignment(with: draft)
+    }
+
+    private func resolveDoorPrompt(keepCurrentPosition: Bool) {
+        guard var draft = electricalDraft else {
+            cancelSmartPlacement()
+            return
+        }
+
+        if !keepCurrentPosition,
+           let snappedX = positionNearDoor(
+               preferredX: draft.resolvedLocalX,
+               wall: draft.placement.wall
+           ) {
+            draft.resolvedLocalX = snappedX
+        }
+        electricalDraft = draft
+        smartPrompt = nil
+        continueToSwitchAlignment(with: draft)
+    }
+
+    private func continueToSwitchAlignment(with draft: Plan2DElectricalDraft) {
+        electricalDraft = draft
+        guard draft.type.usesSocketRules,
+              let match = nearestSwitch(
+                  to: draft.resolvedLocalX,
+                  wallID: draft.placement.wall.id
+              ),
+              isWithin(
+                  match.distance,
+                  minimum: electricalSettings.switchAlignmentMinimumMeters,
+                  maximum: electricalSettings.switchAlignmentMaximumMeters
+              ) else {
+            finalizeElectricalPlacement(draft)
+            return
+        }
+
+        smartPrompt = .alignSocket(
+            switchPointID: match.point.id,
+            distance: match.distance
+        )
+    }
+
+    private func resolveSwitchAlignment(align: Bool) {
+        guard var draft = electricalDraft else {
+            cancelSmartPlacement()
+            return
+        }
+
+        if align,
+           case .alignSocket(let switchPointID, _) = smartPrompt,
+           let switchPoint = project.points.first(where: { $0.id == switchPointID }) {
+            draft.resolvedLocalX = switchPoint.localX
+        }
+        smartPrompt = nil
+        finalizeElectricalPlacement(draft)
+    }
+
+    private func finalizeElectricalPlacement(_ draft: Plan2DElectricalDraft) {
+        smartPrompt = nil
+        electricalDraft = nil
+        guard addElectricalPoint(
+            draft.type,
+            placement: draft.placement,
+            localX: draft.resolvedLocalX
+        ) else {
+            return
+        }
+        activeTool = nil
+        onProjectChanged()
+    }
+
+    private func cancelSmartPlacement() {
+        smartPrompt = nil
+        electricalDraft = nil
+        activeTool = nil
+        feedbackText = "تم إلغاء الإضافة."
+    }
+
+    private func untransformedCanvasPoint(_ point: CGPoint, size: CGSize) -> CGPoint {
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let translatedX = point.x - center.x - offset.width
+        let translatedY = point.y - center.y - offset.height
+        let cosine = CGFloat(cos(-rotation.radians))
+        let sine = CGFloat(sin(-rotation.radians))
+        let rotatedX = translatedX * cosine - translatedY * sine
+        let rotatedY = translatedX * sine + translatedY * cosine
+
+        return CGPoint(
+            x: center.x + rotatedX / zoom,
+            y: center.y + rotatedY / zoom
+        )
+    }
+
+    private func nearestWallPlacement(to point: SIMD2<Float>) -> NearestWallPlacement? {
+        project.walls.compactMap { wall in
+            let endpoints = wallPlanEndpoints(wall)
+            let segment = endpoints.1 - endpoints.0
+            let lengthSquared = simd_length_squared(segment)
+            guard lengthSquared > 0.0001 else { return nil }
+
+            let rawProgress = simd_dot(point - endpoints.0, segment) / lengthSquared
+            let progress = min(max(rawProgress, 0), 1)
+            let nearestPoint = endpoints.0 + segment * progress
+            return NearestWallPlacement(
+                wall: wall,
+                localX: -wall.width / 2 + wall.width * progress,
+                distance: simd_distance(point, nearestPoint)
+            )
+        }
+        .min { $0.distance < $1.distance }
+    }
+
+    private func positionNearDoor(
+        preferredX: Float,
+        wall: WallSnapshot
+    ) -> Float? {
+        guard let door = nearestDoor(to: preferredX, wall: wall) else { return nil }
+        let offset = Float(electricalSettings.switchDoorOffsetMeters)
+        let left = door.centerX - door.width / 2 - offset
+        let right = door.centerX + door.width / 2 + offset
+        let prefersRight = preferredX >= door.centerX
+        let preferred = prefersRight ? right : left
+        let alternate = prefersRight ? left : right
+        let margin: Float = 0.04
+        let minimum = -wall.width / 2 + margin
+        let maximum = wall.width / 2 - margin
+
+        if preferred >= minimum && preferred <= maximum {
+            return preferred
+        }
+        if alternate >= minimum && alternate <= maximum {
+            return alternate
+        }
+        return min(max(preferred, minimum), maximum)
+    }
+
+    private func distanceToNearestDoorEdge(
+        localX: Float,
+        wall: WallSnapshot
+    ) -> Float? {
+        nearestDoor(to: localX, wall: wall).map {
+            distanceFrom(localX, to: $0)
+        }
+    }
+
+    private func nearestDoor(
+        to localX: Float,
+        wall: WallSnapshot
+    ) -> Plan2DSurfaceProjection? {
+        surfaceProjections(on: wall)
+            .filter { $0.kind == .door }
+            .min {
+                distanceFrom(localX, to: $0) < distanceFrom(localX, to: $1)
+            }
+    }
+
+    private func distanceFrom(
+        _ localX: Float,
+        to surface: Plan2DSurfaceProjection
+    ) -> Float {
+        let leftEdge = surface.centerX - surface.width / 2
+        let rightEdge = surface.centerX + surface.width / 2
+        return min(abs(localX - leftEdge), abs(localX - rightEdge))
+    }
+
+    private func nearestSwitch(
+        to localX: Float,
+        wallID: UUID
+    ) -> (point: ElectricalPoint, distance: Float)? {
+        project.points
+            .filter { $0.wallID == wallID && $0.type.usesSwitchRules }
+            .map { point in
+                (point: point, distance: abs(point.localX - localX))
+            }
+            .min { $0.distance < $1.distance }
+    }
+
+    private func surfaceProjections(on wall: WallSnapshot) -> [Plan2DSurfaceProjection] {
+        let inverseWall = simd_inverse(wall.matrix)
+        return project.surfaces.compactMap { surface in
+            let localCenter = simd_mul(inverseWall, surface.matrix.columns.3)
+            guard abs(localCenter.z) <= 0.30,
+                  abs(localCenter.x) <= wall.width / 2 + surface.width / 2 else {
+                return nil
+            }
+            return Plan2DSurfaceProjection(
+                kind: surface.kind,
+                centerX: localCenter.x,
+                centerY: localCenter.y,
+                width: surface.width,
+                height: surface.height
+            )
+        }
+    }
+
+    private func isWithin(
+        _ value: Float,
+        minimum: Double,
+        maximum: Double
+    ) -> Bool {
+        let lower = Float(min(minimum, maximum))
+        let upper = Float(max(minimum, maximum))
+        return value >= lower && value <= upper
+    }
+
+    private func addOpening(
+        _ tool: Plan2DEditTool,
+        placement: NearestWallPlacement
+    ) -> Bool {
+        let kind: SurfaceSnapshot.Kind = tool == .door ? .door : .window
+        let width: Float = tool == .door ? 0.90 : 1.20
+        let height: Float = tool == .door ? 2.10 : 1.20
+        let centerHeight: Float = tool == .door ? height / 2 : 1.50
+        let wall = placement.wall
+        let minimumX = -wall.width / 2 + width / 2
+        let maximumX = wall.width / 2 - width / 2
+
+        guard minimumX <= maximumX else {
+            feedbackText = "الحائط أقصر من عرض \(tool.title) الافتراضي."
+            return false
+        }
+
+        let localX = min(max(placement.localX, minimumX), maximumX)
+        let maximumCenterHeight = max(height / 2, wall.height - height / 2)
+        let resolvedCenterHeight = min(max(centerHeight, height / 2), maximumCenterHeight)
+        let localY = -wall.height / 2 + resolvedCenterHeight
+        let matrix = simd_mul(
+            wall.matrix,
+            translationMatrix(x: localX, y: localY, z: 0.01)
+        )
+        let surface = SurfaceSnapshot(
+            kind: kind,
+            width: width,
+            height: height,
+            matrix: matrix
+        )
+
+        project.surfaces.append(surface)
+        lastAddition = .surface(surface.id)
+        feedbackText = "تمت إضافة \(tool.title) وحفظه."
+        return true
+    }
+
+    private func addElectricalPoint(
+        _ type: ElectricalDeviceType,
+        placement: NearestWallPlacement,
+        localX requestedLocalX: Float
+    ) -> Bool {
+        let settings = electricalSettings
+        let wall = placement.wall
+        let height = type.recommendedHeight(using: settings)
+        let margin: Float = 0.04
+        let localX = min(
+            max(requestedLocalX, -wall.width / 2 + margin),
+            wall.width / 2 - margin
+        )
+        let localY = min(
+            max(-wall.height / 2 + height, -wall.height / 2 + margin),
+            wall.height / 2 - margin
+        )
+        let measuredDoorOffset = type.usesSwitchRules
+            ? distanceToNearestDoorEdge(localX: localX, wall: wall)
+            : nil
+
+        if settings.avoidOpenings,
+           let opening = surfaceProjections(on: wall).first(where: {
+               abs(localX - $0.centerX) <= $0.width / 2 + 0.025
+                   && abs(localY - $0.centerY) <= $0.height / 2 + 0.025
+           }) {
+            feedbackText = "الموضع يقع داخل \(surfaceTitle(opening.kind)). اختر نقطة أخرى."
+            return false
+        }
+
+        let world = simd_mul(wall.matrix, SIMD4(localX, localY, 0.035, 1))
+        let point = ElectricalPoint(
+            wallID: wall.id,
+            type: type,
+            status: .proposed,
+            localX: localX,
+            localY: localY,
+            wallHeight: wall.height,
+            worldPosition: [world.x, world.y, world.z],
+            standardHeightAtCreation: height,
+            standardDoorOffsetAtCreation: type.usesSwitchRules
+                ? Float(settings.switchDoorOffsetMeters)
+                : nil,
+            measuredDoorOffset: measuredDoorOffset,
+            wasAutomaticallyAdjusted: true
+        )
+
+        project.points.append(point)
+        lastAddition = .electricalPoint(point.id)
+        feedbackText = "تمت إضافة \(type.title) على الارتفاع القياسي."
+        return true
+    }
+
+    private func undoLastAddition() {
+        guard let lastAddition else { return }
+        switch lastAddition {
+        case .surface(let id):
+            project.surfaces.removeAll { $0.id == id }
+        case .electricalPoint(let id):
+            project.points.removeAll { $0.id == id }
+        }
+        self.lastAddition = nil
+        feedbackText = "تم التراجع عن آخر إضافة."
+        onProjectChanged()
+    }
+
+    private func centimeters(_ meters: Float) -> String {
+        String(format: "%.0f", meters * 100)
+    }
+
+    private func surfaceTitle(_ kind: SurfaceSnapshot.Kind) -> String {
+        switch kind {
+        case .door: "فتحة الباب"
+        case .window: "فتحة الشباك"
+        case .opening: "الفتحة المعمارية"
         }
     }
 
@@ -622,22 +1266,33 @@ private struct PlanProjection {
     }
 
     func map(_ point: SIMD2<Float>) -> CGPoint {
+        CGPoint(
+            x: size.width / 2 + CGFloat(point.x - midpointX) * projectionScale,
+            y: size.height / 2 + CGFloat(point.y - midpointZ) * projectionScale
+        )
+    }
+
+    func unmap(_ point: CGPoint) -> SIMD2<Float> {
+        SIMD2(
+            midpointX + Float((point.x - size.width / 2) / projectionScale),
+            midpointZ + Float((point.y - size.height / 2) / projectionScale)
+        )
+    }
+
+    private var projectionScale: CGFloat {
         let rangeX = max(maxX - minX, 0.5)
         let rangeZ = max(maxZ - minZ, 0.5)
         let padding: CGFloat = 34
         let availableWidth = max(size.width - padding * 2, 1)
         let availableHeight = max(size.height - padding * 2, 1)
-        let scale = min(
+        return min(
             availableWidth / CGFloat(rangeX),
             availableHeight / CGFloat(rangeZ)
         )
-        let midX = (minX + maxX) / 2
-        let midZ = (minZ + maxZ) / 2
-        return CGPoint(
-            x: size.width / 2 + CGFloat(point.x - midX) * scale,
-            y: size.height / 2 + CGFloat(point.y - midZ) * scale
-        )
     }
+
+    private var midpointX: Float { (minX + maxX) / 2 }
+    private var midpointZ: Float { (minZ + maxZ) / 2 }
 }
 
 private struct USDZRoomView: UIViewRepresentable {
@@ -888,6 +1543,12 @@ private struct ScanInformationSheet: View {
 
 private func planCenter(_ matrix: simd_float4x4) -> SIMD2<Float> {
     SIMD2(matrix.columns.3.x, matrix.columns.3.z)
+}
+
+private func translationMatrix(x: Float, y: Float, z: Float) -> simd_float4x4 {
+    var matrix = matrix_identity_float4x4
+    matrix.columns.3 = SIMD4(x, y, z, 1)
+    return matrix
 }
 
 private func normalizedPlanAxis(_ vector: SIMD4<Float>) -> SIMD2<Float> {
