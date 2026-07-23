@@ -107,6 +107,20 @@ struct ElectricalARView: UIViewRepresentable {
                 let ringNode = SCNNode(geometry: ring)
                 ringNode.eulerAngles.x = .pi / 2
                 marker.addChildNode(ringNode)
+
+                let iconPlane = SCNPlane(width: 0.105, height: 0.105)
+                let iconMaterial = SCNMaterial()
+                iconMaterial.diffuse.contents = UIImage(
+                    systemName: point.type.systemImage
+                )?.withTintColor(.white, renderingMode: .alwaysOriginal)
+                iconMaterial.emission.contents = UIColor.white.withAlphaComponent(0.18)
+                iconMaterial.isDoubleSided = true
+                iconMaterial.lightingModel = .constant
+                iconPlane.materials = [iconMaterial]
+
+                let iconNode = SCNNode(geometry: iconPlane)
+                iconNode.position = SCNVector3(0, 0, 0.048)
+                marker.addChildNode(iconNode)
                 wallNode.addChildNode(marker)
             }
         }

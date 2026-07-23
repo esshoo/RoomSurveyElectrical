@@ -798,6 +798,9 @@ private struct ScanInformationSheet: View {
                     LabeledContent("الشبابيك", value: "\(project.windowCount)")
                     LabeledContent("قطع الأثاث", value: "\(project.furnitureCount)")
                     LabeledContent("نقاط الكهرباء", value: "\(project.points.count)")
+                    if let settings = project.electricalSettings {
+                        LabeledContent("نمط الكهرباء", value: settings.designMode.title)
+                    }
                 }
 
                 Section("الحصر الكهربائي") {
@@ -815,6 +818,35 @@ private struct ScanInformationSheet: View {
                         }
                     }
                 }
+
+                if !project.points.isEmpty {
+                    Section("مراجعة المقاسات") {
+                        ForEach(project.points) { point in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Label(point.type.title, systemImage: point.type.systemImage)
+                                    Spacer()
+                                    Text(String(format: "%.2f م", point.heightFromFloor))
+                                        .monospacedDigit()
+                                }
+
+                                Text(measurementSummary(for: point))
+                                    .font(.caption)
+                                    .foregroundStyle(measurementColor(for: point))
+
+                                if point.type.usesSwitchRules,
+                                   let doorOffset = point.measuredDoorOffset {
+                                    Text(
+                                        "البعد عن الباب: \(String(format: "%.0f", doorOffset * 100)) سم"
+                                    )
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
             }
             .navigationTitle("معلومات المسح")
             .navigationBarTitleDisplayMode(.inline)
@@ -825,6 +857,32 @@ private struct ScanInformationSheet: View {
             }
         }
         .environment(\.layoutDirection, .rightToLeft)
+    }
+
+    private var electricalSettings: ElectricalPlacementSettings {
+        project.electricalSettings ?? .standard
+    }
+
+    private func targetHeight(for point: ElectricalPoint) -> Float {
+        point.standardHeightAtCreation
+            ?? point.type.recommendedHeight(using: electricalSettings)
+    }
+
+    private func measurementSummary(for point: ElectricalPoint) -> String {
+        let differenceCentimeters = (point.heightFromFloor - targetHeight(for: point)) * 100
+        if abs(differenceCentimeters) <= 2 {
+            return point.wasAutomaticallyAdjusted == true
+                ? "مطابق للقياسي • ضبط تلقائي"
+                : "مطابق للارتفاع القياسي"
+        }
+        if differenceCentimeters > 0 {
+            return "أعلى من القياسي بـ \(String(format: "%.0f", differenceCentimeters)) سم"
+        }
+        return "أقل من القياسي بـ \(String(format: "%.0f", abs(differenceCentimeters))) سم"
+    }
+
+    private func measurementColor(for point: ElectricalPoint) -> Color {
+        abs(point.heightFromFloor - targetHeight(for: point)) <= 0.02 ? .green : .orange
     }
 }
 

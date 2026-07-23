@@ -144,7 +144,8 @@ enum ProjectRepository {
             points: [],
             processedJSONFile: processedFile,
             rawJSONFile: savedRawFile,
-            usdzFile: usdzFile
+            usdzFile: usdzFile,
+            electricalSettings: nil
         )
 
         try save(project)
@@ -240,7 +241,8 @@ enum ProjectRepository {
             points: source.points,
             processedJSONFile: source.processedJSONFile,
             rawJSONFile: source.rawJSONFile,
-            usdzFile: source.usdzFile
+            usdzFile: source.usdzFile,
+            electricalSettings: source.electricalSettings
         )
         try save(copy)
         return copy

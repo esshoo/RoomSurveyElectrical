@@ -9,6 +9,7 @@ enum ElectricalDeviceType: String, Codable, CaseIterable, Hashable, Identifiable
     case tripleSwitch
     case airConditionerSwitch
     case heaterSocket
+    case wallLight
     case dataOutlet
     case televisionOutlet
 
@@ -22,6 +23,7 @@ enum ElectricalDeviceType: String, Codable, CaseIterable, Hashable, Identifiable
         case .tripleSwitch: "مفتاح ثلاثي"
         case .airConditionerSwitch: "مفتاح تكييف"
         case .heaterSocket: "فيش سخان"
+        case .wallLight: "إضاءة جدارية"
         case .dataOutlet: "نقطة بيانات"
         case .televisionOutlet: "نقطة تلفزيون"
         }
@@ -35,9 +37,29 @@ enum ElectricalDeviceType: String, Codable, CaseIterable, Hashable, Identifiable
         case .tripleSwitch: "slider.horizontal.3"
         case .airConditionerSwitch: "snowflake"
         case .heaterSocket: "flame.fill"
+        case .wallLight: "light.beacon.max.fill"
         case .dataOutlet: "network"
         case .televisionOutlet: "tv.fill"
         }
+    }
+
+    var usesSwitchRules: Bool {
+        switch self {
+        case .singleSwitch, .doubleSwitch, .tripleSwitch, .airConditionerSwitch:
+            true
+        default:
+            false
+        }
+    }
+
+    func recommendedHeight(using settings: ElectricalPlacementSettings) -> Float {
+        if usesSwitchRules {
+            return Float(settings.switchHeightMeters)
+        }
+        if self == .wallLight {
+            return Float(settings.wallLightHeightMeters)
+        }
+        return Float(settings.socketHeightMeters)
     }
 }
 
@@ -59,6 +81,10 @@ struct ElectricalPoint: Codable, Identifiable, Equatable {
     let heightFromFloor: Float
     let worldPosition: [Float]
     let createdAt: Date
+    let standardHeightAtCreation: Float?
+    let standardDoorOffsetAtCreation: Float?
+    let measuredDoorOffset: Float?
+    let wasAutomaticallyAdjusted: Bool?
 
     init(
         id: UUID = UUID(),
@@ -69,6 +95,10 @@ struct ElectricalPoint: Codable, Identifiable, Equatable {
         localY: Float,
         wallHeight: Float,
         worldPosition: [Float],
+        standardHeightAtCreation: Float? = nil,
+        standardDoorOffsetAtCreation: Float? = nil,
+        measuredDoorOffset: Float? = nil,
+        wasAutomaticallyAdjusted: Bool? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -79,6 +109,10 @@ struct ElectricalPoint: Codable, Identifiable, Equatable {
         self.localY = localY
         self.heightFromFloor = max(0, localY + wallHeight / 2)
         self.worldPosition = worldPosition
+        self.standardHeightAtCreation = standardHeightAtCreation
+        self.standardDoorOffsetAtCreation = standardDoorOffsetAtCreation
+        self.measuredDoorOffset = measuredDoorOffset
+        self.wasAutomaticallyAdjusted = wasAutomaticallyAdjusted
         self.createdAt = createdAt
     }
 }
@@ -120,6 +154,10 @@ struct SurfaceSnapshot: Codable, Identifiable, Equatable {
         width = surface.dimensions.x
         height = surface.dimensions.y
         transform = surface.transform.columnMajorValues
+    }
+
+    var matrix: simd_float4x4 {
+        simd_float4x4(columnMajorValues: transform)
     }
 }
 
@@ -196,6 +234,7 @@ struct RoomProject: Codable, Identifiable, Equatable {
     let processedJSONFile: String
     let rawJSONFile: String?
     let usdzFile: String
+    var electricalSettings: ElectricalPlacementSettings?
 
     var wallCount: Int { walls.count }
     var doorCount: Int { surfaces.filter { $0.kind == .door }.count }

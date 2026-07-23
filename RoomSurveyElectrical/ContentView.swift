@@ -1378,10 +1378,13 @@ private struct AsBuiltPlacementNotice: View {
 
 struct RoomWorkflowView: View {
     @StateObject private var model: RoomCaptureModel
+    let settings: ElectricalPlacementSettings
     let onClose: () -> Void
 
     init(destination: ScanDestination, onClose: @escaping () -> Void) {
         _model = StateObject(wrappedValue: RoomCaptureModel(destination: destination))
+        settings = WorkspaceRepository.load(projectID: destination.surveyProjectID)?.settings
+            ?? GlobalSettingsRepository.load()
         self.onClose = onClose
     }
 
@@ -1391,6 +1394,7 @@ struct RoomWorkflowView: View {
                 ElectricalEditorView(
                     initialProject: project,
                     arSession: model.arSession,
+                    settings: settings,
                     onClose: {
                         model.arSession.pause()
                         onClose()
