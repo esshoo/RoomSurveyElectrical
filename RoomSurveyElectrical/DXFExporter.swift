@@ -86,6 +86,26 @@ extension ProjectExportService {
             extension: "dxf"
         )
     }
+
+    static func makeLayoutDXF(
+        title: String,
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
+    ) throws -> URL {
+        guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
+        let data = Data(
+            DXFPlanBuilder.layouts(
+                title: title,
+                rooms: rooms,
+                metadata: metadata
+            ).utf8
+        )
+        return try writeTemporaryFile(
+            data,
+            name: "\(sanitized(title))-Layouts-2D",
+            extension: "dxf"
+        )
+    }
 }
 
 private struct DXFPlanBuilder {
@@ -113,6 +133,20 @@ private struct DXFPlanBuilder {
         let room: ExportRoomRecord
         let bounds: Bounds
         let translation: (x: Double, y: Double)
+    }
+
+    private struct LayoutDescriptor {
+        let placement: Placement
+        let name: String
+        let blockName: String
+        let blockRecordHandle: String
+        let layoutHandle: String
+        let blockBeginHandle: String
+        let blockEndHandle: String
+        let defaultViewportHandle: String
+        let mainViewportHandle: String
+        let viewCenter: (x: Double, y: Double)
+        let viewHeight: Double
     }
 
     private let layers: [(name: String, color: Int, lineWeight: Int)] = [
@@ -246,6 +280,712 @@ private struct DXFPlanBuilder {
         dxf.pair(0, "ENDSEC")
         dxf.pair(0, "EOF")
         return dxf.output
+    }
+
+    static func layouts(
+        title: String,
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
+    ) -> String {
+        guard let firstRoom = rooms.first else {
+            return ""
+        }
+        let descriptors = layoutDescriptors(for: rooms)
+        let maximumX = descriptors.map {
+            $0.placement.bounds.maximumX
+                + $0.placement.translation.x
+        }.max() ?? 1
+        let maximumY = descriptors.map {
+            $0.placement.bounds.maximumY
+                + $0.placement.translation.y
+        }.max() ?? 1
+        let documentBuilder = DXFPlanBuilder(
+            title: title,
+            record: firstRoom,
+            metadata: metadata
+        )
+        var dxf = DXFWriter()
+        documentBuilder.addLayoutHeader(
+            to: &dxf,
+            maximumX: maximumX,
+            maximumY: maximumY
+        )
+        documentBuilder.addLayoutClasses(to: &dxf)
+        documentBuilder.addLayoutTables(
+            to: &dxf,
+            descriptors: descriptors
+        )
+        documentBuilder.addLayoutBlocks(
+            to: &dxf,
+            descriptors: descriptors
+        )
+        documentBuilder.addLayoutModelEntities(
+            to: &dxf,
+            descriptors: descriptors,
+            maximumX: maximumX,
+            maximumY: maximumY
+        )
+        documentBuilder.addLayoutObjects(
+            to: &dxf,
+            descriptors: descriptors
+        )
+        dxf.pair(0, "EOF")
+        return dxf.output
+    }
+
+    private static func layoutDescriptors(
+        for rooms: [ExportRoomRecord]
+    ) -> [LayoutDescriptor] {
+        let names = uniqueLayoutNames(for: rooms)
+        let spacing = 2.0
+        let viewportAspect = 390.0 / 235.0
+        var cursorX = 0.0
+        return rooms.enumerated().map { index, room in
+            let roomBounds = bounds(for: room.project)
+            let roomTranslation = (
+                x: cursorX - roomBounds.minimumX,
+                y: -roomBounds.minimumY
+            )
+            let placement = Placement(
+                room: room,
+                bounds: roomBounds,
+                translation: roomTranslation
+            )
+            cursorX += roomBounds.width + spacing
+
+            let displayedMinimumX = roomBounds.minimumX
+                + roomTranslation.x
+            let displayedMaximumX = roomBounds.maximumX
+                + roomTranslation.x
+            let displayedMinimumY = roomBounds.minimumY
+                + roomTranslation.y
+            let displayedMaximumY = roomBounds.maximumY
+                + roomTranslation.y
+            let paddedWidth = max(
+                displayedMaximumX - displayedMinimumX + 0.8,
+                0.8
+            )
+            let paddedHeight = max(
+                displayedMaximumY - displayedMinimumY + 0.8,
+                0.8
+            )
+            let requiredViewHeight = max(
+                paddedHeight,
+                paddedWidth / viewportAspect
+            ) * 1.08
+            let handleBase = 0x20 + index * 6
+            return LayoutDescriptor(
+                placement: placement,
+                name: names[index],
+                blockName: index == 0
+                    ? "*Paper_Space"
+                    : "*Paper_Space\(index - 1)",
+                blockRecordHandle: hexHandle(handleBase),
+                layoutHandle: hexHandle(handleBase + 1),
+                blockBeginHandle: hexHandle(handleBase + 2),
+                blockEndHandle: hexHandle(handleBase + 3),
+                defaultViewportHandle: hexHandle(handleBase + 4),
+                mainViewportHandle: hexHandle(handleBase + 5),
+                viewCenter: (
+                    (displayedMinimumX + displayedMaximumX) / 2,
+                    (displayedMinimumY + displayedMaximumY) / 2
+                ),
+                viewHeight: requiredViewHeight
+            )
+        }
+    }
+
+    private static func uniqueLayoutNames(
+        for rooms: [ExportRoomRecord]
+    ) -> [String] {
+        var used: Set<String> = ["model"]
+        return rooms.enumerated().map { index, room in
+            var base = room.scan.name
+                .components(
+                    separatedBy: CharacterSet(
+                        charactersIn: "<>/\\\":;?*|,="
+                    )
+                )
+                .joined(separator: "-")
+                .trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+            if base.isEmpty {
+                base = "Layout \(index + 1)"
+            }
+            base = String(base.prefix(80))
+            var candidate = base
+            var suffix = 2
+            while used.contains(candidate.lowercased()) {
+                let suffixText = " (\(suffix))"
+                candidate = String(
+                    base.prefix(max(1, 80 - suffixText.count))
+                ) + suffixText
+                suffix += 1
+            }
+            used.insert(candidate.lowercased())
+            return candidate
+        }
+    }
+
+    private static func hexHandle(_ value: Int) -> String {
+        String(value, radix: 16).uppercased()
+    }
+
+    private func addLayoutHeader(
+        to dxf: inout DXFWriter,
+        maximumX: Double,
+        maximumY: Double
+    ) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "HEADER")
+        dxf.pair(9, "$ACADVER")
+        dxf.pair(1, "AC1027")
+        dxf.pair(9, "$HANDSEED")
+        dxf.pair(5, "FFFFFF")
+        dxf.pair(9, "$DWGCODEPAGE")
+        dxf.pair(3, "UTF-8")
+        dxf.pair(9, "$INSUNITS")
+        dxf.pair(70, 6)
+        dxf.pair(9, "$MEASUREMENT")
+        dxf.pair(70, 1)
+        dxf.pair(9, "$LUNITS")
+        dxf.pair(70, 2)
+        dxf.pair(9, "$LUPREC")
+        dxf.pair(70, 3)
+        dxf.pair(9, "$TILEMODE")
+        dxf.pair(70, 1)
+        dxf.pair(9, "$CTAB")
+        dxf.pair(1, "Model")
+        dxf.pair(9, "$EXTMIN")
+        dxf.pair(10, -1.0)
+        dxf.pair(20, -1.0)
+        dxf.pair(30, 0.0)
+        dxf.pair(9, "$EXTMAX")
+        dxf.pair(10, maximumX + 1)
+        dxf.pair(20, maximumY + 2)
+        dxf.pair(30, 0.0)
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addLayoutClasses(to dxf: inout DXFWriter) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "CLASSES")
+        dxf.pair(0, "CLASS")
+        dxf.pair(1, "LAYOUT")
+        dxf.pair(2, "AcDbLayout")
+        dxf.pair(3, "ObjectDBX Classes")
+        dxf.pair(90, 0)
+        dxf.pair(91, 0)
+        dxf.pair(280, 0)
+        dxf.pair(281, 0)
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addLayoutTables(
+        to dxf: inout DXFWriter,
+        descriptors: [LayoutDescriptor]
+    ) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "TABLES")
+
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "LTYPE")
+        dxf.pair(5, "8")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbSymbolTable")
+        dxf.pair(70, 1)
+        dxf.pair(0, "LTYPE")
+        dxf.pair(5, "9")
+        dxf.pair(330, "8")
+        dxf.pair(100, "AcDbSymbolTableRecord")
+        dxf.pair(100, "AcDbLinetypeTableRecord")
+        dxf.pair(2, "CONTINUOUS")
+        dxf.pair(70, 0)
+        dxf.pair(3, "Solid line")
+        dxf.pair(72, 65)
+        dxf.pair(73, 0)
+        dxf.pair(40, 0.0)
+        dxf.pair(0, "ENDTAB")
+
+        let layoutLayers = [
+            (name: "0", color: 7, lineWeight: 15)
+        ] + layers
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "LAYER")
+        dxf.pair(5, "A")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbSymbolTable")
+        dxf.pair(70, layoutLayers.count)
+        for (index, layer) in layoutLayers.enumerated() {
+            dxf.pair(0, "LAYER")
+            dxf.pair(5, Self.hexHandle(0xB + index))
+            dxf.pair(330, "A")
+            dxf.pair(100, "AcDbSymbolTableRecord")
+            dxf.pair(100, "AcDbLayerTableRecord")
+            dxf.pair(2, layer.name)
+            dxf.pair(70, 0)
+            dxf.pair(62, layer.color)
+            dxf.pair(6, "CONTINUOUS")
+            dxf.pair(370, layer.lineWeight)
+        }
+        dxf.pair(0, "ENDTAB")
+
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "STYLE")
+        dxf.pair(5, "18")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbSymbolTable")
+        dxf.pair(70, 1)
+        dxf.pair(0, "STYLE")
+        dxf.pair(5, "19")
+        dxf.pair(330, "18")
+        dxf.pair(100, "AcDbSymbolTableRecord")
+        dxf.pair(100, "AcDbTextStyleTableRecord")
+        dxf.pair(2, "STANDARD")
+        dxf.pair(70, 0)
+        dxf.pair(40, 0.0)
+        dxf.pair(41, 1.0)
+        dxf.pair(50, 0.0)
+        dxf.pair(71, 0)
+        dxf.pair(42, 0.2)
+        dxf.pair(3, "Arial.ttf")
+        dxf.pair(4, "")
+        dxf.pair(0, "ENDTAB")
+
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "BLOCK_RECORD")
+        dxf.pair(5, "3")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbSymbolTable")
+        dxf.pair(70, descriptors.count + 1)
+        addLayoutBlockRecord(
+            to: &dxf,
+            handle: "4",
+            name: "*Model_Space",
+            layoutHandle: "5"
+        )
+        for descriptor in descriptors {
+            addLayoutBlockRecord(
+                to: &dxf,
+                handle: descriptor.blockRecordHandle,
+                name: descriptor.blockName,
+                layoutHandle: descriptor.layoutHandle
+            )
+        }
+        dxf.pair(0, "ENDTAB")
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addLayoutBlockRecord(
+        to dxf: inout DXFWriter,
+        handle: String,
+        name: String,
+        layoutHandle: String
+    ) {
+        dxf.pair(0, "BLOCK_RECORD")
+        dxf.pair(5, handle)
+        dxf.pair(330, "3")
+        dxf.pair(100, "AcDbSymbolTableRecord")
+        dxf.pair(100, "AcDbBlockTableRecord")
+        dxf.pair(2, name)
+        dxf.pair(340, layoutHandle)
+        dxf.pair(70, 6)
+        dxf.pair(280, 1)
+        dxf.pair(281, 0)
+    }
+
+    private func addLayoutBlocks(
+        to dxf: inout DXFWriter,
+        descriptors: [LayoutDescriptor]
+    ) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "BLOCKS")
+        addLayoutBlockBegin(
+            to: &dxf,
+            handle: "6",
+            owner: "4",
+            name: "*Model_Space"
+        )
+        addLayoutBlockEnd(
+            to: &dxf,
+            handle: "7",
+            owner: "4"
+        )
+
+        for descriptor in descriptors {
+            addLayoutBlockBegin(
+                to: &dxf,
+                handle: descriptor.blockBeginHandle,
+                owner: descriptor.blockRecordHandle,
+                name: descriptor.blockName
+            )
+            addLayoutViewport(
+                to: &dxf,
+                handle: descriptor.defaultViewportHandle,
+                owner: descriptor.blockRecordHandle,
+                identifier: 1,
+                center: (210, 148.5),
+                size: (462, 326.7),
+                viewCenter: (210, 148.5),
+                viewHeight: 326.7,
+                isDefault: true
+            )
+            addLayoutViewport(
+                to: &dxf,
+                handle: descriptor.mainViewportHandle,
+                owner: descriptor.blockRecordHandle,
+                identifier: 2,
+                center: (210, 135),
+                size: (390, 235),
+                viewCenter: descriptor.viewCenter,
+                viewHeight: descriptor.viewHeight,
+                isDefault: false
+            )
+
+            dxf.setEntityContext(
+                ownerHandle: descriptor.blockRecordHandle,
+                paperSpace: true
+            )
+            dxf.text(
+                metadata.brandName,
+                at: (15, 285),
+                height: 5,
+                layer: "ANNOTATIONS",
+                horizontalAlignment: 0
+            )
+            dxf.text(
+                descriptor.name,
+                at: (15, 275),
+                height: 4,
+                layer: "ANNOTATIONS",
+                horizontalAlignment: 0
+            )
+            if !descriptor.placement.room.location.isEmpty {
+                dxf.text(
+                    descriptor.placement.room.location,
+                    at: (15, 267),
+                    height: 2.5,
+                    layer: "ANNOTATIONS",
+                    horizontalAlignment: 0
+                )
+            }
+            dxf.text(
+                metadata.exportLine,
+                at: (405, 8),
+                height: 2.5,
+                layer: "ANNOTATIONS",
+                horizontalAlignment: 2
+            )
+            dxf.setEntityContext(ownerHandle: nil)
+            addLayoutBlockEnd(
+                to: &dxf,
+                handle: descriptor.blockEndHandle,
+                owner: descriptor.blockRecordHandle
+            )
+        }
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addLayoutBlockBegin(
+        to dxf: inout DXFWriter,
+        handle: String,
+        owner: String,
+        name: String
+    ) {
+        dxf.pair(0, "BLOCK")
+        dxf.pair(5, handle)
+        dxf.pair(330, owner)
+        dxf.pair(100, "AcDbEntity")
+        dxf.pair(8, "0")
+        dxf.pair(100, "AcDbBlockBegin")
+        dxf.pair(2, name)
+        dxf.pair(70, 0)
+        dxf.pair(10, 0.0)
+        dxf.pair(20, 0.0)
+        dxf.pair(30, 0.0)
+        dxf.pair(3, name)
+        dxf.pair(1, "")
+    }
+
+    private func addLayoutBlockEnd(
+        to dxf: inout DXFWriter,
+        handle: String,
+        owner: String
+    ) {
+        dxf.pair(0, "ENDBLK")
+        dxf.pair(5, handle)
+        dxf.pair(330, owner)
+        dxf.pair(100, "AcDbEntity")
+        dxf.pair(8, "0")
+        dxf.pair(100, "AcDbBlockEnd")
+    }
+
+    private func addLayoutViewport(
+        to dxf: inout DXFWriter,
+        handle: String,
+        owner: String,
+        identifier: Int,
+        center: (x: Double, y: Double),
+        size: (width: Double, height: Double),
+        viewCenter: (x: Double, y: Double),
+        viewHeight: Double,
+        isDefault: Bool
+    ) {
+        dxf.pair(0, "VIEWPORT")
+        dxf.pair(5, handle)
+        dxf.pair(330, owner)
+        dxf.pair(100, "AcDbEntity")
+        dxf.pair(67, 1)
+        dxf.pair(8, "ANNOTATIONS")
+        dxf.pair(100, "AcDbViewport")
+        dxf.pair(10, center.x)
+        dxf.pair(20, center.y)
+        dxf.pair(30, 0.0)
+        dxf.pair(40, size.width)
+        dxf.pair(41, size.height)
+        dxf.pair(68, isDefault ? 1 : 2)
+        dxf.pair(69, identifier)
+        dxf.pair(12, viewCenter.x)
+        dxf.pair(22, viewCenter.y)
+        dxf.pair(13, 0.0)
+        dxf.pair(23, 0.0)
+        dxf.pair(14, 10.0)
+        dxf.pair(24, 10.0)
+        dxf.pair(15, 10.0)
+        dxf.pair(25, 10.0)
+        dxf.pair(16, 0.0)
+        dxf.pair(26, 0.0)
+        dxf.pair(36, 1.0)
+        dxf.pair(17, 0.0)
+        dxf.pair(27, 0.0)
+        dxf.pair(37, 0.0)
+        dxf.pair(42, 50.0)
+        dxf.pair(43, 0.0)
+        dxf.pair(44, 0.0)
+        dxf.pair(45, viewHeight)
+        dxf.pair(50, 0.0)
+        dxf.pair(51, 0.0)
+        dxf.pair(72, 100)
+        dxf.pair(90, isDefault ? 557088 : 0)
+        dxf.pair(1, "")
+        dxf.pair(281, 0)
+        dxf.pair(71, 0)
+        dxf.pair(74, 0)
+        dxf.pair(110, 0.0)
+        dxf.pair(120, 0.0)
+        dxf.pair(130, 0.0)
+        dxf.pair(111, 1.0)
+        dxf.pair(121, 0.0)
+        dxf.pair(131, 0.0)
+        dxf.pair(112, 0.0)
+        dxf.pair(122, 1.0)
+        dxf.pair(132, 0.0)
+        dxf.pair(79, 0)
+        dxf.pair(146, 0.0)
+        dxf.pair(282, 0)
+    }
+
+    private func addLayoutModelEntities(
+        to dxf: inout DXFWriter,
+        descriptors: [LayoutDescriptor],
+        maximumX: Double,
+        maximumY: Double
+    ) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "ENTITIES")
+        dxf.setEntityContext(ownerHandle: "4")
+
+        for descriptor in descriptors {
+            let placement = descriptor.placement
+            let builder = DXFPlanBuilder(
+                title: placement.room.scan.name,
+                record: placement.room,
+                metadata: metadata,
+                translation: placement.translation
+            )
+            builder.addEntities(to: &dxf)
+            let labelX = placement.bounds.minimumX
+                + placement.translation.x
+            let labelY = placement.bounds.maximumY
+                + placement.translation.y
+                + 0.32
+            dxf.text(
+                placement.room.scan.name,
+                at: (labelX, labelY),
+                height: 0.16,
+                layer: "ANNOTATIONS",
+                horizontalAlignment: 0
+            )
+            if !placement.room.location.isEmpty {
+                dxf.text(
+                    placement.room.location,
+                    at: (labelX, labelY - 0.18),
+                    height: 0.08,
+                    layer: "ANNOTATIONS",
+                    horizontalAlignment: 0
+                )
+            }
+        }
+
+        dxf.text(
+            metadata.brandName,
+            at: (0, maximumY + 1.42),
+            height: 0.22,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 0
+        )
+        dxf.text(
+            metadata.projectLine,
+            at: (0, maximumY + 1.15),
+            height: 0.09,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 0
+        )
+        dxf.text(
+            title,
+            at: (0, maximumY + 0.92),
+            height: 0.14,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 0
+        )
+        dxf.text(
+            metadata.exportLine,
+            at: (maximumX, -0.55),
+            height: 0.08,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 2
+        )
+        dxf.setEntityContext(ownerHandle: nil)
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addLayoutObjects(
+        to dxf: inout DXFWriter,
+        descriptors: [LayoutDescriptor]
+    ) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "OBJECTS")
+        dxf.pair(0, "DICTIONARY")
+        dxf.pair(5, "1")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbDictionary")
+        dxf.pair(281, 1)
+        dxf.pair(3, "ACAD_LAYOUT")
+        dxf.pair(350, "2")
+
+        dxf.pair(0, "DICTIONARY")
+        dxf.pair(5, "2")
+        dxf.pair(330, "1")
+        dxf.pair(100, "AcDbDictionary")
+        dxf.pair(281, 1)
+        dxf.pair(3, "Model")
+        dxf.pair(350, "5")
+        for descriptor in descriptors {
+            dxf.pair(3, descriptor.name)
+            dxf.pair(350, descriptor.layoutHandle)
+        }
+
+        addLayoutObject(
+            to: &dxf,
+            handle: "5",
+            blockRecordHandle: "4",
+            name: "Model",
+            tabOrder: 0,
+            defaultViewportHandle: nil,
+            isModel: true
+        )
+        for (index, descriptor) in descriptors.enumerated() {
+            addLayoutObject(
+                to: &dxf,
+                handle: descriptor.layoutHandle,
+                blockRecordHandle: descriptor.blockRecordHandle,
+                name: descriptor.name,
+                tabOrder: index + 1,
+                defaultViewportHandle:
+                    descriptor.defaultViewportHandle,
+                isModel: false
+            )
+        }
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addLayoutObject(
+        to dxf: inout DXFWriter,
+        handle: String,
+        blockRecordHandle: String,
+        name: String,
+        tabOrder: Int,
+        defaultViewportHandle: String?,
+        isModel: Bool
+    ) {
+        dxf.pair(0, "LAYOUT")
+        dxf.pair(5, handle)
+        dxf.pair(330, "2")
+        dxf.pair(100, "AcDbPlotSettings")
+        dxf.pair(1, "")
+        dxf.pair(2, "")
+        dxf.pair(4, "A3")
+        dxf.pair(6, "")
+        dxf.pair(40, 7.5)
+        dxf.pair(41, 20.0)
+        dxf.pair(42, 7.5)
+        dxf.pair(43, 20.0)
+        dxf.pair(44, 420.0)
+        dxf.pair(45, 297.0)
+        dxf.pair(46, 0.0)
+        dxf.pair(47, 0.0)
+        dxf.pair(48, 0.0)
+        dxf.pair(49, 0.0)
+        dxf.pair(140, 0.0)
+        dxf.pair(141, 0.0)
+        dxf.pair(142, 1.0)
+        dxf.pair(143, 1.0)
+        dxf.pair(70, isModel ? 1024 : 0)
+        dxf.pair(72, 1)
+        dxf.pair(73, 0)
+        dxf.pair(74, 5)
+        dxf.pair(7, "")
+        dxf.pair(75, 16)
+        dxf.pair(76, 0)
+        dxf.pair(77, 2)
+        dxf.pair(78, 300)
+        dxf.pair(147, 1.0)
+        dxf.pair(148, 0.0)
+        dxf.pair(149, 0.0)
+
+        dxf.pair(100, "AcDbLayout")
+        dxf.pair(1, name)
+        dxf.pair(70, 1)
+        dxf.pair(71, tabOrder)
+        dxf.pair(10, 0.0)
+        dxf.pair(20, 0.0)
+        dxf.pair(11, 420.0)
+        dxf.pair(21, 297.0)
+        dxf.pair(12, 0.0)
+        dxf.pair(22, 0.0)
+        dxf.pair(32, 0.0)
+        dxf.pair(14, 1e20)
+        dxf.pair(24, 1e20)
+        dxf.pair(34, 1e20)
+        dxf.pair(15, -1e20)
+        dxf.pair(25, -1e20)
+        dxf.pair(35, -1e20)
+        dxf.pair(146, 0.0)
+        dxf.pair(13, 0.0)
+        dxf.pair(23, 0.0)
+        dxf.pair(33, 0.0)
+        dxf.pair(16, 1.0)
+        dxf.pair(26, 0.0)
+        dxf.pair(36, 0.0)
+        dxf.pair(17, 0.0)
+        dxf.pair(27, 1.0)
+        dxf.pair(37, 0.0)
+        dxf.pair(76, 1)
+        dxf.pair(330, blockRecordHandle)
+        if let defaultViewportHandle {
+            dxf.pair(331, defaultViewportHandle)
+        }
     }
 
     func build() -> String {
@@ -702,6 +1442,17 @@ private struct DXFPlanBuilder {
 
 private struct DXFWriter {
     private(set) var output = ""
+    private var entityOwnerHandle: String?
+    private var paperSpaceEntity = false
+    private var nextEntityHandleValue = 0x100000
+
+    mutating func setEntityContext(
+        ownerHandle: String?,
+        paperSpace: Bool = false
+    ) {
+        entityOwnerHandle = ownerHandle
+        paperSpaceEntity = ownerHandle == nil ? false : paperSpace
+    }
 
     mutating func pair(_ code: Int, _ value: String) {
         output += "\(code)\n\(clean(value))\n"
@@ -721,7 +1472,14 @@ private struct DXFWriter {
         layer: String
     ) {
         pair(0, "LINE")
-        pair(8, layer)
+        if entityOwnerHandle == nil {
+            pair(8, layer)
+        } else {
+            addContextualEntityHeader(
+                layer: layer,
+                subclass: "AcDbLine"
+            )
+        }
         pair(10, from.x)
         pair(20, from.y)
         pair(30, 0.0)
@@ -737,9 +1495,16 @@ private struct DXFWriter {
     ) {
         guard points.count >= 2 else { return }
         pair(0, "LWPOLYLINE")
-        pair(100, "AcDbEntity")
-        pair(8, layer)
-        pair(100, "AcDbPolyline")
+        if entityOwnerHandle == nil {
+            pair(100, "AcDbEntity")
+            pair(8, layer)
+            pair(100, "AcDbPolyline")
+        } else {
+            addContextualEntityHeader(
+                layer: layer,
+                subclass: "AcDbPolyline"
+            )
+        }
         pair(90, points.count)
         pair(70, closed ? 1 : 0)
         for point in points {
@@ -754,7 +1519,14 @@ private struct DXFWriter {
         layer: String
     ) {
         pair(0, "CIRCLE")
-        pair(8, layer)
+        if entityOwnerHandle == nil {
+            pair(8, layer)
+        } else {
+            addContextualEntityHeader(
+                layer: layer,
+                subclass: "AcDbCircle"
+            )
+        }
         pair(10, center.x)
         pair(20, center.y)
         pair(30, 0.0)
@@ -770,7 +1542,14 @@ private struct DXFWriter {
         horizontalAlignment: Int = 1
     ) {
         pair(0, "TEXT")
-        pair(8, layer)
+        if entityOwnerHandle == nil {
+            pair(8, layer)
+        } else {
+            addContextualEntityHeader(
+                layer: layer,
+                subclass: "AcDbText"
+            )
+        }
         pair(10, point.x)
         pair(20, point.y)
         pair(30, 0.0)
@@ -860,6 +1639,29 @@ private struct DXFWriter {
             layer: layer,
             rotation: rotation
         )
+    }
+
+    private mutating func addContextualEntityHeader(
+        layer: String,
+        subclass: String
+    ) {
+        guard let entityOwnerHandle else { return }
+        pair(5, nextEntityHandle())
+        pair(330, entityOwnerHandle)
+        pair(100, "AcDbEntity")
+        if paperSpaceEntity {
+            pair(67, 1)
+        }
+        pair(8, layer)
+        pair(100, subclass)
+    }
+
+    private mutating func nextEntityHandle() -> String {
+        defer { nextEntityHandleValue += 1 }
+        return String(
+            nextEntityHandleValue,
+            radix: 16
+        ).uppercased()
     }
 
     private func clean(_ value: String) -> String {

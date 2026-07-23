@@ -214,6 +214,19 @@ struct ExportCenterView: View {
             Section("DXF – مخطط CAD متجه") {
                 if planRooms.count > 1 {
                     exportButton(
+                        "DXF Layouts – لاي أوت لكل مخطط",
+                        subtitle: "ملف واحد • Layout باسم كل مساحة • الطبقات موحّدة",
+                        systemImage: "rectangle.stack.fill",
+                        disabled: planRooms.isEmpty
+                    ) {
+                        try ProjectExportService.makeLayoutDXF(
+                            title: title,
+                            rooms: planRooms,
+                            metadata: exportMetadata
+                        )
+                    }
+
+                    exportButton(
                         "DXF موحد – المخططات بجوار بعضها",
                         subtitle: "ملف واحد • أسماء المساحات ظاهرة • 12 طبقة مشتركة",
                         systemImage: "rectangle.3.group.fill",
