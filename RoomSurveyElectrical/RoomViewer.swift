@@ -999,7 +999,7 @@ private struct Plan2DView: View {
             .onChanged { value in
                 guard draggedElement == nil else { return }
                 offset = CGSize(
-                    width: committedOffset.width - value.translation.width,
+                    width: committedOffset.width + value.translation.width,
                     height: committedOffset.height + value.translation.height
                 )
             }
@@ -1022,7 +1022,7 @@ private struct Plan2DView: View {
     private var rotationGesture: some Gesture {
         RotationGesture()
             .onChanged { value in
-                rotation = committedRotation - value
+                rotation = committedRotation + value
             }
             .onEnded { _ in
                 committedRotation = rotation
