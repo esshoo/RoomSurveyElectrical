@@ -23,9 +23,7 @@ struct ElectricalEditorView: View {
         onClose: @escaping () -> Void
     ) {
         var preparedProject = initialProject
-        if preparedProject.electricalSettings == nil {
-            preparedProject.electricalSettings = settings
-        }
+        preparedProject.electricalSettings = settings
         _project = State(initialValue: preparedProject)
         self.arSession = arSession
         self.settings = settings
@@ -390,17 +388,24 @@ struct ElectricalEditorView: View {
             wasAutomaticallyAdjusted: appliesRules
         )
 
-        project.points.append(point)
+        let merged = project.appendElectricalPointMergingNearby(
+            point,
+            mergeDistance: Float(settings.electricalMergeDistanceMeters)
+        )
         if appliesRules {
             placementMessage = "تم ضبط \(type.title): \(messageParts.joined(separator: " • "))"
         } else {
             placementMessage = "تم حفظ \(type.title) في موضعه الفعلي."
+        }
+        if merged {
+            placementMessage = "\(placementMessage ?? "") • تم دمجه مع عنصر قريب"
         }
         persistProject()
     }
 
     private func removeLastPoint() {
         guard let removedPoint = project.points.popLast() else { return }
+        project.normalizeElectricalGroups()
         placementMessage = "تم التراجع عن \(removedPoint.type.title)."
         persistProject()
     }

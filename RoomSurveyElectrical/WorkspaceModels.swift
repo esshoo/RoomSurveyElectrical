@@ -95,6 +95,11 @@ struct ElectricalPlacementSettings: Codable, Equatable {
     var doorSuggestionMaximumMetersValue: Double?
     var switchAlignmentMinimumMetersValue: Double?
     var switchAlignmentMaximumMetersValue: Double?
+    var squareBoxWidthMetersValue: Double?
+    var squareBoxHeightMetersValue: Double?
+    var rectangularBoxWidthMetersValue: Double?
+    var rectangularBoxHeightMetersValue: Double?
+    var electricalMergeDistanceMetersValue: Double?
 
     var doorSuggestionMinimumMeters: Double {
         get { doorSuggestionMinimumMetersValue ?? 0.20 }
@@ -116,6 +121,31 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         set { switchAlignmentMaximumMetersValue = max(0, newValue) }
     }
 
+    var squareBoxWidthMeters: Double {
+        get { squareBoxWidthMetersValue ?? 0.07 }
+        set { squareBoxWidthMetersValue = max(0, newValue) }
+    }
+
+    var squareBoxHeightMeters: Double {
+        get { squareBoxHeightMetersValue ?? 0.07 }
+        set { squareBoxHeightMetersValue = max(0, newValue) }
+    }
+
+    var rectangularBoxWidthMeters: Double {
+        get { rectangularBoxWidthMetersValue ?? 0.05 }
+        set { rectangularBoxWidthMetersValue = max(0, newValue) }
+    }
+
+    var rectangularBoxHeightMeters: Double {
+        get { rectangularBoxHeightMetersValue ?? 0.10 }
+        set { rectangularBoxHeightMetersValue = max(0, newValue) }
+    }
+
+    var electricalMergeDistanceMeters: Double {
+        get { electricalMergeDistanceMetersValue ?? 0.20 }
+        set { electricalMergeDistanceMetersValue = max(0, newValue) }
+    }
+
     static let standard = ElectricalPlacementSettings(
         switchHeightMeters: 1.20,
         socketHeightMeters: 0.50,
@@ -126,7 +156,12 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         doorSuggestionMinimumMetersValue: 0.20,
         doorSuggestionMaximumMetersValue: 0.50,
         switchAlignmentMinimumMetersValue: 0.20,
-        switchAlignmentMaximumMetersValue: 0.50
+        switchAlignmentMaximumMetersValue: 0.50,
+        squareBoxWidthMetersValue: 0.07,
+        squareBoxHeightMetersValue: 0.07,
+        rectangularBoxWidthMetersValue: 0.05,
+        rectangularBoxHeightMetersValue: 0.10,
+        electricalMergeDistanceMetersValue: 0.20
     )
 }
 

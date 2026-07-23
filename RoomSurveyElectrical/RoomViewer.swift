@@ -292,7 +292,11 @@ struct RoomViewerView: View {
     }
 
     private func reloadProject() {
-        if let updatedProject = ProjectRepository.load(projectID: project.id) {
+        if var updatedProject = ProjectRepository.load(projectID: project.id) {
+            if let workspaceSettings = store.project(id: surveyProjectID)?.settings {
+                updatedProject.electricalSettings = workspaceSettings
+                try? ProjectRepository.save(updatedProject)
+            }
             project = updatedProject
         }
     }
@@ -380,6 +384,18 @@ private enum Plan2DAddition {
     case electricalPoint(UUID)
 }
 
+private enum Plan2DElementSelection: Identifiable, Equatable {
+    case surface(UUID)
+    case electricalPoint(UUID)
+
+    var id: String {
+        switch self {
+        case .surface(let id): "surface-\(id.uuidString)"
+        case .electricalPoint(let id): "point-\(id.uuidString)"
+        }
+    }
+}
+
 private struct NearestWallPlacement {
     let wall: WallSnapshot
     let localX: Float
@@ -421,6 +437,8 @@ private struct Plan2DView: View {
     @State private var feedbackText: String?
     @State private var electricalDraft: Plan2DElectricalDraft?
     @State private var smartPrompt: Plan2DSmartPrompt?
+    @State private var selectedElement: Plan2DElementSelection?
+    @State private var draggedElement: Plan2DElementSelection?
 
     var body: some View {
         GeometryReader { geometry in
@@ -435,12 +453,19 @@ private struct Plan2DView: View {
                 .rotationEffect(rotation)
                 .offset(offset)
                 .gesture(dragGesture)
+                .highPriorityGesture(elementMoveGesture(viewSize: geometry.size))
                 .simultaneousGesture(magnificationGesture)
                 .simultaneousGesture(rotationGesture)
                 .simultaneousGesture(
                     SpatialTapGesture(coordinateSpace: .named("plan2D")).onEnded { value in
-                        guard activeTool != nil else { return }
-                        placeActiveTool(at: value.location, viewSize: geometry.size)
+                        if activeTool != nil {
+                            placeActiveTool(at: value.location, viewSize: geometry.size)
+                        } else {
+                            selectedElement = element(
+                                at: value.location,
+                                viewSize: geometry.size
+                            )
+                        }
                     }
                 )
 
@@ -465,6 +490,9 @@ private struct Plan2DView: View {
             smartPromptButtons
         } message: {
             Text(smartPromptMessage)
+        }
+        .sheet(item: $selectedElement) { selection in
+            elementEditor(for: selection)
         }
     }
 
@@ -522,6 +550,16 @@ private struct Plan2DView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
                     .background(.ultraThinMaterial, in: Capsule())
+            } else if activeTool == nil {
+                Label(
+                    "انقر على العنصر لتعديله • اضغط مطولًا واسحب لنقله",
+                    systemImage: "hand.tap.fill"
+                )
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: Capsule())
             }
 
             Spacer()
@@ -621,15 +659,331 @@ private struct Plan2DView: View {
         project.electricalSettings ?? .standard
     }
 
+    @ViewBuilder
+    private func elementEditor(for selection: Plan2DElementSelection) -> some View {
+        switch selection {
+        case .surface(let id):
+            if let surface = project.surfaces.first(where: { $0.id == id }),
+               let placement = wallPlacement(for: surface) {
+                Plan2DSurfaceEditor(
+                    surface: surface,
+                    distanceFromWallStart: placement.localX + placement.wall.width / 2,
+                    onSave: { width, height, colorHex in
+                        updateSurface(
+                            id: id,
+                            width: width,
+                            height: height,
+                            colorHex: colorHex
+                        )
+                    },
+                    onDelete: {
+                        deleteElement(selection)
+                    }
+                )
+            } else {
+                ContentUnavailableView(
+                    "العنصر غير متاح",
+                    systemImage: "exclamationmark.triangle"
+                )
+            }
+        case .electricalPoint(let id):
+            if let point = project.points.first(where: { $0.id == id }) {
+                Plan2DElectricalEditor(
+                    point: point,
+                    distanceFromWallStart: distanceFromWallStart(for: point),
+                    onSave: { type, colorHex in
+                        updateElectricalPoint(
+                            id: id,
+                            type: type,
+                            colorHex: colorHex
+                        )
+                    },
+                    onDelete: {
+                        deleteElement(selection)
+                    }
+                )
+            } else {
+                ContentUnavailableView(
+                    "العنصر غير متاح",
+                    systemImage: "exclamationmark.triangle"
+                )
+            }
+        }
+    }
+
+    private func elementMoveGesture(viewSize: CGSize) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.45, maximumDistance: 14)
+            .sequenced(
+                before: DragGesture(
+                    minimumDistance: 0,
+                    coordinateSpace: .named("plan2D")
+                )
+            )
+            .onChanged { value in
+                switch value {
+                case .first(true):
+                    break
+                case .second(true, let dragValue):
+                    guard let dragValue else { return }
+                    if draggedElement == nil {
+                        draggedElement = element(
+                            at: dragValue.startLocation,
+                            viewSize: viewSize
+                        )
+                    }
+                    if let draggedElement {
+                        moveElement(
+                            draggedElement,
+                            to: dragValue.location,
+                            viewSize: viewSize
+                        )
+                    }
+                default:
+                    break
+                }
+            }
+            .onEnded { value in
+                if case .second(true, _) = value,
+                   draggedElement != nil {
+                    feedbackText = "تم نقل العنصر وحفظ موضعه الجديد."
+                    onProjectChanged()
+                }
+                draggedElement = nil
+            }
+    }
+
+    private func element(
+        at screenPoint: CGPoint,
+        viewSize: CGSize
+    ) -> Plan2DElementSelection? {
+        let projection = PlanProjection(project: project, size: viewSize)
+        var candidates: [(selection: Plan2DElementSelection, distance: CGFloat)] = []
+
+        for surface in project.surfaces where isEditableSurface(surface) {
+            let endpoints = surfacePlanEndpoints(surface)
+            let start = transformedCanvasPoint(projection.map(endpoints.0), size: viewSize)
+            let end = transformedCanvasPoint(projection.map(endpoints.1), size: viewSize)
+            let distance = distanceFromPoint(screenPoint, toSegmentFrom: start, to: end)
+            if distance <= 26 {
+                candidates.append((.surface(surface.id), distance))
+            }
+        }
+
+        for point in project.points where point.worldPosition.count >= 3 {
+            let planPoint = SIMD2(point.worldPosition[0], point.worldPosition[2])
+            let center = transformedCanvasPoint(projection.map(planPoint), size: viewSize)
+            let distance = hypot(screenPoint.x - center.x, screenPoint.y - center.y)
+            if distance <= 28 {
+                candidates.append((.electricalPoint(point.id), distance))
+            }
+        }
+
+        return candidates.min { $0.distance < $1.distance }?.selection
+    }
+
+    private func moveElement(
+        _ selection: Plan2DElementSelection,
+        to screenPoint: CGPoint,
+        viewSize: CGSize
+    ) {
+        switch selection {
+        case .surface(let id):
+            guard let index = project.surfaces.firstIndex(where: { $0.id == id }),
+                  let current = wallPlacement(for: project.surfaces[index]),
+                  let target = wallPlacement(
+                      on: current.wall,
+                      at: screenPoint,
+                      viewSize: viewSize
+                  ) else {
+                return
+            }
+
+            let surface = project.surfaces[index]
+            let halfWidth = min(surface.width / 2, current.wall.width / 2)
+            let localX = min(
+                max(target.localX, -current.wall.width / 2 + halfWidth),
+                current.wall.width / 2 - halfWidth
+            )
+            let matrix = simd_mul(
+                current.wall.matrix,
+                translationMatrix(
+                    x: localX,
+                    y: current.localY,
+                    z: 0.01
+                )
+            )
+            project.surfaces[index].transform = matrix.columnMajorValues
+
+        case .electricalPoint(let id):
+            guard let index = project.points.firstIndex(where: { $0.id == id }),
+                  let wall = project.walls.first(where: {
+                      $0.id == project.points[index].wallID
+                  }),
+                  let target = wallPlacement(
+                      on: wall,
+                      at: screenPoint,
+                      viewSize: viewSize
+                  ) else {
+                return
+            }
+
+            let margin: Float = 0.04
+            let localX = min(
+                max(target.localX, -wall.width / 2 + margin),
+                wall.width / 2 - margin
+            )
+            let groupID = project.points[index].status == .proposed
+                ? project.points[index].groupID
+                : nil
+            let indices = project.points.indices.filter {
+                $0 == index || (groupID != nil && project.points[$0].groupID == groupID)
+            }
+            for pointIndex in indices {
+                project.points[pointIndex].localX = localX
+                let world = simd_mul(
+                    wall.matrix,
+                    SIMD4(localX, project.points[pointIndex].localY, 0.035, 1)
+                )
+                project.points[pointIndex].worldPosition = [world.x, world.y, world.z]
+                if project.points[pointIndex].type.usesSwitchRules {
+                    project.points[pointIndex].measuredDoorOffset =
+                        distanceToNearestDoorEdge(localX: localX, wall: wall)
+                }
+            }
+        }
+    }
+
+    private func updateSurface(
+        id: UUID,
+        width requestedWidth: Float,
+        height requestedHeight: Float,
+        colorHex: String?
+    ) {
+        guard let index = project.surfaces.firstIndex(where: { $0.id == id }),
+              let placement = wallPlacement(for: project.surfaces[index]) else {
+            return
+        }
+
+        let width = min(max(requestedWidth, 0.20), max(0.20, placement.wall.width - 0.08))
+        let height = min(max(requestedHeight, 0.20), placement.wall.height)
+        let halfWidth = width / 2
+        let localX = min(
+            max(placement.localX, -placement.wall.width / 2 + halfWidth),
+            placement.wall.width / 2 - halfWidth
+        )
+        let localY = project.surfaces[index].kind == .door
+            ? -placement.wall.height / 2 + height / 2
+            : min(
+                max(placement.localY, -placement.wall.height / 2 + height / 2),
+                placement.wall.height / 2 - height / 2
+            )
+        let matrix = simd_mul(
+            placement.wall.matrix,
+            translationMatrix(x: localX, y: localY, z: 0.01)
+        )
+
+        project.surfaces[index].width = width
+        project.surfaces[index].height = height
+        project.surfaces[index].transform = matrix.columnMajorValues
+        project.surfaces[index].colorHex = colorHex
+        project.surfaces[index].isManuallyAdded = true
+        selectedElement = nil
+        feedbackText = "تم حفظ مقاسات العنصر ولونه."
+        onProjectChanged()
+    }
+
+    private func updateElectricalPoint(
+        id: UUID,
+        type: ElectricalDeviceType,
+        colorHex: String?
+    ) {
+        guard let index = project.points.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        var updatedPoint = project.points.remove(at: index)
+        updatedPoint.type = type
+        updatedPoint.colorHex = colorHex
+        updatedPoint.groupID = nil
+        project.normalizeElectricalGroups()
+        _ = project.appendElectricalPointMergingNearby(
+            updatedPoint,
+            mergeDistance: Float(electricalSettings.electricalMergeDistanceMeters)
+        )
+        selectedElement = nil
+        feedbackText = "تم حفظ نوع العنصر ولونه."
+        onProjectChanged()
+    }
+
+    private func deleteElement(_ selection: Plan2DElementSelection) {
+        switch selection {
+        case .surface(let id):
+            project.surfaces.removeAll { $0.id == id }
+        case .electricalPoint(let id):
+            project.points.removeAll { $0.id == id }
+            project.normalizeElectricalGroups()
+        }
+        selectedElement = nil
+        feedbackText = "تم حذف العنصر."
+        onProjectChanged()
+    }
+
+    private func distanceFromWallStart(for point: ElectricalPoint) -> Float {
+        guard let wall = project.walls.first(where: { $0.id == point.wallID }) else {
+            return 0
+        }
+        return max(0, point.localX + wall.width / 2)
+    }
+
+    private func wallPlacement(
+        for surface: SurfaceSnapshot
+    ) -> (wall: WallSnapshot, localX: Float, localY: Float)? {
+        project.walls.compactMap { wall in
+            let localCenter = simd_mul(
+                simd_inverse(wall.matrix),
+                surface.matrix.columns.3
+            )
+            guard abs(localCenter.x) <= wall.width / 2 + surface.width / 2,
+                  abs(localCenter.y) <= wall.height / 2 + surface.height / 2 else {
+                return nil
+            }
+            return (
+                wall: wall,
+                localX: localCenter.x,
+                localY: localCenter.y,
+                distance: abs(localCenter.z)
+            )
+        }
+        .filter { $0.distance <= 0.45 }
+        .min { $0.distance < $1.distance }
+        .map {
+            (wall: $0.wall, localX: $0.localX, localY: $0.localY)
+        }
+    }
+
+    private func isEditableSurface(_ surface: SurfaceSnapshot) -> Bool {
+        if surface.isManuallyAdded == true { return true }
+        if surface.isManuallyAdded == false { return false }
+        return project.walls.contains { wall in
+            let localCenter = simd_mul(
+                simd_inverse(wall.matrix),
+                surface.matrix.columns.3
+            )
+            return abs(localCenter.z - 0.01) <= 0.003
+                && abs(localCenter.x) <= wall.width / 2 + surface.width / 2
+        }
+    }
+
     private var dragGesture: some Gesture {
         DragGesture()
             .onChanged { value in
+                guard draggedElement == nil else { return }
                 offset = CGSize(
                     width: committedOffset.width - value.translation.width,
                     height: committedOffset.height + value.translation.height
                 )
             }
             .onEnded { _ in
+                guard draggedElement == nil else { return }
                 committedOffset = offset
             }
     }
@@ -667,12 +1021,9 @@ private struct Plan2DView: View {
 
     private func placeActiveTool(at location: CGPoint, viewSize: CGSize) {
         guard let tool = activeTool else { return }
-        let projection = PlanProjection(project: project, size: viewSize)
-        let canvasPoint = untransformedCanvasPoint(location, size: viewSize)
-        let planPoint = projection.unmap(canvasPoint)
 
-        guard let placement = nearestWallPlacement(to: planPoint),
-              placement.distance <= 0.40 else {
+        guard let placement = nearestWallPlacement(at: location, viewSize: viewSize),
+              placement.distance <= 44 else {
             feedbackText = "اضغط أقرب إلى خط الحائط."
             return
         }
@@ -799,38 +1150,92 @@ private struct Plan2DView: View {
         feedbackText = "تم إلغاء الإضافة."
     }
 
-    private func untransformedCanvasPoint(_ point: CGPoint, size: CGSize) -> CGPoint {
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let translatedX = point.x - center.x - offset.width
-        let translatedY = point.y - center.y - offset.height
-        let cosine = CGFloat(cos(-rotation.radians))
-        let sine = CGFloat(sin(-rotation.radians))
-        let rotatedX = translatedX * cosine - translatedY * sine
-        let rotatedY = translatedX * sine + translatedY * cosine
+    private func nearestWallPlacement(
+        at screenPoint: CGPoint,
+        viewSize: CGSize
+    ) -> NearestWallPlacement? {
+        return project.walls
+            .compactMap {
+                wallPlacement(on: $0, at: screenPoint, viewSize: viewSize)
+            }
+            .min { $0.distance < $1.distance }
+    }
 
-        return CGPoint(
-            x: center.x + rotatedX / zoom,
-            y: center.y + rotatedY / zoom
+    private func wallPlacement(
+        on wall: WallSnapshot,
+        at screenPoint: CGPoint,
+        viewSize: CGSize
+    ) -> NearestWallPlacement? {
+        let projection = PlanProjection(project: project, size: viewSize)
+        let endpoints = wallPlanEndpoints(wall)
+        let start = transformedCanvasPoint(
+            projection.map(endpoints.0),
+            size: viewSize
+        )
+        let end = transformedCanvasPoint(
+            projection.map(endpoints.1),
+            size: viewSize
+        )
+        let segmentX = end.x - start.x
+        let segmentY = end.y - start.y
+        let lengthSquared = segmentX * segmentX + segmentY * segmentY
+        guard lengthSquared > 0.01 else { return nil }
+
+        let rawProgress = (
+            (screenPoint.x - start.x) * segmentX
+                + (screenPoint.y - start.y) * segmentY
+        ) / lengthSquared
+        let progress = min(max(rawProgress, 0), 1)
+        let nearestPoint = CGPoint(
+            x: start.x + segmentX * progress,
+            y: start.y + segmentY * progress
+        )
+        return NearestWallPlacement(
+            wall: wall,
+            localX: -wall.width / 2 + wall.width * Float(progress),
+            distance: Float(hypot(
+                screenPoint.x - nearestPoint.x,
+                screenPoint.y - nearestPoint.y
+            ))
         )
     }
 
-    private func nearestWallPlacement(to point: SIMD2<Float>) -> NearestWallPlacement? {
-        project.walls.compactMap { wall in
-            let endpoints = wallPlanEndpoints(wall)
-            let segment = endpoints.1 - endpoints.0
-            let lengthSquared = simd_length_squared(segment)
-            guard lengthSquared > 0.0001 else { return nil }
+    private func transformedCanvasPoint(_ point: CGPoint, size: CGSize) -> CGPoint {
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let scaledX = (point.x - center.x) * zoom
+        let scaledY = (point.y - center.y) * zoom
+        let cosine = CGFloat(cos(rotation.radians))
+        let sine = CGFloat(sin(rotation.radians))
+        return CGPoint(
+            x: center.x + scaledX * cosine - scaledY * sine + offset.width,
+            y: center.y + scaledX * sine + scaledY * cosine + offset.height
+        )
+    }
 
-            let rawProgress = simd_dot(point - endpoints.0, segment) / lengthSquared
-            let progress = min(max(rawProgress, 0), 1)
-            let nearestPoint = endpoints.0 + segment * progress
-            return NearestWallPlacement(
-                wall: wall,
-                localX: -wall.width / 2 + wall.width * progress,
-                distance: simd_distance(point, nearestPoint)
-            )
+    private func distanceFromPoint(
+        _ point: CGPoint,
+        toSegmentFrom start: CGPoint,
+        to end: CGPoint
+    ) -> CGFloat {
+        let segmentX = end.x - start.x
+        let segmentY = end.y - start.y
+        let lengthSquared = segmentX * segmentX + segmentY * segmentY
+        guard lengthSquared > 0.01 else {
+            return hypot(point.x - start.x, point.y - start.y)
         }
-        .min { $0.distance < $1.distance }
+        let progress = min(
+            max(
+                ((point.x - start.x) * segmentX + (point.y - start.y) * segmentY)
+                    / lengthSquared,
+                0
+            ),
+            1
+        )
+        let nearest = CGPoint(
+            x: start.x + segmentX * progress,
+            y: start.y + segmentY * progress
+        )
+        return hypot(point.x - nearest.x, point.y - nearest.y)
     }
 
     private func positionNearDoor(
@@ -1011,9 +1416,14 @@ private struct Plan2DView: View {
             wasAutomaticallyAdjusted: true
         )
 
-        project.points.append(point)
+        let merged = project.appendElectricalPointMergingNearby(
+            point,
+            mergeDistance: Float(settings.electricalMergeDistanceMeters)
+        )
         lastAddition = .electricalPoint(point.id)
-        feedbackText = "تمت إضافة \(type.title) على الارتفاع القياسي."
+        feedbackText = merged
+            ? "تمت إضافة \(type.title) ودمجه مع عنصر قريب."
+            : "تمت إضافة \(type.title) على الارتفاع القياسي."
         return true
     }
 
@@ -1024,6 +1434,7 @@ private struct Plan2DView: View {
             project.surfaces.removeAll { $0.id == id }
         case .electricalPoint(let id):
             project.points.removeAll { $0.id == id }
+            project.normalizeElectricalGroups()
         }
         self.lastAddition = nil
         feedbackText = "تم التراجع عن آخر إضافة."
@@ -1149,12 +1560,13 @@ private struct Plan2DView: View {
         projection: PlanProjection
     ) {
         let endpoints = surfacePlanEndpoints(surface)
-        let color: Color
+        let fallback: UIColor
         switch surface.kind {
-        case .door: color = .orange
-        case .window: color = .cyan
-        case .opening: color = .purple
+        case .door: fallback = .systemOrange
+        case .window: fallback = .systemCyan
+        case .opening: fallback = .systemPurple
         }
+        let color = Color(uiColor: uiColor(hex: surface.colorHex, fallback: fallback))
 
         var path = Path()
         path.move(to: projection.map(endpoints.0))
@@ -1195,11 +1607,260 @@ private struct Plan2DView: View {
         projection: PlanProjection
     ) {
         guard point.worldPosition.count >= 3 else { return }
+        let groupPoints: [ElectricalPoint]
+        if let groupID = point.groupID, point.status == .proposed {
+            groupPoints = project.points.filter { $0.groupID == groupID }
+            guard groupPoints.first?.id == point.id else { return }
+        } else {
+            groupPoints = [point]
+        }
         let center = projection.map(SIMD2(point.worldPosition[0], point.worldPosition[2]))
-        let rect = CGRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12)
-        let color: Color = point.status == .existing ? .green : .orange
-        context.fill(Path(ellipseIn: rect), with: .color(color))
-        context.stroke(Path(ellipseIn: rect), with: .color(.white), lineWidth: 1.5)
+        let fallback: UIColor = point.status == .existing ? .systemGreen : .systemOrange
+        let color = Color(uiColor: uiColor(hex: point.colorHex, fallback: fallback))
+        if groupPoints.count > 1 {
+            let width = CGFloat(18 + min(groupPoints.count, 6) * 5)
+            let rect = CGRect(
+                x: center.x - width / 2,
+                y: center.y - 8,
+                width: width,
+                height: 16
+            )
+            context.fill(
+                Path(roundedRect: rect, cornerRadius: 5),
+                with: .color(color)
+            )
+            context.stroke(
+                Path(roundedRect: rect, cornerRadius: 5),
+                with: .color(.white),
+                lineWidth: 1.5
+            )
+            context.draw(
+                Text("\(groupPoints.count)")
+                    .font(.caption2.bold())
+                    .foregroundColor(.white),
+                at: center
+            )
+        } else {
+            let rect = CGRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12)
+            context.fill(Path(ellipseIn: rect), with: .color(color))
+            context.stroke(Path(ellipseIn: rect), with: .color(.white), lineWidth: 1.5)
+        }
+    }
+}
+
+private struct Plan2DSurfaceEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var widthCentimeters: Double
+    @State private var heightCentimeters: Double
+    @State private var color: ElementColorOption
+    @State private var showDeleteConfirmation = false
+
+    let surface: SurfaceSnapshot
+    let distanceFromWallStart: Float
+    let onSave: (Float, Float, String?) -> Void
+    let onDelete: () -> Void
+
+    init(
+        surface: SurfaceSnapshot,
+        distanceFromWallStart: Float,
+        onSave: @escaping (Float, Float, String?) -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.surface = surface
+        self.distanceFromWallStart = distanceFromWallStart
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _widthCentimeters = State(initialValue: Double(surface.width * 100))
+        _heightCentimeters = State(initialValue: Double(surface.height * 100))
+        _color = State(initialValue: ElementColorOption(hexValue: surface.colorHex))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("المكان") {
+                    LabeledContent(
+                        "المسافة من بداية الحائط",
+                        value: String(format: "%.0f سم", distanceFromWallStart * 100)
+                    )
+                }
+
+                Section("الأبعاد") {
+                    centimeterValueField("العرض", value: $widthCentimeters)
+                    centimeterValueField("الارتفاع", value: $heightCentimeters)
+                }
+
+                Section("المظهر") {
+                    ColorOptionPicker(selection: $color)
+                }
+
+                Section {
+                    Button("حذف العنصر", role: .destructive) {
+                        showDeleteConfirmation = true
+                    }
+                }
+            }
+            .navigationTitle(surface.kind == .door ? "خصائص الباب" : "خصائص الشباك")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("حفظ") {
+                        onSave(
+                            Float(max(20, widthCentimeters) / 100),
+                            Float(max(20, heightCentimeters) / 100),
+                            color.hexValue
+                        )
+                        dismiss()
+                    }
+                }
+            }
+            .confirmationDialog(
+                "حذف العنصر؟",
+                isPresented: $showDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("حذف", role: .destructive) {
+                    onDelete()
+                    dismiss()
+                }
+                Button("إلغاء", role: .cancel) {}
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+
+    private func centimeterValueField(
+        _ title: String,
+        value: Binding<Double>
+    ) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            TextField(
+                "0",
+                value: value,
+                format: .number.precision(.fractionLength(0...1))
+            )
+            .keyboardType(.decimalPad)
+            .multilineTextAlignment(.trailing)
+            .frame(width: 82)
+            Text("سم")
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct Plan2DElectricalEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var type: ElectricalDeviceType
+    @State private var color: ElementColorOption
+    @State private var showDeleteConfirmation = false
+
+    let point: ElectricalPoint
+    let distanceFromWallStart: Float
+    let onSave: (ElectricalDeviceType, String?) -> Void
+    let onDelete: () -> Void
+
+    init(
+        point: ElectricalPoint,
+        distanceFromWallStart: Float,
+        onSave: @escaping (ElectricalDeviceType, String?) -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.point = point
+        self.distanceFromWallStart = distanceFromWallStart
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _type = State(initialValue: point.type)
+        _color = State(initialValue: ElementColorOption(hexValue: point.colorHex))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("المكان") {
+                    LabeledContent(
+                        "المسافة من بداية الحائط",
+                        value: String(format: "%.0f سم", distanceFromWallStart * 100)
+                    )
+                    LabeledContent(
+                        "الارتفاع",
+                        value: String(format: "%.0f سم", point.heightFromFloor * 100)
+                    )
+                    if point.groupID != nil {
+                        Label("هذا العنصر ضمن مجموعة مدمجة", systemImage: "square.on.square")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("نوع العنصر") {
+                    Picker("العنصر", selection: $type) {
+                        ForEach(ElectricalDeviceType.allCases) { item in
+                            Label(item.title, systemImage: item.systemImage)
+                                .tag(item)
+                        }
+                    }
+                }
+
+                Section("المظهر") {
+                    ColorOptionPicker(selection: $color)
+                }
+
+                Section {
+                    Button("حذف العنصر", role: .destructive) {
+                        showDeleteConfirmation = true
+                    }
+                }
+            }
+            .navigationTitle("خصائص نقطة الكهرباء")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("حفظ") {
+                        onSave(type, color.hexValue)
+                        dismiss()
+                    }
+                }
+            }
+            .confirmationDialog(
+                "حذف العنصر؟",
+                isPresented: $showDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("حذف", role: .destructive) {
+                    onDelete()
+                    dismiss()
+                }
+                Button("إلغاء", role: .cancel) {}
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+}
+
+private struct ColorOptionPicker: View {
+    @Binding var selection: ElementColorOption
+
+    var body: some View {
+        Picker("اللون", selection: $selection) {
+            ForEach(ElementColorOption.allCases) { option in
+                HStack {
+                    if let hex = option.hexValue {
+                        Circle()
+                            .fill(Color(uiColor: uiColor(hex: hex, fallback: .gray)))
+                            .frame(width: 14, height: 14)
+                    }
+                    Text(option.title)
+                }
+                .tag(option)
+            }
+        }
     }
 }
 
@@ -1348,6 +2009,7 @@ private struct USDZRoomView: UIViewRepresentable {
             view.scene = scene
             scene.rootNode.childNode(withName: "Section_grp", recursively: true)?.isHidden = true
             addElectricalMarkers(to: scene)
+            addManualOpenings(to: scene)
             configureCamera(for: scene, in: view)
             applyLayerVisibility(to: scene)
         }
@@ -1359,6 +2021,7 @@ private struct USDZRoomView: UIViewRepresentable {
             }
             guard let scene = view.scene else { return }
             addElectricalMarkers(to: scene)
+            addManualOpenings(to: scene)
             applyLayerVisibility(to: scene)
         }
 
@@ -1406,7 +2069,8 @@ private struct USDZRoomView: UIViewRepresentable {
             for point in parent.project.points where point.worldPosition.count >= 3 {
                 let sphere = SCNSphere(radius: 0.055)
                 let material = SCNMaterial()
-                let color: UIColor = point.status == .existing ? .systemGreen : .systemOrange
+                let fallback: UIColor = point.status == .existing ? .systemGreen : .systemOrange
+                let color = uiColor(hex: point.colorHex, fallback: fallback)
                 material.diffuse.contents = color
                 material.emission.contents = color.withAlphaComponent(0.3)
                 sphere.materials = [material]
@@ -1421,12 +2085,105 @@ private struct USDZRoomView: UIViewRepresentable {
             }
         }
 
+        private func addManualOpenings(to scene: SCNScene) {
+            scene.rootNode.childNode(withName: "3e-manual-openings", recursively: false)?
+                .removeFromParentNode()
+
+            let root = SCNNode()
+            root.name = "3e-manual-openings"
+            root.isHidden = !parent.layers.openings
+            scene.rootNode.addChildNode(root)
+
+            for surface in parent.project.surfaces where shouldRenderManualSurface(surface) {
+                let fallback: UIColor = surface.kind == .door ? .systemOrange : .systemCyan
+                let color = uiColor(hex: surface.colorHex, fallback: fallback)
+                let frame = openingFrameNode(surface: surface, color: color)
+                root.addChildNode(frame)
+            }
+        }
+
+        private func shouldRenderManualSurface(_ surface: SurfaceSnapshot) -> Bool {
+            if surface.isManuallyAdded == true { return true }
+            if surface.isManuallyAdded == false { return false }
+            return parent.project.walls.contains { wall in
+                let localCenter = simd_mul(
+                    simd_inverse(wall.matrix),
+                    surface.matrix.columns.3
+                )
+                return abs(localCenter.z - 0.01) <= 0.003
+                    && abs(localCenter.x) <= wall.width / 2 + surface.width / 2
+            }
+        }
+
+        private func openingFrameNode(
+            surface: SurfaceSnapshot,
+            color: UIColor
+        ) -> SCNNode {
+            let root = SCNNode()
+            root.name = "3e-opening-\(surface.id.uuidString)"
+            root.simdTransform = surface.matrix
+            let barThickness: CGFloat = 0.045
+            let depth: CGFloat = 0.035
+            let width = CGFloat(surface.width)
+            let height = CGFloat(surface.height)
+
+            func addBar(
+                width barWidth: CGFloat,
+                height barHeight: CGFloat,
+                x: Float,
+                y: Float
+            ) {
+                let geometry = SCNBox(
+                    width: barWidth,
+                    height: barHeight,
+                    length: depth,
+                    chamferRadius: 0.008
+                )
+                let material = SCNMaterial()
+                material.diffuse.contents = color
+                material.emission.contents = color.withAlphaComponent(0.25)
+                geometry.materials = [material]
+                let node = SCNNode(geometry: geometry)
+                node.position = SCNVector3(x, y, 0)
+                root.addChildNode(node)
+            }
+
+            addBar(
+                width: barThickness,
+                height: height,
+                x: -surface.width / 2,
+                y: 0
+            )
+            addBar(
+                width: barThickness,
+                height: height,
+                x: surface.width / 2,
+                y: 0
+            )
+            addBar(
+                width: width,
+                height: barThickness,
+                x: 0,
+                y: surface.height / 2
+            )
+            if surface.kind != .door {
+                addBar(
+                    width: width,
+                    height: barThickness,
+                    x: 0,
+                    y: -surface.height / 2
+                )
+            }
+            return root
+        }
+
         private func applyLayerVisibility(to scene: SCNScene) {
             let showArchitecture = parent.layers.walls || parent.layers.openings
             scene.rootNode.childNode(withName: "Arch_grp", recursively: true)?.isHidden = !showArchitecture
             scene.rootNode.childNode(withName: "Floor_grp", recursively: true)?.isHidden = !parent.layers.floor
             scene.rootNode.childNode(withName: "Object_grp", recursively: true)?.isHidden = !parent.layers.furniture
             scene.rootNode.childNode(withName: "3e-electrical-markers", recursively: false)?.isHidden = !parent.layers.electrical
+            scene.rootNode.childNode(withName: "3e-manual-openings", recursively: false)?.isHidden = !parent.layers.openings
         }
 
         @objc func resetCamera() {
@@ -1539,6 +2296,21 @@ private struct ScanInformationSheet: View {
     private func measurementColor(for point: ElectricalPoint) -> Color {
         abs(point.heightFromFloor - targetHeight(for: point)) <= 0.02 ? .green : .orange
     }
+}
+
+private func uiColor(hex: String?, fallback: UIColor) -> UIColor {
+    guard let hex else { return fallback }
+    let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+    guard cleaned.count == 6,
+          let value = UInt64(cleaned, radix: 16) else {
+        return fallback
+    }
+    return UIColor(
+        red: CGFloat((value >> 16) & 0xFF) / 255,
+        green: CGFloat((value >> 8) & 0xFF) / 255,
+        blue: CGFloat(value & 0xFF) / 255,
+        alpha: 1
+    )
 }
 
 private func planCenter(_ matrix: simd_float4x4) -> SIMD2<Float> {

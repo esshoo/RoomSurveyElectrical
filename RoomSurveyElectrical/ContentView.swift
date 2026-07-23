@@ -1127,6 +1127,8 @@ private struct NewProjectSheet: View {
 
                     SmartPlacementRangeFields(settings: $settings)
                 }
+
+                ElectricalBoxSettingsFields(settings: $settings)
             }
             .navigationTitle("مشروع جديد")
             .navigationBarTitleDisplayMode(.inline)
@@ -1307,6 +1309,8 @@ private struct ElectricalSettingsView: View {
                     SmartPlacementRangeFields(settings: $settings)
                 }
 
+                ElectricalBoxSettingsFields(settings: $settings)
+
                 Section("قواعد التثبيت") {
                     Toggle("منع وضع النقاط داخل فتحات الأبواب والشبابيك", isOn: $settings.avoidOpenings)
                 }
@@ -1390,6 +1394,44 @@ private struct SmartPlacementRangeFields: View {
             Text("نطاقات الاقتراح الذكي")
         } footer: {
             Text("إذا كان موضع العنصر داخل هذه المسافة، سيسألك التطبيق قبل تغيير مكانه.")
+        }
+    }
+}
+
+private struct ElectricalBoxSettingsFields: View {
+    @Binding var settings: ElectricalPlacementSettings
+
+    var body: some View {
+        Section {
+            CentimeterField(
+                title: "علبة 7×7 – العرض",
+                systemImage: "square",
+                meters: $settings.squareBoxWidthMeters
+            )
+            CentimeterField(
+                title: "علبة 7×7 – الارتفاع",
+                systemImage: "arrow.up.and.down",
+                meters: $settings.squareBoxHeightMeters
+            )
+            CentimeterField(
+                title: "علبة 5×10 – العرض",
+                systemImage: "rectangle",
+                meters: $settings.rectangularBoxWidthMeters
+            )
+            CentimeterField(
+                title: "علبة 5×10 – الارتفاع",
+                systemImage: "arrow.up.and.down",
+                meters: $settings.rectangularBoxHeightMeters
+            )
+            CentimeterField(
+                title: "مسافة دمج العناصر",
+                systemImage: "square.on.square",
+                meters: $settings.electricalMergeDistanceMeters
+            )
+        } header: {
+            Text("علب الكهرباء والدمج")
+        } footer: {
+            Text("إذا كانت نقطتان من نفس الفئة أقرب من مسافة الدمج، سيضعهما التطبيق في مجموعة واحدة مع بقائهما بندين في الحصر.")
         }
     }
 }

@@ -2,6 +2,52 @@ import Foundation
 import RoomPlan
 import simd
 
+enum ElementColorOption: String, Codable, CaseIterable, Identifiable {
+    case automatic
+    case orange
+    case cyan
+    case green
+    case red
+    case blue
+    case yellow
+    case white
+    case black
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: "تلقائي"
+        case .orange: "برتقالي"
+        case .cyan: "سماوي"
+        case .green: "أخضر"
+        case .red: "أحمر"
+        case .blue: "أزرق"
+        case .yellow: "أصفر"
+        case .white: "أبيض"
+        case .black: "أسود"
+        }
+    }
+
+    var hexValue: String? {
+        switch self {
+        case .automatic: nil
+        case .orange: "#FF9500"
+        case .cyan: "#32ADE6"
+        case .green: "#34C759"
+        case .red: "#FF3B30"
+        case .blue: "#007AFF"
+        case .yellow: "#FFCC00"
+        case .white: "#FFFFFF"
+        case .black: "#111111"
+        }
+    }
+
+    init(hexValue: String?) {
+        self = Self.allCases.first { $0.hexValue == hexValue } ?? .automatic
+    }
+}
+
 enum ElectricalDeviceType: String, Codable, CaseIterable, Hashable, Identifiable {
     case socket
     case singleSwitch
@@ -81,18 +127,20 @@ enum PlacementStatus: String, Codable, CaseIterable, Hashable, Identifiable {
 
 struct ElectricalPoint: Codable, Identifiable, Equatable {
     let id: UUID
-    let wallID: UUID
-    let type: ElectricalDeviceType
-    let status: PlacementStatus
-    let localX: Float
-    let localY: Float
-    let heightFromFloor: Float
-    let worldPosition: [Float]
+    var wallID: UUID
+    var type: ElectricalDeviceType
+    var status: PlacementStatus
+    var localX: Float
+    var localY: Float
+    var heightFromFloor: Float
+    var worldPosition: [Float]
     let createdAt: Date
-    let standardHeightAtCreation: Float?
-    let standardDoorOffsetAtCreation: Float?
-    let measuredDoorOffset: Float?
-    let wasAutomaticallyAdjusted: Bool?
+    var standardHeightAtCreation: Float?
+    var standardDoorOffsetAtCreation: Float?
+    var measuredDoorOffset: Float?
+    var wasAutomaticallyAdjusted: Bool?
+    var colorHex: String?
+    var groupID: UUID?
 
     init(
         id: UUID = UUID(),
@@ -107,6 +155,8 @@ struct ElectricalPoint: Codable, Identifiable, Equatable {
         standardDoorOffsetAtCreation: Float? = nil,
         measuredDoorOffset: Float? = nil,
         wasAutomaticallyAdjusted: Bool? = nil,
+        colorHex: String? = nil,
+        groupID: UUID? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -121,6 +171,8 @@ struct ElectricalPoint: Codable, Identifiable, Equatable {
         self.standardDoorOffsetAtCreation = standardDoorOffsetAtCreation
         self.measuredDoorOffset = measuredDoorOffset
         self.wasAutomaticallyAdjusted = wasAutomaticallyAdjusted
+        self.colorHex = colorHex
+        self.groupID = groupID
         self.createdAt = createdAt
     }
 }
@@ -151,10 +203,12 @@ struct SurfaceSnapshot: Codable, Identifiable, Equatable {
     }
 
     let id: UUID
-    let kind: Kind
-    let width: Float
-    let height: Float
-    let transform: [Float]
+    var kind: Kind
+    var width: Float
+    var height: Float
+    var transform: [Float]
+    var colorHex: String?
+    var isManuallyAdded: Bool?
 
     init(surface: CapturedRoom.Surface, kind: Kind) {
         id = surface.identifier
@@ -162,6 +216,8 @@ struct SurfaceSnapshot: Codable, Identifiable, Equatable {
         width = surface.dimensions.x
         height = surface.dimensions.y
         transform = surface.transform.columnMajorValues
+        colorHex = nil
+        isManuallyAdded = false
     }
 
     init(
@@ -169,13 +225,17 @@ struct SurfaceSnapshot: Codable, Identifiable, Equatable {
         kind: Kind,
         width: Float,
         height: Float,
-        matrix: simd_float4x4
+        matrix: simd_float4x4,
+        colorHex: String? = nil,
+        isManuallyAdded: Bool? = true
     ) {
         self.id = id
         self.kind = kind
         self.width = width
         self.height = height
         transform = matrix.columnMajorValues
+        self.colorHex = colorHex
+        self.isManuallyAdded = isManuallyAdded
     }
 
     var matrix: simd_float4x4 {
@@ -270,6 +330,121 @@ struct RoomProject: Codable, Identifiable, Equatable {
                 return count == 0 ? nil : BOQLine(type: type, status: status, count: count)
             }
         }
+    }
+}
+
+extension RoomProject {
+    @discardableResult
+    mutating func appendElectricalPointMergingNearby(
+        _ point: ElectricalPoint,
+        mergeDistance: Float
+    ) -> Bool {
+        guard mergeDistance > 0,
+              let wall = walls.first(where: { $0.id == point.wallID }),
+              let candidateIndex = points.indices
+                .filter({
+                    points[$0].wallID == point.wallID
+                        && points[$0].status == point.status
+                        && electricalTypesCanMerge(points[$0].type, point.type)
+                        && abs(points[$0].localX - point.localX) <= mergeDistance
+                })
+                .min(by: {
+                    abs(points[$0].localX - point.localX)
+                        < abs(points[$1].localX - point.localX)
+                }) else {
+            points.append(point)
+            return false
+        }
+
+        var mergedPoint = point
+        let groupID = points[candidateIndex].groupID ?? UUID()
+        let groupedIndices = points.indices.filter {
+            $0 == candidateIndex || points[$0].groupID == groupID
+        }
+
+        if point.status == .existing {
+            for index in groupedIndices {
+                points[index].groupID = groupID
+            }
+            mergedPoint.groupID = groupID
+            points.append(mergedPoint)
+            return true
+        }
+
+        let totalX = groupedIndices.reduce(point.localX) { result, index in
+            result + points[index].localX
+        }
+        let centerX = totalX / Float(groupedIndices.count + 1)
+
+        for index in groupedIndices {
+            points[index].localX = centerX
+            points[index].groupID = groupID
+            let world = simd_mul(
+                wall.matrix,
+                SIMD4(centerX, points[index].localY, 0.035, 1)
+            )
+            points[index].worldPosition = [world.x, world.y, world.z]
+            if points[index].type.usesSwitchRules {
+                points[index].measuredDoorOffset = distanceToNearestDoorEdge(
+                    localX: centerX,
+                    wall: wall
+                )
+            }
+        }
+
+        mergedPoint.localX = centerX
+        mergedPoint.groupID = groupID
+        let mergedWorld = simd_mul(
+            wall.matrix,
+            SIMD4(centerX, mergedPoint.localY, 0.035, 1)
+        )
+        mergedPoint.worldPosition = [mergedWorld.x, mergedWorld.y, mergedWorld.z]
+        if mergedPoint.type.usesSwitchRules {
+            mergedPoint.measuredDoorOffset = distanceToNearestDoorEdge(
+                localX: centerX,
+                wall: wall
+            )
+        }
+        points.append(mergedPoint)
+        return true
+    }
+
+    mutating func normalizeElectricalGroups() {
+        let counts = Dictionary(
+            grouping: points.compactMap(\.groupID),
+            by: { $0 }
+        )
+        for index in points.indices {
+            if let groupID = points[index].groupID,
+               (counts[groupID]?.count ?? 0) < 2 {
+                points[index].groupID = nil
+            }
+        }
+    }
+
+    private func electricalTypesCanMerge(
+        _ first: ElectricalDeviceType,
+        _ second: ElectricalDeviceType
+    ) -> Bool {
+        (first.usesSwitchRules && second.usesSwitchRules)
+            || (first.usesSocketRules && second.usesSocketRules)
+    }
+
+    private func distanceToNearestDoorEdge(
+        localX: Float,
+        wall: WallSnapshot
+    ) -> Float? {
+        let inverseWall = simd_inverse(wall.matrix)
+        return surfaces
+            .filter { $0.kind == .door }
+            .compactMap { surface -> Float? in
+                let localCenter = simd_mul(inverseWall, surface.matrix.columns.3)
+                guard abs(localCenter.z) <= 0.30 else { return nil }
+                let leftEdge = localCenter.x - surface.width / 2
+                let rightEdge = localCenter.x + surface.width / 2
+                return min(abs(localX - leftEdge), abs(localX - rightEdge))
+            }
+            .min()
     }
 }
 

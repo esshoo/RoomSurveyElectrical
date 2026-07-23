@@ -93,7 +93,8 @@ struct ElectricalARView: UIViewRepresentable {
 
                 let sphere = SCNSphere(radius: 0.045)
                 let material = SCNMaterial()
-                let color: UIColor = point.status == .existing ? .systemGreen : .systemOrange
+                let fallback: UIColor = point.status == .existing ? .systemGreen : .systemOrange
+                let color = electricalUIColor(hex: point.colorHex, fallback: fallback)
                 material.diffuse.contents = color
                 material.emission.contents = color.withAlphaComponent(0.35)
                 sphere.materials = [material]
@@ -207,4 +208,19 @@ struct ElectricalARView: UIViewRepresentable {
             ))
         }
     }
+}
+
+private func electricalUIColor(hex: String?, fallback: UIColor) -> UIColor {
+    guard let hex else { return fallback }
+    let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+    guard cleaned.count == 6,
+          let value = UInt64(cleaned, radix: 16) else {
+        return fallback
+    }
+    return UIColor(
+        red: CGFloat((value >> 16) & 0xFF) / 255,
+        green: CGFloat((value >> 8) & 0xFF) / 255,
+        blue: CGFloat(value & 0xFF) / 255,
+        alpha: 1
+    )
 }
