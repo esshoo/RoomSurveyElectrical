@@ -388,23 +388,26 @@ struct RoomViewerView: View {
     }
 }
 
-private enum Plan2DEditTool: String, Identifiable {
+private enum Plan2DEditTool: Identifiable, Equatable {
     case door
     case window
-    case singleSwitch
-    case socket
-    case wallLight
+    case electrical(ElectricalDeviceType)
     case ceilingLightManual
 
-    var id: String { rawValue }
+    var id: String {
+        switch self {
+        case .door: "door"
+        case .window: "window"
+        case .electrical(let type): "electrical-\(type.rawValue)"
+        case .ceilingLightManual: "ceilingLightManual"
+        }
+    }
 
     var title: String {
         switch self {
         case .door: "باب"
         case .window: "شباك"
-        case .singleSwitch: "مفتاح مفرد"
-        case .socket: "فيش كهرباء"
-        case .wallLight: "إضاءة جدارية"
+        case .electrical(let type): type.title
         case .ceilingLightManual: "إضاءة سقف يدوية"
         }
     }
@@ -413,18 +416,14 @@ private enum Plan2DEditTool: String, Identifiable {
         switch self {
         case .door: "door.left.hand.open"
         case .window: "rectangle.split.3x1"
-        case .singleSwitch: ElectricalDeviceType.singleSwitch.systemImage
-        case .socket: ElectricalDeviceType.socket.systemImage
-        case .wallLight: ElectricalDeviceType.wallLight.systemImage
+        case .electrical(let type): type.systemImage
         case .ceilingLightManual: "light.recessed"
         }
     }
 
     var electricalType: ElectricalDeviceType? {
         switch self {
-        case .singleSwitch: .singleSwitch
-        case .socket: .socket
-        case .wallLight: .wallLight
+        case .electrical(let type): type
         case .door, .window, .ceilingLightManual: nil
         }
     }
@@ -671,10 +670,46 @@ private struct Plan2DView: View {
                 editToolButton(.window)
             }
 
-            Section("نقاط كهربائية مقترحة") {
-                editToolButton(.singleSwitch)
-                editToolButton(.socket)
-                editToolButton(.wallLight)
+            Section("الكهرباء والتكييف") {
+                electricalToolMenu(
+                    "المفاتيح",
+                    systemImage: "lightswitch.on.fill",
+                    types: [
+                        .singleSwitch,
+                        .doubleSwitch,
+                        .tripleSwitch,
+                        .airConditionerSwitch,
+                        .heaterSwitch,
+                        .shutterSwitch
+                    ]
+                )
+                electricalToolMenu(
+                    "الأفياش",
+                    systemImage: "powerplug.fill",
+                    types: [.socket, .heaterSocket]
+                )
+                electricalToolMenu(
+                    "التيار الخفيف",
+                    systemImage: "network",
+                    types: [
+                        .dataOutlet,
+                        .mountedDataOutlet,
+                        .telephoneOutlet,
+                        .mountedTelephoneOutlet,
+                        .televisionOutlet,
+                        .mountedTelevisionOutlet
+                    ]
+                )
+                electricalToolMenu(
+                    "الإضاءة الجدارية",
+                    systemImage: "light.beacon.max.fill",
+                    types: [.wallLight]
+                )
+                electricalToolMenu(
+                    "التكييف",
+                    systemImage: "snowflake",
+                    types: [.splitAirConditioner, .windowAirConditioner]
+                )
             }
 
             Section("إضاءة السقف") {
@@ -700,6 +735,20 @@ private struct Plan2DView: View {
             feedbackText = nil
         } label: {
             Label(tool.title, systemImage: tool.systemImage)
+        }
+    }
+
+    private func electricalToolMenu(
+        _ title: String,
+        systemImage: String,
+        types: [ElectricalDeviceType]
+    ) -> some View {
+        Menu {
+            ForEach(types) { type in
+                editToolButton(.electrical(type))
+            }
+        } label: {
+            Label(title, systemImage: systemImage)
         }
     }
 
@@ -1984,7 +2033,10 @@ private struct Plan2DView: View {
     ) -> Bool {
         let settings = electricalSettings
         let wall = placement.wall
-        let height = type.recommendedHeight(using: settings)
+        let height = type.recommendedHeight(
+            using: settings,
+            wallHeight: wall.height
+        )
         let margin: Float = 0.04
         let localX = min(
             max(requestedLocalX, -wall.width / 2 + margin),

@@ -54,10 +54,18 @@ enum ElectricalDeviceType: String, Codable, CaseIterable, Hashable, Identifiable
     case doubleSwitch
     case tripleSwitch
     case airConditionerSwitch
+    case heaterSwitch
+    case shutterSwitch
     case heaterSocket
     case wallLight
     case dataOutlet
+    case mountedDataOutlet
+    case telephoneOutlet
+    case mountedTelephoneOutlet
     case televisionOutlet
+    case mountedTelevisionOutlet
+    case splitAirConditioner
+    case windowAirConditioner
 
     var id: String { rawValue }
 
@@ -68,10 +76,18 @@ enum ElectricalDeviceType: String, Codable, CaseIterable, Hashable, Identifiable
         case .doubleSwitch: "مفتاح ثنائي"
         case .tripleSwitch: "مفتاح ثلاثي"
         case .airConditionerSwitch: "مفتاح تكييف"
+        case .heaterSwitch: "مفتاح سخان"
+        case .shutterSwitch: "مفتاح شتر"
         case .heaterSocket: "فيش سخان"
         case .wallLight: "إضاءة جدارية"
-        case .dataOutlet: "نقطة بيانات"
-        case .televisionOutlet: "نقطة تلفزيون"
+        case .dataOutlet: "فيش إنترنت – أرضي/طاولة"
+        case .mountedDataOutlet: "فيش إنترنت – علوي معلق"
+        case .telephoneOutlet: "فيش تليفون – أرضي/طاولة"
+        case .mountedTelephoneOutlet: "فيش تليفون – علوي معلق"
+        case .televisionOutlet: "فيش دش/تلفزيون – أرضي/طاولة"
+        case .mountedTelevisionOutlet: "فيش دش/تلفزيون – علوي معلق"
+        case .splitAirConditioner: "مكيف سبليت"
+        case .windowAirConditioner: "مكيف شباك"
         }
     }
 
@@ -82,16 +98,29 @@ enum ElectricalDeviceType: String, Codable, CaseIterable, Hashable, Identifiable
         case .doubleSwitch: "switch.2"
         case .tripleSwitch: "slider.horizontal.3"
         case .airConditionerSwitch: "snowflake"
+        case .heaterSwitch: "water.waves"
+        case .shutterSwitch: "rectangle.split.1x2"
         case .heaterSocket: "flame.fill"
         case .wallLight: "light.beacon.max.fill"
         case .dataOutlet: "network"
+        case .mountedDataOutlet: "network"
+        case .telephoneOutlet: "phone.fill"
+        case .mountedTelephoneOutlet: "phone.fill"
         case .televisionOutlet: "tv.fill"
+        case .mountedTelevisionOutlet: "tv.fill"
+        case .splitAirConditioner: "air.conditioner.horizontal.fill"
+        case .windowAirConditioner: "air.conditioner.vertical.fill"
         }
     }
 
     var usesSwitchRules: Bool {
         switch self {
-        case .singleSwitch, .doubleSwitch, .tripleSwitch, .airConditionerSwitch:
+        case .singleSwitch,
+             .doubleSwitch,
+             .tripleSwitch,
+             .airConditionerSwitch,
+             .heaterSwitch,
+             .shutterSwitch:
             true
         default:
             false
@@ -99,19 +128,75 @@ enum ElectricalDeviceType: String, Codable, CaseIterable, Hashable, Identifiable
     }
 
     var usesSocketRules: Bool {
-        self == .socket || self == .heaterSocket
+        switch self {
+        case .socket,
+             .heaterSocket,
+             .dataOutlet,
+             .mountedDataOutlet,
+             .telephoneOutlet,
+             .mountedTelephoneOutlet,
+             .televisionOutlet,
+             .mountedTelevisionOutlet:
+            true
+        default:
+            false
+        }
     }
 
     var usesDoorSuggestion: Bool {
         usesSwitchRules || usesSocketRules
     }
 
-    func recommendedHeight(using settings: ElectricalPlacementSettings) -> Float {
+    var isLowCurrentOutlet: Bool {
+        switch self {
+        case .dataOutlet,
+             .mountedDataOutlet,
+             .telephoneOutlet,
+             .mountedTelephoneOutlet,
+             .televisionOutlet,
+             .mountedTelevisionOutlet:
+            true
+        default:
+            false
+        }
+    }
+
+    var usesHighLowCurrentLevel: Bool {
+        switch self {
+        case .mountedDataOutlet,
+             .mountedTelephoneOutlet,
+             .mountedTelevisionOutlet:
+            true
+        default:
+            false
+        }
+    }
+
+    func recommendedHeight(
+        using settings: ElectricalPlacementSettings,
+        wallHeight: Float? = nil
+    ) -> Float {
         if usesSwitchRules {
             return Float(settings.switchHeightMeters)
         }
         if self == .wallLight {
             return Float(settings.wallLightHeightMeters)
+        }
+        if isLowCurrentOutlet {
+            return usesHighLowCurrentLevel
+                ? Float(settings.lowCurrentHighHeightMeters)
+                : Float(settings.lowCurrentLowHeightMeters)
+        }
+        if self == .splitAirConditioner {
+            let resolvedWallHeight = wallHeight ?? 2.70
+            return max(
+                0,
+                resolvedWallHeight
+                    - Float(settings.splitAirConditionerCeilingOffsetMeters)
+            )
+        }
+        if self == .windowAirConditioner {
+            return Float(settings.windowAirConditionerHeightMeters)
         }
         return Float(settings.socketHeightMeters)
     }
@@ -645,7 +730,7 @@ struct RoomTakeoffSummary: Identifiable, Equatable {
             }
         }
 
-        openings = project.surfaces.map {
+        let openingLines = project.surfaces.map {
             OpeningTakeoffLine(
                 id: $0.id,
                 kind: $0.kind,
@@ -654,9 +739,10 @@ struct RoomTakeoffSummary: Identifiable, Equatable {
                 wallID: wallAssignments[$0.id]
             )
         }
+        openings = openingLines
 
         walls = project.walls.map { wall in
-            let wallOpenings = openings.filter { $0.wallID == wall.id }
+            let wallOpenings = openingLines.filter { $0.wallID == wall.id }
             return WallTakeoffLine(
                 id: wall.id,
                 width: wall.width,

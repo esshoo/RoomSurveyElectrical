@@ -306,7 +306,10 @@ struct ElectricalEditorView: View {
             return
         }
 
-        let standardHeight = type.recommendedHeight(using: settings)
+        let standardHeight = type.recommendedHeight(
+            using: settings,
+            wallHeight: wall.height
+        )
         let appliesRules = status == .proposed
         var localX = tap.localX
         var localY = tap.localY
@@ -613,7 +616,14 @@ private struct DevicePickerSheet: View {
 
                 deviceSection(
                     "المفاتيح",
-                    types: [.singleSwitch, .doubleSwitch, .tripleSwitch, .airConditionerSwitch]
+                    types: [
+                        .singleSwitch,
+                        .doubleSwitch,
+                        .tripleSwitch,
+                        .airConditionerSwitch,
+                        .heaterSwitch,
+                        .shutterSwitch
+                    ]
                 )
                 deviceSection(
                     "الأفياش",
@@ -625,7 +635,18 @@ private struct DevicePickerSheet: View {
                 )
                 deviceSection(
                     "التيار الخفيف",
-                    types: [.dataOutlet, .televisionOutlet]
+                    types: [
+                        .dataOutlet,
+                        .mountedDataOutlet,
+                        .telephoneOutlet,
+                        .mountedTelephoneOutlet,
+                        .televisionOutlet,
+                        .mountedTelevisionOutlet
+                    ]
+                )
+                deviceSection(
+                    "التكييف",
+                    types: [.splitAirConditioner, .windowAirConditioner]
                 )
             }
             .navigationTitle("إضافة نقطة كهرباء")
@@ -664,6 +685,9 @@ private struct DevicePickerSheet: View {
 
     private func typeDetail(_ type: ElectricalDeviceType) -> String {
         guard appliesRules else { return "فعلي" }
+        if type == .splitAirConditioner {
+            return "أسفل السقف \(Int(settings.splitAirConditionerCeilingOffsetMeters * 100)) سم"
+        }
         return "\(Int(type.recommendedHeight(using: settings) * 100)) سم"
     }
 

@@ -100,6 +100,10 @@ struct ElectricalPlacementSettings: Codable, Equatable {
     var rectangularBoxWidthMetersValue: Double?
     var rectangularBoxHeightMetersValue: Double?
     var electricalMergeDistanceMetersValue: Double?
+    var lowCurrentLowHeightMetersValue: Double?
+    var lowCurrentHighHeightMetersValue: Double?
+    var splitAirConditionerCeilingOffsetMetersValue: Double?
+    var windowAirConditionerHeightMetersValue: Double?
 
     var doorSuggestionMinimumMeters: Double {
         get { doorSuggestionMinimumMetersValue ?? 0.20 }
@@ -146,6 +150,26 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         set { electricalMergeDistanceMetersValue = max(0, newValue) }
     }
 
+    var lowCurrentLowHeightMeters: Double {
+        get { lowCurrentLowHeightMetersValue ?? socketHeightMeters }
+        set { lowCurrentLowHeightMetersValue = max(0, newValue) }
+    }
+
+    var lowCurrentHighHeightMeters: Double {
+        get { lowCurrentHighHeightMetersValue ?? switchHeightMeters }
+        set { lowCurrentHighHeightMetersValue = max(0, newValue) }
+    }
+
+    var splitAirConditionerCeilingOffsetMeters: Double {
+        get { splitAirConditionerCeilingOffsetMetersValue ?? 0.30 }
+        set { splitAirConditionerCeilingOffsetMetersValue = max(0, newValue) }
+    }
+
+    var windowAirConditionerHeightMeters: Double {
+        get { windowAirConditionerHeightMetersValue ?? 1.60 }
+        set { windowAirConditionerHeightMetersValue = max(0, newValue) }
+    }
+
     static let standard = ElectricalPlacementSettings(
         switchHeightMeters: 1.20,
         socketHeightMeters: 0.50,
@@ -161,7 +185,11 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         squareBoxHeightMetersValue: 0.07,
         rectangularBoxWidthMetersValue: 0.05,
         rectangularBoxHeightMetersValue: 0.10,
-        electricalMergeDistanceMetersValue: 0.20
+        electricalMergeDistanceMetersValue: 0.20,
+        lowCurrentLowHeightMetersValue: 0.50,
+        lowCurrentHighHeightMetersValue: 1.20,
+        splitAirConditionerCeilingOffsetMetersValue: 0.30,
+        windowAirConditionerHeightMetersValue: 1.60
     )
 }
 

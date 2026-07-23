@@ -31,6 +31,12 @@ struct ContentView: View {
                                 Text("المسح والحصر الكهربائي للمشروع")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
+                                Label(
+                                    "الإصدار 1.1 • مركز الحصر",
+                                    systemImage: "checkmark.seal.fill"
+                                )
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.blue)
                             }
                         }
 
@@ -1616,6 +1622,9 @@ private struct NewProjectSheet: View {
                     }
 
                     SmartPlacementRangeFields(settings: $settings)
+                    LowCurrentAndAirConditioningSettingsFields(
+                        settings: $settings
+                    )
                 }
 
                 ElectricalBoxSettingsFields(settings: $settings)
@@ -1735,9 +1744,40 @@ private struct NewScanSheet: View {
     }
 }
 
+private enum SettingsCategory: String, CaseIterable, Identifiable {
+    case general
+    case electrical
+    case furniture
+    case plumbing
+    case finishes
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: "عام"
+        case .electrical: "الكهرباء"
+        case .furniture: "الفرش"
+        case .plumbing: "السباكة"
+        case .finishes: "الدهانات"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general: "gearshape.fill"
+        case .electrical: "bolt.fill"
+        case .furniture: "chair.lounge.fill"
+        case .plumbing: "drop.fill"
+        case .finishes: "paintbrush.fill"
+        }
+    }
+}
+
 private struct ElectricalSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var settings: ElectricalPlacementSettings
+    @State private var selectedCategory: SettingsCategory = .general
 
     let title: String
     let onSave: (ElectricalPlacementSettings) -> Void
@@ -1754,18 +1794,90 @@ private struct ElectricalSettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("نمط العمل") {
-                    Picker("النمط الافتراضي", selection: $settings.designMode) {
-                        ForEach(ElectricalDesignMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    Text(settings.designMode.subtitle)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+            VStack(spacing: 0) {
+                settingsTabs
 
+                Form {
+                    selectedSettingsContent
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("حفظ") {
+                        onSave(settings)
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+
+    private var settingsTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(SettingsCategory.allCases) { category in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            selectedCategory = category
+                        }
+                    } label: {
+                        Label(category.title, systemImage: category.systemImage)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .frame(height: 38)
+                            .foregroundStyle(
+                                selectedCategory == category
+                                    ? Color.white
+                                    : Color.primary
+                            )
+                            .background(
+                                selectedCategory == category
+                                    ? Color.accentColor
+                                    : Color(uiColor: .secondarySystemGroupedBackground),
+                                in: Capsule()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    @ViewBuilder
+    private var selectedSettingsContent: some View {
+        switch selectedCategory {
+        case .general:
+            Section("نمط العمل") {
+                Picker("النمط الافتراضي", selection: $settings.designMode) {
+                    ForEach(ElectricalDesignMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                Text(settings.designMode.subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("الوحدات") {
+                LabeledContent("الأبعاد المعروضة", value: "سنتيمتر")
+                LabeledContent("الحصر والمساحات", value: "متر / متر مربع")
+            }
+
+            Section("أقسام الإعدادات") {
+                Label("اختر الكهرباء لضبط الارتفاعات وقواعد التثبيت.", systemImage: "bolt.fill")
+                Label("تبويبات الفرش والسباكة والدهانات جاهزة للتوسعة القادمة.", systemImage: "square.grid.2x2.fill")
+            }
+
+            case .electrical:
                 if settings.designMode == .existing {
                     AsBuiltPlacementNotice()
                 } else {
@@ -1797,6 +1909,9 @@ private struct ElectricalSettingsView: View {
                     }
 
                     SmartPlacementRangeFields(settings: $settings)
+                    LowCurrentAndAirConditioningSettingsFields(
+                        settings: $settings
+                    )
                 }
 
                 ElectricalBoxSettingsFields(settings: $settings)
@@ -1810,22 +1925,28 @@ private struct ElectricalSettingsView: View {
                         settings = .standard
                     }
                 }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("إلغاء") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("حفظ") {
-                        onSave(settings)
-                        dismiss()
-                    }
-                }
-            }
+
+            case .furniture:
+                FutureSettingsSection(
+                    title: "إعدادات الفرش",
+                    systemImage: "chair.lounge.fill",
+                    description: "سيُضاف هنا تصنيف الفرش، المقاسات الافتراضية، والإظهار داخل 2D و3D."
+                )
+
+            case .plumbing:
+                FutureSettingsSection(
+                    title: "إعدادات السباكة",
+                    systemImage: "drop.fill",
+                    description: "مجهز لإضافة نقاط المياه والصرف والأجهزة الصحية والارتفاعات."
+                )
+
+            case .finishes:
+                FutureSettingsSection(
+                    title: "إعدادات الدهانات والتشطيبات",
+                    systemImage: "paintbrush.fill",
+                    description: "مجهز لإضافة أنواع الدهانات، المحارة، طبقات التشطيب ونسب الهالك."
+                )
         }
-        .environment(\.layoutDirection, .rightToLeft)
     }
 }
 
@@ -1851,6 +1972,55 @@ private struct CentimeterField: View {
             .frame(width: 72)
             Text("سم")
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct LowCurrentAndAirConditioningSettingsFields: View {
+    @Binding var settings: ElectricalPlacementSettings
+
+    var body: some View {
+        Section {
+            CentimeterField(
+                title: "تيار خفيف – أرضي/طاولة",
+                systemImage: "network",
+                meters: $settings.lowCurrentLowHeightMeters
+            )
+            CentimeterField(
+                title: "تيار خفيف – علوي معلق",
+                systemImage: "arrow.up.to.line",
+                meters: $settings.lowCurrentHighHeightMeters
+            )
+            CentimeterField(
+                title: "السبليت أسفل السقف",
+                systemImage: "air.conditioner.horizontal.fill",
+                meters: $settings.splitAirConditionerCeilingOffsetMeters
+            )
+            CentimeterField(
+                title: "ارتفاع مكيف الشباك",
+                systemImage: "air.conditioner.vertical.fill",
+                meters: $settings.windowAirConditionerHeightMeters
+            )
+        } header: {
+            Text("التيار الخفيف والتكييف")
+        } footer: {
+            Text("السبليت يُقاس من السقف إلى مركز رمزه، وبقية القيم من الأرضية النهائية.")
+        }
+    }
+}
+
+private struct FutureSettingsSection: View {
+    let title: String
+    let systemImage: String
+    let description: String
+
+    var body: some View {
+        Section(title) {
+            ContentUnavailableView(
+                title,
+                systemImage: systemImage,
+                description: Text(description)
+            )
         }
     }
 }
