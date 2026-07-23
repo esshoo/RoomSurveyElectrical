@@ -86,10 +86,16 @@ enum LayeredPlanPDFBuilder {
         }
 
         let layerObjectStart = 3
-        let layerObjectIDs = Array(
-            layerObjectStart..<(layerObjectStart + layers.count)
-        )
-        let firstPageObjectID = layerObjectStart + layers.count
+        let layerObjectIDsByPage = rooms.indices.map { pageIndex in
+            layers.indices.map { layerIndex in
+                layerObjectStart
+                    + pageIndex * layers.count
+                    + layerIndex
+            }
+        }
+        let allLayerObjectIDs = layerObjectIDsByPage.flatMap { $0 }
+        let firstPageObjectID = layerObjectStart
+            + allLayerObjectIDs.count
         let pageObjectIDs = rooms.indices.map {
             firstPageObjectID + $0 * 2
         }
@@ -101,8 +107,16 @@ enum LayeredPlanPDFBuilder {
             count: objectCount + 1
         )
 
-        let layerReferences = layerObjectIDs.map {
+        let layerReferences = allLayerObjectIDs.map {
             "\($0) 0 R"
+        }.joined(separator: " ")
+        let layerOrder = layerObjectIDsByPage.enumerated().map {
+            pageIndex,
+            objectIDs in
+            let references = objectIDs.map {
+                "\($0) 0 R"
+            }.joined(separator: " ")
+            return "[(Page \(pageIndex + 1)) \(references)]"
         }.joined(separator: " ")
         objects[1] = Data(
             """
@@ -115,7 +129,22 @@ enum LayeredPlanPDFBuilder {
                        /Name (3ERoomElectrical CAD Layers)
                        /BaseState /ON
                        /ON [\(layerReferences)]
-                       /Order [\(layerReferences)]
+                       /OFF []
+                       /Order [\(layerOrder)]
+                       /AS [
+                           << /Event /View
+                              /Category [/View]
+                              /OCGs [\(layerReferences)]
+                           >>
+                           << /Event /Print
+                              /Category [/Print]
+                              /OCGs [\(layerReferences)]
+                           >>
+                           << /Event /Export
+                              /Category [/Export]
+                              /OCGs [\(layerReferences)]
+                           >>
+                       ]
                    >>
                >>
             >>
@@ -133,24 +162,35 @@ enum LayeredPlanPDFBuilder {
             """.utf8
         )
 
-        for (index, layer) in layers.enumerated() {
-            objects[layerObjectIDs[index]] = Data(
-                """
-                << /Type /OCG
-                   /Name (\(pdfEscaped(layer.name)))
-                   /Intent [/View /Design]
-                >>
-                """.utf8
-            )
+        for pageIndex in rooms.indices {
+            for (layerIndex, layer) in layers.enumerated() {
+                let objectID = layerObjectIDsByPage[
+                    pageIndex
+                ][layerIndex]
+                objects[objectID] = Data(
+                    """
+                    << /Type /OCG
+                       /Name (Page \(pageIndex + 1) - \(pdfEscaped(layer.name)))
+                       /Intent /View
+                       /Usage <<
+                           /View << /ViewState /ON >>
+                           /Print << /PrintState /ON >>
+                           /Export << /ExportState /ON >>
+                       >>
+                    >>
+                    """.utf8
+                )
+            }
         }
-
-        let propertyEntries = layerObjectIDs.enumerated().map {
-            "/L\($0.offset + 1) \($0.element) 0 R"
-        }.joined(separator: " ")
 
         for (index, room) in rooms.enumerated() {
             let pageID = pageObjectIDs[index]
             let contentID = contentObjectIDs[index]
+            let propertyEntries = layerObjectIDsByPage[
+                index
+            ].enumerated().map {
+                "/L\($0.offset + 1) \($0.element) 0 R"
+            }.joined(separator: " ")
             let content = LayeredPlanPage(
                 title: rooms.count == 1 ? title : room.scan.name,
                 record: room,
@@ -692,10 +732,16 @@ private struct PDFPlanProjection {
         pageHeight: CGFloat
     ) {
         let points = ExportGeometry.allPlanPoints(in: project)
-        guard let first = points.first else { return nil }
-        let cadPoints = points.map {
-            (x: Double($0.x), y: Double(-$0.y))
+        let cadPoints = points.compactMap {
+            point -> (x: Double, y: Double)? in
+            let x = Double(point.x)
+            let y = Double(-point.y)
+            guard x.isFinite, y.isFinite else {
+                return nil
+            }
+            return (x: x, y: y)
         }
+        guard !cadPoints.isEmpty else { return nil }
         let rawMinimumX = cadPoints.reduce(
             cadPoints[0].x
         ) { min($0, $1.x) }
@@ -801,6 +847,14 @@ private struct PDFLayerCommands {
         color: RGBColor,
         width: CGFloat
     ) {
+        guard first.x.isFinite,
+              first.y.isFinite,
+              second.x.isFinite,
+              second.y.isFinite,
+              width.isFinite,
+              width >= 0 else {
+            return
+        }
         append(
             layer: layer,
             """
@@ -819,7 +873,15 @@ private struct PDFLayerCommands {
         fill: RGBColor?,
         width: CGFloat
     ) {
-        guard let first = points.first else { return }
+        guard points.count >= 2,
+              points.allSatisfy({
+                  $0.x.isFinite && $0.y.isFinite
+              }),
+              width.isFinite,
+              width >= 0,
+              let first = points.first else {
+            return
+        }
         var value = """
         q \(stroke.strokeCommand) \(fill?.fillCommand ?? "") \(pdfNumber(width)) w 1 J 1 j
         \(pdfNumber(first.x)) \(pdfNumber(first.y)) m
@@ -840,6 +902,14 @@ private struct PDFLayerCommands {
         fill: RGBColor?,
         width: CGFloat
     ) {
+        guard center.x.isFinite,
+              center.y.isFinite,
+              radius.isFinite,
+              radius > 0,
+              width.isFinite,
+              width >= 0 else {
+            return
+        }
         let kappa = radius * 0.5522847498
         let x = center.x
         let y = center.y
@@ -865,6 +935,13 @@ private struct PDFLayerCommands {
         rotation: CGFloat = 0,
         alignment: PDFTextAlignment = .center
     ) {
+        guard center.x.isFinite,
+              center.y.isFinite,
+              size.isFinite,
+              size > 0,
+              rotation.isFinite else {
+            return
+        }
         guard let path = VectorTextPath.make(
             value,
             size: size,
@@ -890,6 +967,13 @@ private struct PDFLayerCommands {
         projection: PDFPlanProjection,
         color: RGBColor
     ) {
+        guard first.x.isFinite,
+              first.y.isFinite,
+              second.x.isFinite,
+              second.y.isFinite,
+              offset.isFinite else {
+            return
+        }
         let dx = second.x - first.x
         let dy = second.y - first.y
         let length = max(hypot(dx, dy), 0.0001)
@@ -1161,7 +1245,10 @@ private enum PDFPathEncoder {
 }
 
 private func pdfNumber<T: BinaryFloatingPoint>(_ value: T) -> String {
-    String(format: "%.4f", Double(value))
+    guard value.isFinite else {
+        return "0"
+    }
+    return String(format: "%.4f", Double(value))
 }
 
 private func pdfEscaped(_ value: String) -> String {
