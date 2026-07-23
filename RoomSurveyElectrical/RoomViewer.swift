@@ -446,12 +446,10 @@ private struct Plan2DView: View {
                 Color(uiColor: .secondarySystemGroupedBackground)
 
                 Canvas { context, size in
+                    applyViewTransform(to: &context, size: size)
                     drawPlan(context: &context, size: size)
                 }
                 .contentShape(Rectangle())
-                .scaleEffect(zoom)
-                .rotationEffect(rotation)
-                .offset(offset)
                 .gesture(dragGesture)
                 .highPriorityGesture(elementMoveGesture(viewSize: geometry.size))
                 .simultaneousGesture(magnificationGesture)
@@ -1024,11 +1022,31 @@ private struct Plan2DView: View {
     private var rotationGesture: some Gesture {
         RotationGesture()
             .onChanged { value in
-                rotation = committedRotation + value
+                rotation = committedRotation - value
             }
             .onEnded { _ in
                 committedRotation = rotation
             }
+    }
+
+    private func applyViewTransform(
+        to context: inout GraphicsContext,
+        size: CGSize
+    ) {
+        context.concatenate(viewTransform(for: size))
+    }
+
+    private func viewTransform(for size: CGSize) -> CGAffineTransform {
+        let centerX = size.width / 2
+        let centerY = size.height / 2
+
+        return CGAffineTransform(
+            translationX: centerX + offset.width,
+            y: centerY + offset.height
+        )
+        .rotated(by: CGFloat(rotation.radians))
+        .scaledBy(x: zoom, y: zoom)
+        .translatedBy(x: -centerX, y: -centerY)
     }
 
     private func resetView() {
@@ -1224,15 +1242,7 @@ private struct Plan2DView: View {
     }
 
     private func transformedCanvasPoint(_ point: CGPoint, size: CGSize) -> CGPoint {
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let scaledX = (point.x - center.x) * zoom
-        let scaledY = (point.y - center.y) * zoom
-        let cosine = CGFloat(cos(rotation.radians))
-        let sine = CGFloat(sin(rotation.radians))
-        return CGPoint(
-            x: center.x + scaledX * cosine - scaledY * sine + offset.width,
-            y: center.y + scaledX * sine + scaledY * cosine + offset.height
-        )
+        point.applying(viewTransform(for: size))
     }
 
     private func distanceFromPoint(
