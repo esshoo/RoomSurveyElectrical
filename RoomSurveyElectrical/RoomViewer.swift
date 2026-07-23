@@ -603,13 +603,13 @@ private struct Plan2DView: View {
     private var smartPromptMessage: String {
         switch smartPrompt {
         case .nearDoor(let distance):
-            "المسافة الحالية عن حافة الباب \(centimeters(distance)) سم. هل تريد الاحتفاظ بهذا المكان؟"
+            return "المسافة الحالية عن حافة الباب \(centimeters(distance)) سم. هل تريد الاحتفاظ بهذا المكان؟"
         case .alignSocket(let switchPointID, let distance):
             let switchName = project.points.first(where: { $0.id == switchPointID })?.type.title
                 ?? "المفتاح"
             return "المسافة الحالية من \(switchName) هي \(centimeters(distance)) سم. هل تريد محاذاة الفيش أسفله؟"
         case nil:
-            ""
+            return ""
         }
     }
 
