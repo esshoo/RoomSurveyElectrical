@@ -173,8 +173,8 @@ struct ExportCenterView: View {
 
             Section("مخططات 2D PDF") {
                 exportButton(
-                    "كل المخططات - كامل الطبقات",
-                    subtitle: "صفحة مستقلة لكل مسح داخل ملف PDF واحد",
+                    "PDF مطابق لمخطط DXF",
+                    subtitle: "صفحة لكل مسح مع طبقات حقيقية قابلة للإظهار والإخفاء",
                     systemImage: "square.3.layers.3d.top.filled",
                     disabled: planRooms.isEmpty
                 ) {
@@ -188,8 +188,8 @@ struct ExportCenterView: View {
                     exportButton(
                         room.scan.name,
                         subtitle: room.location.isEmpty
-                            ? "مخطط كامل الطبقات"
-                            : "\(room.location) • كامل الطبقات",
+                            ? "PDF متجه بطبقات CAD حقيقية"
+                            : "\(room.location) • طبقات CAD حقيقية",
                         systemImage: "doc.text.image"
                     ) {
                         try ProjectExportService.makePlanPDF(
@@ -311,6 +311,10 @@ struct ExportCenterView: View {
                 Label(
                     "DXF بالمتر وطبقات CAD مستقلة",
                     systemImage: "ruler.fill"
+                )
+                Label(
+                    "PDF مطابق لـDXF ويدعم إظهار وإخفاء الطبقات",
+                    systemImage: "square.3.layers.3d"
                 )
                 Label(
                     "PNG عالي الدقة وGLB ثلاثي الأبعاد",
@@ -445,16 +449,15 @@ enum ProjectExportService {
         rooms: [ExportRoomRecord]
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
-        let url = temporaryURL(
-            name: "\(sanitized(title))-2D-full-layers",
+        let data = try LayeredPlanPDFBuilder.build(
+            title: title,
+            rooms: rooms
+        )
+        return try writeTemporaryFile(
+            data,
+            name: "\(sanitized(title))-2D-layered",
             extension: "pdf"
         )
-        try PlanPDFRenderer.render(
-            title: title,
-            rooms: rooms,
-            to: url
-        )
-        return url
     }
 
     static func writeTemporaryFile(

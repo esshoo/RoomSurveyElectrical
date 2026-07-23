@@ -269,8 +269,8 @@ struct RoomViewerView: View {
                     exportCurrentPlanPDF()
                 } label: {
                     Label(
-                        "مخطط 2D PDF – كامل الطبقات",
-                        systemImage: "doc.text.image"
+                        "مخطط 2D PDF – طبقات CAD",
+                        systemImage: "square.3.layers.3d"
                     )
                 }
 
