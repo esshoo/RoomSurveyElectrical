@@ -200,7 +200,106 @@ struct ExportCenterView: View {
                 }
             }
 
-            Section("محتوى مخطط 2D") {
+            Section("DXF – مخطط CAD متجه") {
+                exportButton(
+                    planRooms.count == 1
+                        ? "تصدير المخطط DXF"
+                        : "تصدير كل المخططات DXF",
+                    subtitle: planRooms.count == 1
+                        ? "طبقات CAD مستقلة ووحدة الرسم بالمتر"
+                        : "ملف ZIP يحتوي DXF مستقل لكل مسح",
+                    systemImage: "ruler.fill",
+                    disabled: planRooms.isEmpty
+                ) {
+                    try ProjectExportService.makeDXFPackage(
+                        title: title,
+                        rooms: planRooms
+                    )
+                }
+
+                if planRooms.count > 1 {
+                    ForEach(planRooms) { room in
+                        exportButton(
+                            room.scan.name,
+                            subtitle: "DXF منفرد • طبقات كاملة",
+                            systemImage: "doc.badge.gearshape"
+                        ) {
+                            try ProjectExportService.makeDXF(
+                                title: room.scan.name,
+                                room: room
+                            )
+                        }
+                    }
+                }
+            }
+
+            Section("PNG – صورة المخطط") {
+                exportButton(
+                    planRooms.count == 1
+                        ? "تصدير المخطط PNG"
+                        : "تصدير كل المخططات PNG",
+                    subtitle: planRooms.count == 1
+                        ? "صورة عالية الدقة بكامل الطبقات"
+                        : "ملف ZIP يحتوي صورة لكل مسح",
+                    systemImage: "photo.fill",
+                    disabled: planRooms.isEmpty
+                ) {
+                    try ProjectExportService.makePlanPNGPackage(
+                        title: title,
+                        rooms: planRooms
+                    )
+                }
+
+                if planRooms.count > 1 {
+                    ForEach(planRooms) { room in
+                        exportButton(
+                            room.scan.name,
+                            subtitle: "PNG منفرد • 3000×2121",
+                            systemImage: "photo"
+                        ) {
+                            try ProjectExportService.makePlanPNG(
+                                title: room.scan.name,
+                                room: room
+                            )
+                        }
+                    }
+                }
+            }
+
+            Section("GLB – مجسم ثلاثي الأبعاد") {
+                exportButton(
+                    planRooms.count == 1
+                        ? "تصدير المجسم GLB"
+                        : "تصدير كل المجسمات GLB",
+                    subtitle: planRooms.count == 1
+                        ? "مجسم خفيف بالألوان والكهرباء والإضاءة"
+                        : "ملف ZIP يحتوي GLB مستقل لكل مسح",
+                    systemImage: "cube.fill",
+                    disabled: planRooms.isEmpty
+                ) {
+                    try ProjectExportService.makeGLBPackage(
+                        title: title,
+                        rooms: planRooms
+                    )
+                }
+
+                if planRooms.count > 1 {
+                    ForEach(planRooms) { room in
+                        exportButton(
+                            room.scan.name,
+                            subtitle: "GLB منفرد • طبقات ملونة",
+                            systemImage: "cube.transparent"
+                        ) {
+                            try ProjectExportService.makeGLB(
+                                title: room.scan.name,
+                                room: room
+                            )
+                        }
+                    }
+                }
+            }
+
+            Section("محتوى التصدير") {
                 Label(
                     "الأرضيات والحوائط والأبواب والشبابيك والفرش",
                     systemImage: "square.grid.2x2.fill"
@@ -210,8 +309,12 @@ struct ExportCenterView: View {
                     systemImage: "bolt.badge.clock.fill"
                 )
                 Label(
-                    "الرسم متجه ومناسب للتكبير والطباعة على A3",
-                    systemImage: "printer.fill"
+                    "DXF بالمتر وطبقات CAD مستقلة",
+                    systemImage: "ruler.fill"
+                )
+                Label(
+                    "PNG عالي الدقة وGLB ثلاثي الأبعاد",
+                    systemImage: "shippingbox.fill"
                 )
             }
         }
@@ -354,7 +457,7 @@ enum ProjectExportService {
         return url
     }
 
-    private static func writeTemporaryFile(
+    static func writeTemporaryFile(
         _ data: Data,
         name: String,
         extension fileExtension: String
@@ -368,7 +471,7 @@ enum ProjectExportService {
         }
     }
 
-    private static func temporaryURL(
+    static func temporaryURL(
         name: String,
         extension fileExtension: String
     ) -> URL {
@@ -383,7 +486,7 @@ enum ProjectExportService {
             .appendingPathExtension(fileExtension)
     }
 
-    private static func sanitized(_ value: String) -> String {
+    static func sanitized(_ value: String) -> String {
         let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
         let cleaned = value.components(separatedBy: invalid).joined(separator: "-")
         let trimmed = cleaned.trimmingCharacters(
@@ -1027,7 +1130,7 @@ private struct TakeoffXLSXBuilder {
     }
 }
 
-private struct StoredZIPArchive {
+struct StoredZIPArchive {
     private struct Entry {
         let name: String
         let data: Data

@@ -291,6 +291,33 @@ struct RoomViewerView: View {
                         systemImage: "tablecells"
                     )
                 }
+
+                Button {
+                    exportCurrentDXF()
+                } label: {
+                    Label(
+                        "مخطط 2D DXF",
+                        systemImage: "ruler"
+                    )
+                }
+
+                Button {
+                    exportCurrentPNG()
+                } label: {
+                    Label(
+                        "مخطط 2D PNG",
+                        systemImage: "photo"
+                    )
+                }
+
+                Button {
+                    exportCurrentGLB()
+                } label: {
+                    Label(
+                        "المجسم GLB",
+                        systemImage: "cube"
+                    )
+                }
             }
 
             Section("إدارة المسح") {
@@ -409,6 +436,33 @@ struct RoomViewerView: View {
             try ProjectExportService.makeTakeoffXLSX(
                 title: project.name,
                 rooms: [currentExportRecord]
+            )
+        }
+    }
+
+    private func exportCurrentDXF() {
+        performExport {
+            try ProjectExportService.makeDXF(
+                title: project.name,
+                room: currentExportRecord
+            )
+        }
+    }
+
+    private func exportCurrentPNG() {
+        performExport {
+            try ProjectExportService.makePlanPNG(
+                title: project.name,
+                room: currentExportRecord
+            )
+        }
+    }
+
+    private func exportCurrentGLB() {
+        performExport {
+            try ProjectExportService.makeGLB(
+                title: project.name,
+                room: currentExportRecord
             )
         }
     }

@@ -32,7 +32,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.2 • مركز التصدير",
+                                    "الإصدار 1.3 • DXF وPNG وGLB",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
