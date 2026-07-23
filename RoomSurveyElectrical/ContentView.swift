@@ -32,7 +32,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.1 • مركز الحصر",
+                                    "الإصدار 1.2 • مركز التصدير",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
@@ -389,7 +389,7 @@ private struct ProjectBrowserView: View {
                 .padding(.vertical, 6)
             }
 
-            Section("الحصر") {
+            Section("الحصر والتصدير") {
                 NavigationLink {
                     ProjectTakeoffView(
                         projectID: projectID,
@@ -406,6 +406,26 @@ private struct ProjectBrowserView: View {
                         }
                     } icon: {
                         Image(systemName: "function")
+                            .foregroundStyle(.blue)
+                    }
+                }
+
+                NavigationLink {
+                    ExportCenterView(
+                        surveyProject: project,
+                        scopeItemID: parentItemID,
+                        title: currentTitle
+                    )
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("مركز التصدير")
+                            Text("XLSX للحصر وPDF للتقرير ومخطط 2D كامل الطبقات")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "square.and.arrow.up.fill")
                             .foregroundStyle(.blue)
                     }
                 }

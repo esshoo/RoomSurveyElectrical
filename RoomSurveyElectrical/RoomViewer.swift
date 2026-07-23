@@ -37,6 +37,8 @@ struct RoomViewerView: View {
     @State private var showRename = false
     @State private var showMove = false
     @State private var showDeleteConfirmation = false
+    @State private var exportedFile: ExportedFile?
+    @State private var isExporting = false
     @State private var errorMessage: String?
 
     init(initialProject: RoomProject, surveyProjectID: UUID) {
@@ -69,6 +71,19 @@ struct RoomViewerView: View {
         }
         .safeAreaInset(edge: .bottom) {
             viewerControls
+        }
+        .overlay {
+            if isExporting {
+                ZStack {
+                    Color.black.opacity(0.12).ignoresSafeArea()
+                    ProgressView("جاري إنشاء الملف...")
+                        .padding(18)
+                        .background(
+                            .regularMaterial,
+                            in: RoundedRectangle(cornerRadius: 14)
+                        )
+                }
+            }
         }
         .sheet(isPresented: $showInformation) {
             ScanInformationSheet(project: project)
@@ -119,6 +134,9 @@ struct RoomViewerView: View {
                     }
                 }
             }
+        }
+        .sheet(item: $exportedFile) { file in
+            ExportShareSheet(items: [file.url])
         }
         .alert("تعذر تنفيذ العملية", isPresented: Binding(
             get: { errorMessage != nil },
@@ -246,6 +264,35 @@ struct RoomViewerView: View {
                 Label("يدخل في حصر المشروع", systemImage: "checklist")
             }
 
+            Section("تصدير") {
+                Button {
+                    exportCurrentPlanPDF()
+                } label: {
+                    Label(
+                        "مخطط 2D PDF – كامل الطبقات",
+                        systemImage: "doc.text.image"
+                    )
+                }
+
+                Button {
+                    exportCurrentTakeoffPDF()
+                } label: {
+                    Label(
+                        "تقرير الحصر PDF",
+                        systemImage: "doc.richtext"
+                    )
+                }
+
+                Button {
+                    exportCurrentTakeoffXLSX()
+                } label: {
+                    Label(
+                        "الحصر XLSX",
+                        systemImage: "tablecells"
+                    )
+                }
+            }
+
             Section("إدارة المسح") {
                 Button {
                     showRename = true
@@ -325,6 +372,58 @@ struct RoomViewerView: View {
 
     private var scanIsArchived: Bool {
         scanReference?.archived ?? false
+    }
+
+    private var currentExportRecord: ExportRoomRecord {
+        ExportRoomRecord(
+            scan: scanReference ?? ScanReference(
+                roomProject: project,
+                parentID: nil
+            ),
+            location: "",
+            project: project,
+            summary: RoomTakeoffSummary(project: project)
+        )
+    }
+
+    private func exportCurrentPlanPDF() {
+        performExport {
+            try ProjectExportService.makePlanPDF(
+                title: project.name,
+                rooms: [currentExportRecord]
+            )
+        }
+    }
+
+    private func exportCurrentTakeoffPDF() {
+        performExport {
+            try ProjectExportService.makeTakeoffPDF(
+                title: project.name,
+                rooms: [currentExportRecord]
+            )
+        }
+    }
+
+    private func exportCurrentTakeoffXLSX() {
+        performExport {
+            try ProjectExportService.makeTakeoffXLSX(
+                title: project.name,
+                rooms: [currentExportRecord]
+            )
+        }
+    }
+
+    private func performExport(_ action: @escaping () throws -> URL) {
+        isExporting = true
+        Task { @MainActor in
+            await Task.yield()
+            defer { isExporting = false }
+            do {
+                exportedFile = ExportedFile(url: try action())
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func reloadProject() {
