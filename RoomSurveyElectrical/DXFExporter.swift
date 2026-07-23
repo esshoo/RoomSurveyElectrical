@@ -4,12 +4,14 @@ import simd
 extension ProjectExportService {
     static func makeDXF(
         title: String,
-        room: ExportRoomRecord
+        room: ExportRoomRecord,
+        metadata: ExportDocumentMetadata
     ) throws -> URL {
         let data = Data(
             DXFPlanBuilder(
                 title: title,
-                record: room
+                record: room,
+                metadata: metadata
             ).build().utf8
         )
         return try writeTemporaryFile(
@@ -21,11 +23,16 @@ extension ProjectExportService {
 
     static func makeDXFPackage(
         title: String,
-        rooms: [ExportRoomRecord]
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
         if rooms.count == 1 {
-            return try makeDXF(title: title, room: rooms[0])
+            return try makeDXF(
+                title: title,
+                room: rooms[0],
+                metadata: metadata
+            )
         }
 
         var archive = StoredZIPArchive()
@@ -40,7 +47,8 @@ extension ProjectExportService {
                 data: Data(
                     DXFPlanBuilder(
                         title: room.scan.name,
-                        record: room
+                        record: room,
+                        metadata: metadata
                     ).build().utf8
                 )
             )
@@ -56,6 +64,7 @@ extension ProjectExportService {
 private struct DXFPlanBuilder {
     let title: String
     let record: ExportRoomRecord
+    let metadata: ExportDocumentMetadata
 
     private let layers: [(name: String, color: Int, lineWeight: Int)] = [
         ("FLOOR", 8, 15),
@@ -118,7 +127,7 @@ private struct DXFPlanBuilder {
         dxf.pair(20, Double(minimumY - 1))
         dxf.pair(30, 0.0)
         dxf.pair(9, "$EXTMAX")
-        dxf.pair(10, Double(maximumX + 1))
+        dxf.pair(10, Double(maximumX + 4))
         dxf.pair(20, Double(maximumY + 1))
         dxf.pair(30, 0.0)
         dxf.pair(0, "ENDSEC")
@@ -360,29 +369,60 @@ private struct DXFPlanBuilder {
             in: record.project
         )
         let minimumX = points.map(\.x).min() ?? 0
-        let maximumZ = points.map { -$0.y }.max() ?? 0
+        let maximumX = points.map(\.x).max() ?? 0
+        let minimumY = points.map { -$0.y }.min() ?? 0
+        let maximumY = points.map { -$0.y }.max() ?? 0
         dxf.text(
-            title,
+            metadata.brandName,
             at: (
                 Double(minimumX),
-                Double(maximumZ) + 0.55
+                Double(maximumY) + 0.72
             ),
             height: 0.22,
             layer: "ANNOTATIONS",
             horizontalAlignment: 0
         )
-        let location = record.location.isEmpty
-            ? "3ERoomElectrical"
-            : record.location
         dxf.text(
-            location,
+            metadata.projectLine,
             at: (
                 Double(minimumX),
-                Double(maximumZ) + 0.30
+                Double(maximumY) + 0.48
             ),
-            height: 0.11,
+            height: 0.09,
             layer: "ANNOTATIONS",
             horizontalAlignment: 0
+        )
+        dxf.text(
+            title,
+            at: (
+                Double(minimumX),
+                Double(maximumY) + 0.28
+            ),
+            height: 0.14,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 0
+        )
+        if !record.location.isEmpty {
+            dxf.text(
+                record.location,
+                at: (
+                    Double(minimumX),
+                    Double(maximumY) + 0.10
+                ),
+                height: 0.08,
+                layer: "ANNOTATIONS",
+                horizontalAlignment: 0
+            )
+        }
+        dxf.text(
+            metadata.exportLine,
+            at: (
+                Double(maximumX),
+                Double(minimumY) - 0.45
+            ),
+            height: 0.08,
+            layer: "ANNOTATIONS",
+            horizontalAlignment: 2
         )
     }
 

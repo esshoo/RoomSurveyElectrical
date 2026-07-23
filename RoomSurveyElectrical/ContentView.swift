@@ -32,7 +32,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.4 • PDF بطبقات CAD",
+                                    "الإصدار 1.5 • هوية وبيانات التصدير",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))

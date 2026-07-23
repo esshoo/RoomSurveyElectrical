@@ -78,7 +78,8 @@ enum LayeredPlanPDFBuilder {
 
     static func build(
         title: String,
-        rooms: [ExportRoomRecord]
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
     ) throws -> Data {
         guard !rooms.isEmpty else {
             throw ProjectExportError.noRooms
@@ -152,7 +153,8 @@ enum LayeredPlanPDFBuilder {
             let contentID = contentObjectIDs[index]
             let content = LayeredPlanPage(
                 title: rooms.count == 1 ? title : room.scan.name,
-                record: room
+                record: room,
+                metadata: metadata
             ).content()
             objects[contentID] = streamObject(content)
             objects[pageID] = Data(
@@ -176,6 +178,7 @@ enum LayeredPlanPDFBuilder {
                /Author (3Essam)
                /Creator (3ERoomElectrical)
                /Producer (3ERoomElectrical Layered PDF Engine)
+               /CreationDate (D:\(pdfDate(metadata.exportedAt)))
             >>
             """.utf8
         )
@@ -254,6 +257,7 @@ enum LayeredPlanPDFBuilder {
 private struct LayeredPlanPage {
     let title: String
     let record: ExportRoomRecord
+    let metadata: ExportDocumentMetadata
 
     private let pageWidth: CGFloat = 1190.55
     private let pageHeight: CGFloat = 841.89
@@ -575,32 +579,70 @@ private struct LayeredPlanPage {
     ) {
         commands.vectorText(
             layer: "ANNOTATIONS",
-            value: title,
+            value: metadata.brandName,
             at: projection.mapCAD(
                 (
                     projection.minimumX,
-                    projection.maximumY + 0.52
+                    projection.maximumY + 0.62
                 )
             ),
             size: 15,
             color: RGBColor(0.10, 0.10, 0.12),
             alignment: .left
         )
-        let location = record.location.isEmpty
-            ? "3ERoomElectrical"
-            : record.location
         commands.vectorText(
             layer: "ANNOTATIONS",
-            value: location,
+            value: metadata.projectLine,
             at: projection.mapCAD(
                 (
                     projection.minimumX,
-                    projection.maximumY + 0.28
+                    projection.maximumY + 0.42
                 )
             ),
             size: 8,
             color: RGBColor(0.35, 0.35, 0.38),
             alignment: .left
+        )
+        commands.vectorText(
+            layer: "ANNOTATIONS",
+            value: title,
+            at: projection.mapCAD(
+                (
+                    projection.minimumX,
+                    projection.maximumY + 0.20
+                )
+            ),
+            size: 11,
+            color: RGBColor(0.10, 0.10, 0.12),
+            alignment: .left
+        )
+        if !record.location.isEmpty {
+            commands.vectorText(
+                layer: "ANNOTATIONS",
+                value: record.location,
+                at: projection.mapCAD(
+                    (
+                        projection.minimumX,
+                        projection.minimumY - 0.36
+                    )
+                ),
+                size: 7,
+                color: RGBColor(0.35, 0.35, 0.38),
+                alignment: .left
+            )
+        }
+        commands.vectorText(
+            layer: "ANNOTATIONS",
+            value: metadata.exportLine,
+            at: projection.mapCAD(
+                (
+                    projection.maximumX,
+                    projection.minimumY - 0.36
+                )
+            ),
+            size: 7,
+            color: RGBColor(0.35, 0.35, 0.38),
+            alignment: .right
         )
     }
 
@@ -637,6 +679,8 @@ private struct LayeredPlanPage {
 
 private struct PDFPlanProjection {
     let minimumX: Double
+    let maximumX: Double
+    let minimumY: Double
     let maximumY: Double
     let scale: CGFloat
     private let offsetX: CGFloat
@@ -682,6 +726,8 @@ private struct PDFPlanProjection {
         let renderedHeight = CGFloat(drawingHeight) * scale
 
         self.minimumX = rawMinimumX
+        self.maximumX = rawMaximumX
+        self.minimumY = rawMinimumY
         self.maximumY = rawMaximumY
         self.scale = scale
         offsetX = pageMargin
@@ -709,6 +755,7 @@ private struct PDFPlanProjection {
 private enum PDFTextAlignment: Equatable {
     case left
     case center
+    case right
 }
 
 private struct RGBColor {
@@ -991,9 +1038,15 @@ private enum VectorTextPath {
                 &leading
             )
         )
-        let horizontalOffset: CGFloat = alignment == .center
-            ? -width / 2
-            : 0
+        let horizontalOffset: CGFloat
+        switch alignment {
+        case .left:
+            horizontalOffset = 0
+        case .center:
+            horizontalOffset = -width / 2
+        case .right:
+            horizontalOffset = -width
+        }
         let verticalOffset = -(ascent - descent) / 2
         let combined = CGMutablePath()
         let runs = CTLineGetGlyphRuns(line) as! [CTRun]
@@ -1116,4 +1169,13 @@ private func pdfEscaped(_ value: String) -> String {
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "(", with: "\\(")
         .replacingOccurrences(of: ")", with: "\\)")
+}
+
+private func pdfDate(_ value: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyyMMddHHmmss'Z'"
+    return formatter.string(from: value)
 }

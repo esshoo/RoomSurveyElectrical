@@ -4,11 +4,13 @@ import simd
 extension ProjectExportService {
     static func makeGLB(
         title: String,
-        room: ExportRoomRecord
+        room: ExportRoomRecord,
+        metadata: ExportDocumentMetadata
     ) throws -> URL {
         let data = try GLBRoomBuilder(
             title: title,
-            record: room
+            record: room,
+            metadata: metadata
         ).build()
         return try writeTemporaryFile(
             data,
@@ -19,11 +21,16 @@ extension ProjectExportService {
 
     static func makeGLBPackage(
         title: String,
-        rooms: [ExportRoomRecord]
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
         if rooms.count == 1 {
-            return try makeGLB(title: title, room: rooms[0])
+            return try makeGLB(
+                title: title,
+                room: rooms[0],
+                metadata: metadata
+            )
         }
 
         var archive = StoredZIPArchive()
@@ -37,7 +44,8 @@ extension ProjectExportService {
                 name: name,
                 data: try GLBRoomBuilder(
                     title: room.scan.name,
-                    record: room
+                    record: room,
+                    metadata: metadata
                 ).build()
             )
         }
@@ -52,6 +60,7 @@ extension ProjectExportService {
 private struct GLBRoomBuilder {
     let title: String
     let record: ExportRoomRecord
+    let metadata: ExportDocumentMetadata
 
     private enum Material: Int {
         case floor
@@ -90,7 +99,7 @@ private struct GLBRoomBuilder {
             "asset": [
                 "version": "2.0",
                 "generator": "3ERoomElectrical",
-                "copyright": "3Essam"
+                "copyright": metadata.brandName
             ],
             "scene": 0,
             "scenes": [
@@ -153,7 +162,13 @@ private struct GLBRoomBuilder {
                 ]
             ],
             "extras": [
-                "project": title,
+                "brand": metadata.brandName,
+                "project": metadata.projectName,
+                "projectCreatedAt": metadata.projectCreatedISO8601,
+                "projectCreatedDisplay": metadata.projectCreatedText,
+                "exportedAt": metadata.exportedISO8601,
+                "exportedDisplay": metadata.exportedText,
+                "drawingTitle": title,
                 "location": record.location,
                 "source": "RoomPlan + 3ERoomElectrical"
             ]

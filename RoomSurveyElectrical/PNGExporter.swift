@@ -5,11 +5,13 @@ import UIKit
 extension ProjectExportService {
     static func makePlanPNG(
         title: String,
-        room: ExportRoomRecord
+        room: ExportRoomRecord,
+        metadata: ExportDocumentMetadata
     ) throws -> URL {
         let data = PNGPlanRenderer(
             title: title,
-            record: room
+            record: room,
+            metadata: metadata
         ).render()
         return try writeTemporaryFile(
             data,
@@ -20,11 +22,16 @@ extension ProjectExportService {
 
     static func makePlanPNGPackage(
         title: String,
-        rooms: [ExportRoomRecord]
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
         if rooms.count == 1 {
-            return try makePlanPNG(title: title, room: rooms[0])
+            return try makePlanPNG(
+                title: title,
+                room: rooms[0],
+                metadata: metadata
+            )
         }
 
         var archive = StoredZIPArchive()
@@ -38,7 +45,8 @@ extension ProjectExportService {
                 name: name,
                 data: PNGPlanRenderer(
                     title: room.scan.name,
-                    record: room
+                    record: room,
+                    metadata: metadata
                 ).render()
             )
         }
@@ -53,6 +61,7 @@ extension ProjectExportService {
 private struct PNGPlanRenderer {
     let title: String
     let record: ExportRoomRecord
+    let metadata: ExportDocumentMetadata
 
     private let canvasSize = CGSize(width: 3000, height: 2121)
     private let accent = UIColor(
@@ -78,6 +87,7 @@ private struct PNGPlanRenderer {
             )
             drawHeader(context: context)
             drawLegend(context: context)
+            drawExportFooter()
             drawPlan(context: context)
         }
     }
@@ -87,15 +97,15 @@ private struct PNGPlanRenderer {
             x: 60,
             y: 50,
             width: canvasSize.width - 120,
-            height: 130
+            height: 155
         )
         context.setFillColor(accent.cgColor)
         context.fill(rect)
         exportDrawText(
-            "3ERoomElectrical",
+            metadata.brandName,
             in: CGRect(
                 x: rect.minX + 35,
-                y: rect.minY + 26,
+                y: rect.minY + 18,
                 width: 600,
                 height: 46
             ),
@@ -104,40 +114,75 @@ private struct PNGPlanRenderer {
             alignment: .left
         )
         exportDrawText(
+            metadata.projectName,
+            in: CGRect(
+                x: rect.minX + 35,
+                y: rect.minY + 62,
+                width: rect.width / 2 - 70,
+                height: 34
+            ),
+            font: .boldSystemFont(ofSize: 23),
+            color: UIColor.white.withAlphaComponent(0.95),
+            alignment: .left
+        )
+        exportDrawText(
+            "تاريخ الإنشاء: \(metadata.projectCreatedText)",
+            in: CGRect(
+                x: rect.minX + 35,
+                y: rect.minY + 100,
+                width: rect.width / 2 - 70,
+                height: 28
+            ),
+            font: .systemFont(ofSize: 18),
+            color: UIColor.white.withAlphaComponent(0.82),
+            alignment: .left
+        )
+        exportDrawText(
             "PNG 2D – كامل الطبقات",
             in: CGRect(
                 x: rect.midX,
-                y: rect.minY + 20,
+                y: rect.minY + 18,
                 width: rect.width / 2 - 35,
-                height: 52
+                height: 44
             ),
-            font: .boldSystemFont(ofSize: 38),
+            font: .boldSystemFont(ofSize: 34),
             color: .white
         )
         exportDrawText(
             title,
             in: CGRect(
                 x: rect.midX,
-                y: rect.minY + 76,
+                y: rect.minY + 68,
                 width: rect.width / 2 - 35,
-                height: 34
+                height: 32
             ),
-            font: .systemFont(ofSize: 23),
-            color: UIColor.white.withAlphaComponent(0.9)
+            font: .systemFont(ofSize: 22),
+            color: UIColor.white.withAlphaComponent(0.92)
         )
         exportDrawText(
-            record.location.isEmpty
-                ? "المشروع"
-                : record.location,
+            record.location.isEmpty ? "المشروع" : record.location,
             in: CGRect(
-                x: rect.minX + 35,
-                y: rect.minY + 80,
-                width: 900,
-                height: 30
+                x: rect.midX,
+                y: rect.minY + 108,
+                width: rect.width / 2 - 35,
+                height: 27
             ),
-            font: .systemFont(ofSize: 20),
-            color: UIColor.white.withAlphaComponent(0.9),
-            alignment: .left
+            font: .systemFont(ofSize: 18),
+            color: UIColor.white.withAlphaComponent(0.82)
+        )
+    }
+
+    private func drawExportFooter() {
+        exportDrawText(
+            metadata.exportLine,
+            in: CGRect(
+                x: canvasSize.width - 950,
+                y: canvasSize.height - 42,
+                width: 875,
+                height: 28
+            ),
+            font: .systemFont(ofSize: 17),
+            color: .darkGray
         )
     }
 
@@ -191,9 +236,9 @@ private struct PNGPlanRenderer {
     private func drawPlan(context: CGContext) {
         let drawingRect = CGRect(
             x: 85,
-            y: 215,
+            y: 235,
             width: canvasSize.width - 170,
-            height: canvasSize.height - 355
+            height: canvasSize.height - 375
         )
         context.setStrokeColor(
             UIColor(white: 0.83, alpha: 1).cgColor

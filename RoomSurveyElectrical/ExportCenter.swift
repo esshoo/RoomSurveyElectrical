@@ -143,6 +143,13 @@ struct ExportCenterView: View {
         )
     }
 
+    private var exportMetadata: ExportDocumentMetadata {
+        ExportDocumentMetadata(
+            projectName: surveyProject.name,
+            projectCreatedAt: surveyProject.createdAt
+        )
+    }
+
     var body: some View {
         List {
             Section("تقرير الحصر") {
@@ -154,7 +161,8 @@ struct ExportCenterView: View {
                 ) {
                     try ProjectExportService.makeTakeoffXLSX(
                         title: title,
-                        rooms: takeoffRooms
+                        rooms: takeoffRooms,
+                        metadata: exportMetadata
                     )
                 }
 
@@ -166,7 +174,8 @@ struct ExportCenterView: View {
                 ) {
                     try ProjectExportService.makeTakeoffPDF(
                         title: title,
-                        rooms: takeoffRooms
+                        rooms: takeoffRooms,
+                        metadata: exportMetadata
                     )
                 }
             }
@@ -180,7 +189,8 @@ struct ExportCenterView: View {
                 ) {
                     try ProjectExportService.makePlanPDF(
                         title: title,
-                        rooms: planRooms
+                        rooms: planRooms,
+                        metadata: exportMetadata
                     )
                 }
 
@@ -194,7 +204,8 @@ struct ExportCenterView: View {
                     ) {
                         try ProjectExportService.makePlanPDF(
                             title: room.scan.name,
-                            rooms: [room]
+                            rooms: [room],
+                            metadata: exportMetadata
                         )
                     }
                 }
@@ -213,7 +224,8 @@ struct ExportCenterView: View {
                 ) {
                     try ProjectExportService.makeDXFPackage(
                         title: title,
-                        rooms: planRooms
+                        rooms: planRooms,
+                        metadata: exportMetadata
                     )
                 }
 
@@ -226,7 +238,8 @@ struct ExportCenterView: View {
                         ) {
                             try ProjectExportService.makeDXF(
                                 title: room.scan.name,
-                                room: room
+                                room: room,
+                                metadata: exportMetadata
                             )
                         }
                     }
@@ -246,7 +259,8 @@ struct ExportCenterView: View {
                 ) {
                     try ProjectExportService.makePlanPNGPackage(
                         title: title,
-                        rooms: planRooms
+                        rooms: planRooms,
+                        metadata: exportMetadata
                     )
                 }
 
@@ -259,7 +273,8 @@ struct ExportCenterView: View {
                         ) {
                             try ProjectExportService.makePlanPNG(
                                 title: room.scan.name,
-                                room: room
+                                room: room,
+                                metadata: exportMetadata
                             )
                         }
                     }
@@ -279,7 +294,8 @@ struct ExportCenterView: View {
                 ) {
                     try ProjectExportService.makeGLBPackage(
                         title: title,
-                        rooms: planRooms
+                        rooms: planRooms,
+                        metadata: exportMetadata
                     )
                 }
 
@@ -292,7 +308,8 @@ struct ExportCenterView: View {
                         ) {
                             try ProjectExportService.makeGLB(
                                 title: room.scan.name,
-                                room: room
+                                room: room,
+                                metadata: exportMetadata
                             )
                         }
                     }
@@ -415,10 +432,15 @@ enum ProjectExportError: LocalizedError {
 enum ProjectExportService {
     static func makeTakeoffXLSX(
         title: String,
-        rooms: [ExportRoomRecord]
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
-        let workbook = TakeoffXLSXBuilder(title: title, rooms: rooms)
+        let workbook = TakeoffXLSXBuilder(
+            title: title,
+            rooms: rooms,
+            metadata: metadata
+        )
         let data = try workbook.build()
         return try writeTemporaryFile(
             data,
@@ -429,7 +451,8 @@ enum ProjectExportService {
 
     static func makeTakeoffPDF(
         title: String,
-        rooms: [ExportRoomRecord]
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
         let url = temporaryURL(
@@ -439,6 +462,7 @@ enum ProjectExportService {
         try TakeoffPDFRenderer.render(
             title: title,
             rooms: rooms,
+            metadata: metadata,
             to: url
         )
         return url
@@ -446,12 +470,14 @@ enum ProjectExportService {
 
     static func makePlanPDF(
         title: String,
-        rooms: [ExportRoomRecord]
+        rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
         let data = try LayeredPlanPDFBuilder.build(
             title: title,
-            rooms: rooms
+            rooms: rooms,
+            metadata: metadata
         )
         return try writeTemporaryFile(
             data,
@@ -544,6 +570,7 @@ private struct XLSXSheet {
 private struct TakeoffXLSXBuilder {
     let title: String
     let rooms: [ExportRoomRecord]
+    let metadata: ExportDocumentMetadata
 
     func build() throws -> Data {
         let sheets = makeSheets()
@@ -602,6 +629,21 @@ private struct TakeoffXLSXBuilder {
                 .text("البند", style: 2),
                 .text("القيمة", style: 2),
                 .text("الوحدة", style: 2)
+            ],
+            [
+                .text("اسم المشروع"),
+                .text(metadata.projectName),
+                .text("")
+            ],
+            [
+                .text("تاريخ إنشاء المشروع"),
+                .text(metadata.projectCreatedText),
+                .text("")
+            ],
+            [
+                .text("تاريخ ووقت التصدير"),
+                .text(metadata.exportedText),
+                .text("")
             ],
             [
                 .text("عدد المسحات"),
@@ -989,9 +1031,38 @@ private struct TakeoffXLSXBuilder {
         xml += """
         <pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>
         <pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/>
+        <headerFooter>
+        <oddHeader>\(xlsxHeaderText)</oddHeader>
+        <oddFooter>\(xlsxFooterText)</oddFooter>
+        </headerFooter>
         </worksheet>
         """
         return xml
+    }
+
+    private var xlsxHeaderText: String {
+        let projectName = xlsxHeaderLiteral(
+            String(metadata.projectName.prefix(80))
+        )
+        return xmlEscaped(
+            "&L\(metadata.brandName)"
+                + "&C\(projectName) | إنشاء: \(metadata.projectCreatedText)"
+                + "&Rتصدير: \(metadata.exportedText)"
+        )
+    }
+
+    private var xlsxFooterText: String {
+        xmlEscaped(
+            "&L3ERoomElectrical"
+                + "&Rصفحة &P من &N"
+        )
+    }
+
+    private func xlsxHeaderLiteral(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&&")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
     }
 
     private func workbookXML(sheets: [XLSXSheet]) -> String {
@@ -1091,12 +1162,12 @@ private struct TakeoffXLSXBuilder {
     }
 
     private var corePropertiesXML: String {
-        let date = ISO8601DateFormatter().string(from: Date())
+        let date = metadata.exportedISO8601
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
         <dc:title>\(xmlEscaped(title)) – تقرير حصر</dc:title>
-        <dc:creator>3ERoomElectrical</dc:creator>
+        <dc:creator>\(xmlEscaped(metadata.brandName))</dc:creator>
         <dcterms:created xsi:type="dcterms:W3CDTF">\(date)</dcterms:created>
         <dcterms:modified xsi:type="dcterms:W3CDTF">\(date)</dcterms:modified>
         </cp:coreProperties>
@@ -1278,12 +1349,13 @@ private enum TakeoffPDFRenderer {
     static func render(
         title: String,
         rooms: [ExportRoomRecord],
+        metadata: ExportDocumentMetadata,
         to url: URL
     ) throws {
         let format = UIGraphicsPDFRendererFormat()
         format.documentInfo = [
             kCGPDFContextTitle as String: "\(title) – تقرير الحصر",
-            kCGPDFContextAuthor as String: "3ERoomElectrical",
+            kCGPDFContextAuthor as String: metadata.brandName,
             kCGPDFContextCreator as String: "3ERoomElectrical"
         ]
         let renderer = UIGraphicsPDFRenderer(bounds: page, format: format)
@@ -1291,7 +1363,8 @@ private enum TakeoffPDFRenderer {
             var state = PDFPageState(
                 context: context,
                 projectTitle: title,
-                documentTitle: "تقرير الحصر"
+                documentTitle: "تقرير الحصر",
+                metadata: metadata
             )
             state.beginPage()
 
@@ -1380,6 +1453,7 @@ private enum TakeoffPDFRenderer {
         let context: UIGraphicsPDFRendererContext
         let projectTitle: String
         let documentTitle: String
+        let metadata: ExportDocumentMetadata
         var y: CGFloat = 0
         var pageNumber = 0
 
@@ -1399,7 +1473,7 @@ private enum TakeoffPDFRenderer {
                 x: TakeoffPDFRenderer.margin,
                 y: y,
                 width: contentWidth,
-                height: 66
+                height: 78
             )
             TakeoffPDFRenderer.accent.setFill()
             UIBezierPath(
@@ -1407,7 +1481,7 @@ private enum TakeoffPDFRenderer {
                 cornerRadius: 9
             ).fill()
             drawText(
-                "3ERoomElectrical",
+                metadata.brandName,
                 in: CGRect(
                     x: headerRect.minX + 14,
                     y: headerRect.minY + 10,
@@ -1430,15 +1504,26 @@ private enum TakeoffPDFRenderer {
                 color: .white
             )
             drawText(
-                projectTitle,
+                metadata.projectName,
                 in: CGRect(
                     x: headerRect.minX + 14,
-                    y: headerRect.minY + 35,
+                    y: headerRect.minY + 34,
                     width: headerRect.width - 28,
                     height: 20
                 ),
                 font: .systemFont(ofSize: 11),
                 color: UIColor.white.withAlphaComponent(0.9)
+            )
+            drawText(
+                "إنشاء: \(metadata.projectCreatedText) • النطاق: \(projectTitle)",
+                in: CGRect(
+                    x: headerRect.minX + 14,
+                    y: headerRect.minY + 54,
+                    width: headerRect.width - 28,
+                    height: 16
+                ),
+                font: .systemFont(ofSize: 9),
+                color: UIColor.white.withAlphaComponent(0.82)
             )
             y = headerRect.maxY + 18
         }
@@ -1641,25 +1726,17 @@ private enum TakeoffPDFRenderer {
                 alignment: .left
             )
             drawText(
-                formattedDate(),
+                metadata.exportLine,
                 in: CGRect(
                     x: TakeoffPDFRenderer.page.width
-                        - TakeoffPDFRenderer.margin - 150,
+                        - TakeoffPDFRenderer.margin - 240,
                     y: footerY,
-                    width: 150,
+                    width: 240,
                     height: 14
                 ),
                 font: .systemFont(ofSize: 8),
                 color: .gray
             )
-        }
-
-        private func formattedDate() -> String {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "ar")
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .short
-            return formatter.string(from: Date())
         }
     }
 }

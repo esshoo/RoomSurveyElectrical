@@ -413,11 +413,25 @@ struct RoomViewerView: View {
         )
     }
 
+    private var currentExportMetadata: ExportDocumentMetadata {
+        if let surveyProject = store.project(id: surveyProjectID) {
+            return ExportDocumentMetadata(
+                projectName: surveyProject.name,
+                projectCreatedAt: surveyProject.createdAt
+            )
+        }
+        return ExportDocumentMetadata(
+            projectName: project.name,
+            projectCreatedAt: project.createdAt
+        )
+    }
+
     private func exportCurrentPlanPDF() {
         performExport {
             try ProjectExportService.makePlanPDF(
                 title: project.name,
-                rooms: [currentExportRecord]
+                rooms: [currentExportRecord],
+                metadata: currentExportMetadata
             )
         }
     }
@@ -426,7 +440,8 @@ struct RoomViewerView: View {
         performExport {
             try ProjectExportService.makeTakeoffPDF(
                 title: project.name,
-                rooms: [currentExportRecord]
+                rooms: [currentExportRecord],
+                metadata: currentExportMetadata
             )
         }
     }
@@ -435,7 +450,8 @@ struct RoomViewerView: View {
         performExport {
             try ProjectExportService.makeTakeoffXLSX(
                 title: project.name,
-                rooms: [currentExportRecord]
+                rooms: [currentExportRecord],
+                metadata: currentExportMetadata
             )
         }
     }
@@ -444,7 +460,8 @@ struct RoomViewerView: View {
         performExport {
             try ProjectExportService.makeDXF(
                 title: project.name,
-                room: currentExportRecord
+                room: currentExportRecord,
+                metadata: currentExportMetadata
             )
         }
     }
@@ -453,7 +470,8 @@ struct RoomViewerView: View {
         performExport {
             try ProjectExportService.makePlanPNG(
                 title: project.name,
-                room: currentExportRecord
+                room: currentExportRecord,
+                metadata: currentExportMetadata
             )
         }
     }
@@ -462,7 +480,8 @@ struct RoomViewerView: View {
         performExport {
             try ProjectExportService.makeGLB(
                 title: project.name,
-                room: currentExportRecord
+                room: currentExportRecord,
+                metadata: currentExportMetadata
             )
         }
     }
