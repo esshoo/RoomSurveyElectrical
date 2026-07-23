@@ -33,6 +33,7 @@ struct RoomViewerView: View {
     @State private var mode: ScanPresentationMode = .plan2D
     @State private var layers = ViewerLayerVisibility()
     @State private var showInformation = false
+    @State private var showTakeoff = false
     @State private var showRename = false
     @State private var showMove = false
     @State private var showDeleteConfirmation = false
@@ -71,6 +72,18 @@ struct RoomViewerView: View {
         }
         .sheet(isPresented: $showInformation) {
             ScanInformationSheet(project: project)
+        }
+        .sheet(isPresented: $showTakeoff) {
+            NavigationStack {
+                ScanTakeoffDetailView(
+                    summary: RoomTakeoffSummary(project: project)
+                )
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("تم") { showTakeoff = false }
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showRename) {
             RenameSheet(title: "إعادة تسمية المسح", initialName: project.name) { name in
@@ -218,6 +231,21 @@ struct RoomViewerView: View {
                 Label("معلومات المسح والحصر", systemImage: "info.circle")
             }
 
+            Button {
+                showTakeoff = true
+            } label: {
+                Label("الحصر الهندسي", systemImage: "function")
+            }
+
+            Toggle(
+                isOn: Binding(
+                    get: { scanReference?.includedInTakeoff ?? true },
+                    set: { setScanIncludedInTakeoff($0) }
+                )
+            ) {
+                Label("يدخل في حصر المشروع", systemImage: "checklist")
+            }
+
             Section("إدارة المسح") {
                 Button {
                     showRename = true
@@ -333,6 +361,18 @@ struct RoomViewerView: View {
                 archived: archived
             )
             dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func setScanIncludedInTakeoff(_ included: Bool) {
+        do {
+            try store.setScanIncludedInTakeoff(
+                projectID: surveyProjectID,
+                scanID: project.id,
+                included: included
+            )
         } catch {
             errorMessage = error.localizedDescription
         }

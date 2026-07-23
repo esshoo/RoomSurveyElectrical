@@ -198,16 +198,24 @@ struct ScanReference: Codable, Identifiable, Equatable {
     var name: String
     let createdAt: Date
     var isArchived: Bool?
+    var isIncludedInTakeoff: Bool?
 
-    init(roomProject: RoomProject, parentID: UUID?, isArchived: Bool? = nil) {
+    init(
+        roomProject: RoomProject,
+        parentID: UUID?,
+        isArchived: Bool? = nil,
+        isIncludedInTakeoff: Bool? = nil
+    ) {
         id = roomProject.id
         self.parentID = parentID
         name = roomProject.name
         createdAt = roomProject.createdAt
         self.isArchived = isArchived
+        self.isIncludedInTakeoff = isIncludedInTakeoff
     }
 
     var archived: Bool { isArchived ?? false }
+    var includedInTakeoff: Bool { isIncludedInTakeoff ?? true }
 }
 
 struct SurveyProject: Codable, Identifiable, Equatable {

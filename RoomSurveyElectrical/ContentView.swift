@@ -383,6 +383,28 @@ private struct ProjectBrowserView: View {
                 .padding(.vertical, 6)
             }
 
+            Section("الحصر") {
+                NavigationLink {
+                    ProjectTakeoffView(
+                        projectID: projectID,
+                        scopeItemID: parentItemID,
+                        title: currentTitle
+                    )
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("الحصر والحاسبات")
+                            Text("الأرضيات والحوائط والأسقف والفتحات")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "function")
+                            .foregroundStyle(.blue)
+                    }
+                }
+            }
+
             if !children.isEmpty {
                 Section("المحتويات") {
                     ForEach(children) { item in
@@ -678,10 +700,478 @@ private struct ScanReferenceRow: View {
                 Text(scan.createdAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if !scan.includedInTakeoff {
+                    Label("مستبعد من الحصر", systemImage: "minus.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
         }
         .padding(.vertical, 2)
     }
+}
+
+private struct ScopedTakeoffRoom: Identifiable {
+    let scan: ScanReference
+    let summary: RoomTakeoffSummary?
+    let location: String
+
+    var id: UUID { scan.id }
+}
+
+private struct ProjectTakeoffView: View {
+    @EnvironmentObject private var store: ProjectStore
+
+    let projectID: UUID
+    let scopeItemID: UUID?
+    let title: String
+
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Group {
+            if let project = store.project(id: projectID) {
+                takeoffList(project)
+            } else {
+                ContentUnavailableView(
+                    "المشروع غير موجود",
+                    systemImage: "folder.badge.questionmark"
+                )
+            }
+        }
+        .navigationTitle("حصر \(title)")
+        .navigationBarTitleDisplayMode(.inline)
+        .alert(
+            "تعذر تحديث الحصر",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("حسنًا", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .onAppear(perform: store.reload)
+    }
+
+    private func takeoffList(_ project: SurveyProject) -> some View {
+        let rooms = scopedRooms(in: project)
+        let includedRooms = rooms.compactMap { room -> RoomTakeoffSummary? in
+            guard room.scan.includedInTakeoff else { return nil }
+            return room.summary
+        }
+        let total = ProjectTakeoffSummary(rooms: includedRooms)
+
+        return List {
+            Section("المجموع العام") {
+                LabeledContent(
+                    "المسحات الداخلة في الحصر",
+                    value: "\(includedRooms.count)"
+                )
+                takeoffAreaRow(
+                    "مساحة الأرضيات",
+                    value: total.floorArea,
+                    image: "square.fill"
+                )
+                takeoffAreaRow(
+                    "مساحة الأسقف",
+                    value: total.ceilingArea,
+                    image: "square.dashed"
+                )
+                takeoffAreaRow(
+                    "الحوائط قبل الخصم",
+                    value: total.grossWallArea,
+                    image: "rectangle.split.3x1.fill"
+                )
+                takeoffAreaRow(
+                    "الفتحات المخصومة",
+                    value: total.deductedOpeningArea,
+                    image: "rectangle.portrait.and.arrow.right"
+                )
+                takeoffAreaRow(
+                    "صافي الحوائط",
+                    value: total.netWallArea,
+                    image: "checkmark.rectangle.fill"
+                )
+            }
+
+            Section("الفتحات والكهرباء") {
+                takeoffAreaRow(
+                    "إجمالي مساحة الفتحات",
+                    value: total.totalOpeningArea,
+                    image: "rectangle.dashed"
+                )
+                LabeledContent(
+                    "الأبواب",
+                    value: "\(total.doorCount)"
+                )
+                LabeledContent(
+                    "الشبابيك",
+                    value: "\(total.windowCount)"
+                )
+                LabeledContent(
+                    "الفتحات المعمارية",
+                    value: "\(total.architecturalOpeningCount)"
+                )
+                LabeledContent(
+                    "نقاط الكهرباء",
+                    value: "\(total.electricalPointCount)"
+                )
+                LabeledContent(
+                    "إضاءة السقف",
+                    value: "\(total.ceilingLightCount)"
+                )
+            }
+
+            Section("ملاحظات الحساب") {
+                Label(
+                    "مساحة السقف في هذه المرحلة تساوي مساحة الأرضية المكتشفة لكل مسح.",
+                    systemImage: "info.circle"
+                )
+                Label(
+                    "لا تُخصم أي فتحة من الحائط إلا بعد ربطها هندسيًا بذلك الحائط.",
+                    systemImage: "link"
+                )
+            }
+
+            Section {
+                if rooms.isEmpty {
+                    ContentUnavailableView(
+                        "لا توجد مسحات للحصر",
+                        systemImage: "function",
+                        description: Text(
+                            "أضف مسحًا داخل هذا المستوى أو أحد المجلدات التابعة له."
+                        )
+                    )
+                } else {
+                    ForEach(rooms) { room in
+                        takeoffRoomRow(room)
+                    }
+                }
+            } header: {
+                Text("المسحات")
+            } footer: {
+                Text(
+                    "استبعد أي إعادة مسح لنفس المكان حتى لا تتكرر المساحات في المجموع."
+                )
+            }
+        }
+    }
+
+    private func scopedRooms(in project: SurveyProject) -> [ScopedTakeoffRoom] {
+        let allowedParentIDs: Set<UUID>?
+        if let scopeItemID {
+            allowedParentIDs = project.descendantIDs(of: scopeItemID)
+                .union([scopeItemID])
+        } else {
+            allowedParentIDs = nil
+        }
+
+        return project.scans
+            .filter { scan in
+                guard !scan.archived else { return false }
+                guard !hasArchivedAncestor(
+                    scan.parentID,
+                    in: project
+                ) else {
+                    return false
+                }
+                guard let allowedParentIDs else { return true }
+                return scan.parentID.map(allowedParentIDs.contains) == true
+            }
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { scan in
+                ScopedTakeoffRoom(
+                    scan: scan,
+                    summary: ProjectRepository.load(projectID: scan.id).map {
+                        RoomTakeoffSummary(project: $0)
+                    },
+                    location: locationPath(for: scan.parentID, in: project)
+                )
+            }
+    }
+
+    private func hasArchivedAncestor(
+        _ itemID: UUID?,
+        in project: SurveyProject
+    ) -> Bool {
+        var currentID = itemID
+        var visited: Set<UUID> = []
+        while let id = currentID,
+              !visited.contains(id),
+              let item = project.item(id: id) {
+            if item.archived {
+                return true
+            }
+            visited.insert(id)
+            currentID = item.parentID
+        }
+        return false
+    }
+
+    @ViewBuilder
+    private func takeoffRoomRow(_ room: ScopedTakeoffRoom) -> some View {
+        HStack(spacing: 10) {
+            if let summary = room.summary {
+                NavigationLink {
+                    ScanTakeoffDetailView(summary: summary)
+                } label: {
+                    takeoffRoomLabel(room, summary: summary)
+                }
+            } else {
+                takeoffRoomLabel(room, summary: nil)
+            }
+
+            Toggle(
+                "يدخل في الحصر",
+                isOn: Binding(
+                    get: { room.scan.includedInTakeoff },
+                    set: { included in
+                        setIncluded(
+                            included,
+                            scanID: room.scan.id
+                        )
+                    }
+                )
+            )
+            .labelsHidden()
+            .tint(.blue)
+        }
+        .opacity(room.scan.includedInTakeoff ? 1 : 0.62)
+    }
+
+    private func takeoffRoomLabel(
+        _ room: ScopedTakeoffRoom,
+        summary: RoomTakeoffSummary?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(room.scan.name)
+                .font(.headline)
+            if !room.location.isEmpty {
+                Text(room.location)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let summary {
+                Text(
+                    "\(formattedArea(summary.floorArea)) أرضيات • \(formattedArea(summary.netWallArea)) صافي حوائط"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+                Label(
+                    "ملف المسح غير متاح",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func locationPath(
+        for itemID: UUID?,
+        in project: SurveyProject
+    ) -> String {
+        var names: [String] = []
+        var currentID = itemID
+        var visited: Set<UUID> = []
+        while let id = currentID,
+              !visited.contains(id),
+              let item = project.item(id: id) {
+            visited.insert(id)
+            names.append(item.name)
+            currentID = item.parentID
+        }
+        return names.reversed().joined(separator: " ← ")
+    }
+
+    private func setIncluded(_ included: Bool, scanID: UUID) {
+        do {
+            try store.setScanIncludedInTakeoff(
+                projectID: projectID,
+                scanID: scanID,
+                included: included
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func takeoffAreaRow(
+        _ title: String,
+        value: Float,
+        image: String
+    ) -> some View {
+        LabeledContent {
+            Text(formattedArea(value))
+                .monospacedDigit()
+        } label: {
+            Label(title, systemImage: image)
+        }
+    }
+}
+
+struct ScanTakeoffDetailView: View {
+    let summary: RoomTakeoffSummary
+
+    var body: some View {
+        List {
+            Section("ملخص الغرفة") {
+                areaRow("الأرضيات", value: summary.floorArea)
+                areaRow("الأسقف", value: summary.ceilingArea)
+                areaRow("الحوائط قبل الخصم", value: summary.grossWallArea)
+                areaRow(
+                    "الفتحات المخصومة",
+                    value: summary.deductedOpeningArea
+                )
+                areaRow("صافي الحوائط", value: summary.netWallArea)
+            }
+
+            Section("الأرضيات والأسقف") {
+                if summary.floors.isEmpty {
+                    Label(
+                        "لم يكتشف RoomPlan سطح أرضية صالحًا للحساب.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.orange)
+                } else {
+                    ForEach(summary.floors) { floor in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("أرضية \(floorNumber(floor.id))")
+                                .font(.headline)
+                            Text(
+                                "\(formattedLength(floor.width)) × \(formattedLength(floor.depth)) = \(formattedArea(floor.area))"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
+            Section("تفاصيل الحوائط") {
+                ForEach(summary.walls) { wall in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text("حائط \(wallNumber(wall.id))")
+                                .font(.headline)
+                            Spacer()
+                            Text(formattedArea(wall.netArea))
+                                .font(.headline.monospacedDigit())
+                        }
+                        Text(
+                            "\(formattedLength(wall.width)) × \(formattedLength(wall.height)) = \(formattedArea(wall.grossArea))"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        if wall.openingCount > 0 {
+                            Text(
+                                "خصم \(wall.openingCount) فتحة: \(formattedArea(wall.deductedOpeningArea))"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+
+            Section("الأبواب والشبابيك") {
+                if summary.openings.isEmpty {
+                    Text("لا توجد فتحات مسجلة.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(summary.openings) { opening in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(opening.title)
+                                Text(
+                                    "\(formattedLength(opening.width)) × \(formattedLength(opening.height))"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(formattedArea(opening.area))
+                                .monospacedDigit()
+                            if opening.wallID == nil {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Section("الكهرباء") {
+                if summary.electrical.isEmpty
+                    && summary.ceilingLightCount == 0 {
+                    Text("لا توجد عناصر كهربائية.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(summary.electrical) { line in
+                        HStack {
+                            Label(
+                                line.type.title,
+                                systemImage: line.type.systemImage
+                            )
+                            Spacer()
+                            Text("\(line.count) • \(line.status.title)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if summary.manualCeilingLightCount > 0 {
+                        LabeledContent(
+                            "إضاءة سقف يدوية",
+                            value: "\(summary.manualCeilingLightCount)"
+                        )
+                    }
+                    if summary.automaticCeilingLightCount > 0 {
+                        LabeledContent(
+                            "إضاءة سقف تلقائية",
+                            value: "\(summary.automaticCeilingLightCount)"
+                        )
+                    }
+                }
+            }
+
+            if summary.unassignedOpeningCount > 0 {
+                Section {
+                    Label(
+                        "\(summary.unassignedOpeningCount) فتحة لم ترتبط بحائط، ولذلك لم تُخصم من صافي الحوائط.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.orange)
+                }
+            }
+        }
+        .navigationTitle(summary.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func floorNumber(_ id: UUID) -> Int {
+        (summary.floors.firstIndex { $0.id == id } ?? 0) + 1
+    }
+
+    private func wallNumber(_ id: UUID) -> Int {
+        (summary.walls.firstIndex { $0.id == id } ?? 0) + 1
+    }
+
+    private func areaRow(_ title: String, value: Float) -> some View {
+        LabeledContent(title, value: formattedArea(value))
+    }
+}
+
+private func formattedArea(_ squareMeters: Float) -> String {
+    String(format: "%.2f م²", squareMeters)
+}
+
+private func formattedLength(_ meters: Float) -> String {
+    String(format: "%.2f م", meters)
 }
 
 private struct ProjectArchiveView: View {

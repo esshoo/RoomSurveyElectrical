@@ -197,7 +197,8 @@ enum WorkspaceRepository {
                     ScanReference(
                         roomProject: copiedRoom,
                         parentID: scan.parentID.flatMap { itemIDMap[$0] },
-                        isArchived: scan.isArchived
+                        isArchived: scan.isArchived,
+                        isIncludedInTakeoff: scan.isIncludedInTakeoff
                     )
                 )
             }
@@ -294,7 +295,8 @@ enum WorkspaceRepository {
                 copiedScans.append(
                     ScanReference(
                         roomProject: copiedRoom,
-                        parentID: scan.parentID.flatMap { itemIDMap[$0] }
+                        parentID: scan.parentID.flatMap { itemIDMap[$0] },
+                        isIncludedInTakeoff: scan.isIncludedInTakeoff
                     )
                 )
             }
@@ -396,7 +398,11 @@ enum WorkspaceRepository {
         }
         let copy = try ProjectRepository.duplicate(projectID: scanID)
         project.scans.append(
-            ScanReference(roomProject: copy, parentID: source.parentID)
+            ScanReference(
+                roomProject: copy,
+                parentID: source.parentID,
+                isIncludedInTakeoff: false
+            )
         )
         project.updatedAt = Date()
         try save(project)
@@ -432,6 +438,23 @@ enum WorkspaceRepository {
             throw RepositoryError.projectNotFound
         }
         project.scans[index].isArchived = archived
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func setScanIncludedInTakeoff(
+        projectID: UUID,
+        scanID: UUID,
+        included: Bool
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID),
+              let index = project.scans.firstIndex(where: {
+                  $0.id == scanID
+              }) else {
+            throw RepositoryError.projectNotFound
+        }
+        project.scans[index].isIncludedInTakeoff = included
         project.updatedAt = Date()
         try save(project)
         return project
@@ -666,6 +689,19 @@ final class ProjectStore: ObservableObject {
             projectID: projectID,
             scanID: scanID,
             archived: archived
+        )
+        reload()
+    }
+
+    func setScanIncludedInTakeoff(
+        projectID: UUID,
+        scanID: UUID,
+        included: Bool
+    ) throws {
+        _ = try WorkspaceRepository.setScanIncludedInTakeoff(
+            projectID: projectID,
+            scanID: scanID,
+            included: included
         )
         reload()
     }

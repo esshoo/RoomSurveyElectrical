@@ -196,7 +196,7 @@ struct WallSnapshot: Codable, Identifiable, Equatable {
 }
 
 struct SurfaceSnapshot: Codable, Identifiable, Equatable {
-    enum Kind: String, Codable {
+    enum Kind: String, Codable, Hashable {
         case door
         case window
         case opening
@@ -552,6 +552,190 @@ struct BOQLine: Identifiable {
     let status: PlacementStatus
     let count: Int
     var id: String { "\(type.rawValue)-\(status.rawValue)" }
+}
+
+struct FloorTakeoffLine: Identifiable, Equatable {
+    let id: UUID
+    let width: Float
+    let depth: Float
+
+    var area: Float { width * depth }
+}
+
+struct OpeningTakeoffLine: Identifiable, Equatable {
+    let id: UUID
+    let kind: SurfaceSnapshot.Kind
+    let width: Float
+    let height: Float
+    let wallID: UUID?
+
+    var area: Float { width * height }
+
+    var title: String {
+        switch kind {
+        case .door: "باب"
+        case .window: "شباك"
+        case .opening: "فتحة"
+        }
+    }
+}
+
+struct WallTakeoffLine: Identifiable, Equatable {
+    let id: UUID
+    let width: Float
+    let height: Float
+    let openingArea: Float
+    let openingCount: Int
+
+    var grossArea: Float { width * height }
+    var deductedOpeningArea: Float { min(max(openingArea, 0), grossArea) }
+    var netArea: Float { max(0, grossArea - deductedOpeningArea) }
+}
+
+struct ElectricalTakeoffLine: Identifiable, Equatable {
+    let type: ElectricalDeviceType
+    let status: PlacementStatus
+    let count: Int
+
+    var id: String { "\(type.rawValue)-\(status.rawValue)" }
+}
+
+struct RoomTakeoffSummary: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let floors: [FloorTakeoffLine]
+    let openings: [OpeningTakeoffLine]
+    let walls: [WallTakeoffLine]
+    let electrical: [ElectricalTakeoffLine]
+    let manualCeilingLightCount: Int
+    let automaticCeilingLightCount: Int
+
+    init(project: RoomProject) {
+        id = project.id
+        name = project.name
+        floors = (project.floors ?? []).map {
+            FloorTakeoffLine(
+                id: $0.id,
+                width: $0.width,
+                depth: $0.depth
+            )
+        }
+
+        var wallAssignments: [UUID: UUID] = [:]
+        for surface in project.surfaces {
+            let bestMatch = project.walls.compactMap {
+                wall -> (wallID: UUID, distance: Float)? in
+                let localCenter = simd_mul(
+                    simd_inverse(wall.matrix),
+                    surface.matrix.columns.3
+                )
+                let horizontalLimit = wall.width / 2 + surface.width / 2
+                let verticalLimit = wall.height / 2 + surface.height / 2
+                guard abs(localCenter.x) <= horizontalLimit,
+                      abs(localCenter.y) <= verticalLimit,
+                      abs(localCenter.z) <= 0.45 else {
+                    return nil
+                }
+                return (wall.id, abs(localCenter.z))
+            }
+            .min { $0.distance < $1.distance }
+
+            if let wallID = bestMatch?.wallID {
+                wallAssignments[surface.id] = wallID
+            }
+        }
+
+        openings = project.surfaces.map {
+            OpeningTakeoffLine(
+                id: $0.id,
+                kind: $0.kind,
+                width: $0.width,
+                height: $0.height,
+                wallID: wallAssignments[$0.id]
+            )
+        }
+
+        walls = project.walls.map { wall in
+            let wallOpenings = openings.filter { $0.wallID == wall.id }
+            return WallTakeoffLine(
+                id: wall.id,
+                width: wall.width,
+                height: wall.height,
+                openingArea: wallOpenings.reduce(0) { $0 + $1.area },
+                openingCount: wallOpenings.count
+            )
+        }
+
+        electrical = ElectricalDeviceType.allCases.flatMap { type in
+            PlacementStatus.allCases.compactMap { status in
+                let count = project.points.filter {
+                    $0.type == type && $0.status == status
+                }.count
+                return count == 0
+                    ? nil
+                    : ElectricalTakeoffLine(
+                        type: type,
+                        status: status,
+                        count: count
+                    )
+            }
+        }
+        manualCeilingLightCount = (project.ceilingLights ?? []).filter {
+            $0.placementMode == .manual
+        }.count
+        automaticCeilingLightCount = (project.ceilingLights ?? []).filter {
+            $0.placementMode == .automatic
+        }.count
+    }
+
+    var floorArea: Float { floors.reduce(0) { $0 + $1.area } }
+    var ceilingArea: Float { floorArea }
+    var grossWallArea: Float { walls.reduce(0) { $0 + $1.grossArea } }
+    var deductedOpeningArea: Float {
+        walls.reduce(0) { $0 + $1.deductedOpeningArea }
+    }
+    var netWallArea: Float { walls.reduce(0) { $0 + $1.netArea } }
+    var totalOpeningArea: Float { openings.reduce(0) { $0 + $1.area } }
+    var doorCount: Int { openings.filter { $0.kind == .door }.count }
+    var windowCount: Int { openings.filter { $0.kind == .window }.count }
+    var architecturalOpeningCount: Int {
+        openings.filter { $0.kind == .opening }.count
+    }
+    var unassignedOpeningCount: Int {
+        openings.filter { $0.wallID == nil }.count
+    }
+    var electricalPointCount: Int {
+        electrical.reduce(0) { $0 + $1.count }
+    }
+    var ceilingLightCount: Int {
+        manualCeilingLightCount + automaticCeilingLightCount
+    }
+}
+
+struct ProjectTakeoffSummary: Equatable {
+    let rooms: [RoomTakeoffSummary]
+
+    var floorArea: Float { rooms.reduce(0) { $0 + $1.floorArea } }
+    var ceilingArea: Float { rooms.reduce(0) { $0 + $1.ceilingArea } }
+    var grossWallArea: Float { rooms.reduce(0) { $0 + $1.grossWallArea } }
+    var deductedOpeningArea: Float {
+        rooms.reduce(0) { $0 + $1.deductedOpeningArea }
+    }
+    var netWallArea: Float { rooms.reduce(0) { $0 + $1.netWallArea } }
+    var totalOpeningArea: Float {
+        rooms.reduce(0) { $0 + $1.totalOpeningArea }
+    }
+    var doorCount: Int { rooms.reduce(0) { $0 + $1.doorCount } }
+    var windowCount: Int { rooms.reduce(0) { $0 + $1.windowCount } }
+    var architecturalOpeningCount: Int {
+        rooms.reduce(0) { $0 + $1.architecturalOpeningCount }
+    }
+    var electricalPointCount: Int {
+        rooms.reduce(0) { $0 + $1.electricalPointCount }
+    }
+    var ceilingLightCount: Int {
+        rooms.reduce(0) { $0 + $1.ceilingLightCount }
+    }
 }
 
 struct WallTap: Identifiable {
