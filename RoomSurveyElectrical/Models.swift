@@ -304,6 +304,97 @@ struct RoomObjectSnapshot: Codable, Identifiable, Equatable {
     }
 }
 
+enum CeilingLightPlacementMode: String, Codable, Equatable {
+    case manual
+    case automatic
+}
+
+struct CeilingLight: Codable, Identifiable, Equatable {
+    let id: UUID
+    var layoutID: UUID?
+    var placementMode: CeilingLightPlacementMode
+    var worldPosition: [Float]
+    var colorHex: String?
+    var brightness: Float
+    var diameterMeters: Float
+
+    init(
+        id: UUID = UUID(),
+        layoutID: UUID? = nil,
+        placementMode: CeilingLightPlacementMode,
+        worldPosition: [Float],
+        colorHex: String? = "#FFCC00",
+        brightness: Float = 1,
+        diameterMeters: Float = 0.08
+    ) {
+        self.id = id
+        self.layoutID = layoutID
+        self.placementMode = placementMode
+        self.worldPosition = worldPosition
+        self.colorHex = colorHex
+        self.brightness = min(max(brightness, 0), 1)
+        self.diameterMeters = min(max(diameterMeters, 0.02), 0.20)
+    }
+}
+
+struct CeilingLightLayout: Codable, Identifiable, Equatable {
+    let id: UUID
+    var centerX: Float
+    var centerZ: Float
+    var lengthAxisX: Float
+    var lengthAxisZ: Float
+    var widthAxisX: Float
+    var widthAxisZ: Float
+    var lengthMeters: Float
+    var widthMeters: Float
+    var ceilingHeight: Float
+    var cornerOffsetMeters: Float
+    var countAlongLength: Int
+    var countAlongWidth: Int
+    var cornersOnly: Bool
+    var colorHex: String?
+    var brightness: Float
+    var diameterMeters: Float
+
+    init(
+        id: UUID = UUID(),
+        centerX: Float,
+        centerZ: Float,
+        lengthAxisX: Float,
+        lengthAxisZ: Float,
+        widthAxisX: Float,
+        widthAxisZ: Float,
+        lengthMeters: Float,
+        widthMeters: Float,
+        ceilingHeight: Float,
+        cornerOffsetMeters: Float = 0.30,
+        countAlongLength: Int = 3,
+        countAlongWidth: Int = 2,
+        cornersOnly: Bool = false,
+        colorHex: String? = "#FFCC00",
+        brightness: Float = 1,
+        diameterMeters: Float = 0.08
+    ) {
+        self.id = id
+        self.centerX = centerX
+        self.centerZ = centerZ
+        self.lengthAxisX = lengthAxisX
+        self.lengthAxisZ = lengthAxisZ
+        self.widthAxisX = widthAxisX
+        self.widthAxisZ = widthAxisZ
+        self.lengthMeters = max(lengthMeters, 0.10)
+        self.widthMeters = max(widthMeters, 0.10)
+        self.ceilingHeight = ceilingHeight
+        self.cornerOffsetMeters = max(cornerOffsetMeters, 0)
+        self.countAlongLength = min(max(countAlongLength, 1), 20)
+        self.countAlongWidth = min(max(countAlongWidth, 1), 20)
+        self.cornersOnly = cornersOnly
+        self.colorHex = colorHex
+        self.brightness = min(max(brightness, 0), 1)
+        self.diameterMeters = min(max(diameterMeters, 0.02), 0.20)
+    }
+}
+
 struct RoomProject: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
@@ -317,11 +408,14 @@ struct RoomProject: Codable, Identifiable, Equatable {
     let rawJSONFile: String?
     let usdzFile: String
     var electricalSettings: ElectricalPlacementSettings?
+    var ceilingLights: [CeilingLight]? = nil
+    var ceilingLightLayouts: [CeilingLightLayout]? = nil
 
     var wallCount: Int { walls.count }
     var doorCount: Int { surfaces.filter { $0.kind == .door }.count }
     var windowCount: Int { surfaces.filter { $0.kind == .window }.count }
     var furnitureCount: Int { objects?.count ?? 0 }
+    var ceilingLightCount: Int { ceilingLights?.count ?? 0 }
 
     var boq: [BOQLine] {
         ElectricalDeviceType.allCases.flatMap { type in
@@ -348,9 +442,14 @@ extension RoomProject {
                         && electricalTypesCanMerge(points[$0].type, point.type)
                         && abs(points[$0].localX - point.localX) <= mergeDistance
                 })
-                .min(by: {
-                    abs(points[$0].localX - point.localX)
-                        < abs(points[$1].localX - point.localX)
+                .min(by: { firstIndex, secondIndex in
+                    let firstDistance = abs(
+                        points[firstIndex].localX - point.localX
+                    )
+                    let secondDistance = abs(
+                        points[secondIndex].localX - point.localX
+                    )
+                    return firstDistance < secondDistance
                 }) else {
             points.append(point)
             return false

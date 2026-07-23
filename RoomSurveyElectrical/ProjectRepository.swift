@@ -242,7 +242,9 @@ enum ProjectRepository {
             processedJSONFile: source.processedJSONFile,
             rawJSONFile: source.rawJSONFile,
             usdzFile: source.usdzFile,
-            electricalSettings: source.electricalSettings
+            electricalSettings: source.electricalSettings,
+            ceilingLights: source.ceilingLights,
+            ceilingLightLayouts: source.ceilingLightLayouts
         )
         try save(copy)
         return copy

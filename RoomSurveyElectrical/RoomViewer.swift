@@ -18,7 +18,9 @@ struct ViewerLayerVisibility: Equatable {
     var openings = true
     var furniture = true
     var electrical = true
+    var ceilingLighting = true
     var dimensions = true
+    var electricalDimensions = false
 }
 
 struct RoomViewerView: View {
@@ -184,9 +186,15 @@ struct RoomViewerView: View {
                 Toggle(isOn: $layers.electrical) {
                     Label("الكهرباء", systemImage: "bolt.circle.fill")
                 }
+                Toggle(isOn: $layers.ceilingLighting) {
+                    Label("إضاءة السقف", systemImage: "light.recessed")
+                }
                 if mode == .plan2D {
                     Toggle(isOn: $layers.dimensions) {
                         Label("الأبعاد", systemImage: "ruler.fill")
+                    }
+                    Toggle(isOn: $layers.electricalDimensions) {
+                        Label("أبعاد الكهرباء", systemImage: "ruler")
                     }
                 }
             } label: {
@@ -346,6 +354,7 @@ private enum Plan2DEditTool: String, Identifiable {
     case singleSwitch
     case socket
     case wallLight
+    case ceilingLightManual
 
     var id: String { rawValue }
 
@@ -356,6 +365,7 @@ private enum Plan2DEditTool: String, Identifiable {
         case .singleSwitch: "مفتاح مفرد"
         case .socket: "فيش كهرباء"
         case .wallLight: "إضاءة جدارية"
+        case .ceilingLightManual: "إضاءة سقف يدوية"
         }
     }
 
@@ -366,6 +376,7 @@ private enum Plan2DEditTool: String, Identifiable {
         case .singleSwitch: ElectricalDeviceType.singleSwitch.systemImage
         case .socket: ElectricalDeviceType.socket.systemImage
         case .wallLight: ElectricalDeviceType.wallLight.systemImage
+        case .ceilingLightManual: "light.recessed"
         }
     }
 
@@ -374,7 +385,16 @@ private enum Plan2DEditTool: String, Identifiable {
         case .singleSwitch: .singleSwitch
         case .socket: .socket
         case .wallLight: .wallLight
-        case .door, .window: nil
+        case .door, .window, .ceilingLightManual: nil
+        }
+    }
+
+    var placementInstruction: String {
+        switch self {
+        case .ceilingLightManual:
+            "اضغط داخل السقف لإضافة \(title)"
+        default:
+            "اضغط قرب الحائط لإضافة \(title)"
         }
     }
 }
@@ -382,16 +402,20 @@ private enum Plan2DEditTool: String, Identifiable {
 private enum Plan2DAddition {
     case surface(UUID)
     case electricalPoint(UUID)
+    case ceilingLight(UUID)
+    case ceilingLightLayout(UUID)
 }
 
 private enum Plan2DElementSelection: Identifiable, Equatable {
     case surface(UUID)
     case electricalPoint(UUID)
+    case ceilingLight(UUID)
 
     var id: String {
         switch self {
         case .surface(let id): "surface-\(id.uuidString)"
         case .electricalPoint(let id): "point-\(id.uuidString)"
+        case .ceilingLight(let id): "ceiling-light-\(id.uuidString)"
         }
     }
 }
@@ -421,6 +445,20 @@ private enum Plan2DSmartPrompt {
     case alignSocket(switchPointID: UUID, distance: Float)
 }
 
+private struct CeilingReference {
+    let center: SIMD2<Float>
+    let lengthAxis: SIMD2<Float>
+    let widthAxis: SIMD2<Float>
+    let length: Float
+    let width: Float
+    let ceilingHeight: Float
+}
+
+private struct CeilingLightSnapResult {
+    let point: SIMD2<Float>
+    let feedbackKey: String?
+}
+
 private struct Plan2DView: View {
     @Binding var project: RoomProject
     let layers: ViewerLayerVisibility
@@ -439,6 +477,8 @@ private struct Plan2DView: View {
     @State private var smartPrompt: Plan2DSmartPrompt?
     @State private var selectedElement: Plan2DElementSelection?
     @State private var draggedElement: Plan2DElementSelection?
+    @State private var editingAutomaticLayout: CeilingLightLayout?
+    @State private var activeAlignmentFeedbackKey: String?
 
     var body: some View {
         GeometryReader { geometry in
@@ -459,7 +499,7 @@ private struct Plan2DView: View {
                         if activeTool != nil {
                             placeActiveTool(at: value.location, viewSize: geometry.size)
                         } else {
-                            selectedElement = element(
+                            handleElementTap(
                                 at: value.location,
                                 viewSize: geometry.size
                             )
@@ -492,6 +532,20 @@ private struct Plan2DView: View {
         .sheet(item: $selectedElement) { selection in
             elementEditor(for: selection)
         }
+        .sheet(item: $editingAutomaticLayout) { layout in
+            AutomaticCeilingLightingEditor(
+                layout: layout,
+                isExisting: project.ceilingLightLayouts?.contains {
+                    $0.id == layout.id
+                } == true,
+                onSave: { updatedLayout in
+                    saveAutomaticCeilingLayout(updatedLayout)
+                },
+                onDelete: {
+                    deleteAutomaticCeilingLayout(layout.id)
+                }
+            )
+        }
     }
 
     private var controlsOverlay: some View {
@@ -520,7 +574,7 @@ private struct Plan2DView: View {
             if let tool = activeTool {
                 HStack(spacing: 8) {
                     Label(
-                        "اضغط قرب الحائط لإضافة \(tool.title)",
+                        tool.placementInstruction,
                         systemImage: tool.systemImage
                     )
                     .font(.caption.weight(.semibold))
@@ -581,6 +635,15 @@ private struct Plan2DView: View {
                 editToolButton(.singleSwitch)
                 editToolButton(.socket)
                 editToolButton(.wallLight)
+            }
+
+            Section("إضاءة السقف") {
+                Button {
+                    beginAutomaticCeilingLighting()
+                } label: {
+                    Label("إضافة تلقائية", systemImage: "square.grid.3x3.fill")
+                }
+                editToolButton(.ceilingLightManual)
             }
         } label: {
             Label("إضافة", systemImage: "plus")
@@ -706,7 +769,50 @@ private struct Plan2DView: View {
                     systemImage: "exclamationmark.triangle"
                 )
             }
+        case .ceilingLight(let id):
+            if let light = project.ceilingLights?.first(where: { $0.id == id }) {
+                ManualCeilingLightEditor(
+                    light: light,
+                    onSave: { colorHex, brightness, diameter in
+                        updateManualCeilingLight(
+                            id: id,
+                            colorHex: colorHex,
+                            brightness: brightness,
+                            diameter: diameter
+                        )
+                    },
+                    onDelete: {
+                        deleteElement(selection)
+                    }
+                )
+            } else {
+                ContentUnavailableView(
+                    "العنصر غير متاح",
+                    systemImage: "exclamationmark.triangle"
+                )
+            }
         }
+    }
+
+    private func handleElementTap(at location: CGPoint, viewSize: CGSize) {
+        guard let selection = element(at: location, viewSize: viewSize) else {
+            selectedElement = nil
+            return
+        }
+
+        if case .ceilingLight(let id) = selection,
+           let light = project.ceilingLights?.first(where: { $0.id == id }),
+           light.placementMode == .automatic,
+           let layoutID = light.layoutID,
+           let layout = project.ceilingLightLayouts?.first(where: {
+               $0.id == layoutID
+           }) {
+            selectedElement = nil
+            editingAutomaticLayout = layout
+            return
+        }
+
+        selectedElement = selection
     }
 
     private func elementMoveGesture(viewSize: CGSize) -> some Gesture {
@@ -724,7 +830,7 @@ private struct Plan2DView: View {
                 case .second(true, let dragValue):
                     guard let dragValue else { return }
                     if draggedElement == nil {
-                        draggedElement = element(
+                        draggedElement = movableElement(
                             at: dragValue.startLocation,
                             viewSize: viewSize
                         )
@@ -747,7 +853,24 @@ private struct Plan2DView: View {
                     onProjectChanged()
                 }
                 draggedElement = nil
+                activeAlignmentFeedbackKey = nil
             }
+    }
+
+    private func movableElement(
+        at screenPoint: CGPoint,
+        viewSize: CGSize
+    ) -> Plan2DElementSelection? {
+        guard let selection = element(at: screenPoint, viewSize: viewSize) else {
+            return nil
+        }
+        if case .ceilingLight(let id) = selection,
+           let light = project.ceilingLights?.first(where: { $0.id == id }),
+           light.placementMode == .automatic {
+            feedbackText = "حرّك الإضاءة التلقائية من جدول التوزيع."
+            return nil
+        }
+        return selection
     }
 
     private func element(
@@ -757,22 +880,38 @@ private struct Plan2DView: View {
         let projection = PlanProjection(project: project, size: viewSize)
         var candidates: [(selection: Plan2DElementSelection, distance: CGFloat)] = []
 
-        for surface in project.surfaces where isEditableSurface(surface) {
-            let endpoints = surfacePlanEndpoints(surface)
-            let start = transformedCanvasPoint(projection.map(endpoints.0), size: viewSize)
-            let end = transformedCanvasPoint(projection.map(endpoints.1), size: viewSize)
-            let distance = distanceFromPoint(screenPoint, toSegmentFrom: start, to: end)
-            if distance <= 26 {
-                candidates.append((.surface(surface.id), distance))
+        if layers.openings {
+            for surface in project.surfaces where isEditableSurface(surface) {
+                let endpoints = surfacePlanEndpoints(surface)
+                let start = transformedCanvasPoint(projection.map(endpoints.0), size: viewSize)
+                let end = transformedCanvasPoint(projection.map(endpoints.1), size: viewSize)
+                let distance = distanceFromPoint(screenPoint, toSegmentFrom: start, to: end)
+                if distance <= 26 {
+                    candidates.append((.surface(surface.id), distance))
+                }
             }
         }
 
-        for point in project.points where point.worldPosition.count >= 3 {
-            let planPoint = SIMD2(point.worldPosition[0], point.worldPosition[2])
-            let center = transformedCanvasPoint(projection.map(planPoint), size: viewSize)
-            let distance = hypot(screenPoint.x - center.x, screenPoint.y - center.y)
-            if distance <= 28 {
-                candidates.append((.electricalPoint(point.id), distance))
+        if layers.electrical {
+            for point in project.points where point.worldPosition.count >= 3 {
+                let planPoint = SIMD2(point.worldPosition[0], point.worldPosition[2])
+                let center = transformedCanvasPoint(projection.map(planPoint), size: viewSize)
+                let distance = hypot(screenPoint.x - center.x, screenPoint.y - center.y)
+                if distance <= 28 {
+                    candidates.append((.electricalPoint(point.id), distance))
+                }
+            }
+        }
+
+        if layers.ceilingLighting {
+            for light in (project.ceilingLights ?? [])
+                where light.worldPosition.count >= 3 {
+                let planPoint = SIMD2(light.worldPosition[0], light.worldPosition[2])
+                let center = transformedCanvasPoint(projection.map(planPoint), size: viewSize)
+                let distance = hypot(screenPoint.x - center.x, screenPoint.y - center.y)
+                if distance <= 30 {
+                    candidates.append((.ceilingLight(light.id), distance))
+                }
             }
         }
 
@@ -848,6 +987,45 @@ private struct Plan2DView: View {
                         distanceToNearestDoorEdge(localX: localX, wall: wall)
                 }
             }
+
+        case .ceilingLight(let id):
+            guard var lights = project.ceilingLights,
+                  let index = lights.firstIndex(where: { $0.id == id }),
+                  lights[index].placementMode == .manual,
+                  lights[index].worldPosition.count >= 3,
+                  let requestedPoint = worldPlanPoint(
+                      at: screenPoint,
+                      viewSize: viewSize
+                  ) else {
+                return
+            }
+
+            let currentPoint = SIMD2(
+                lights[index].worldPosition[0],
+                lights[index].worldPosition[2]
+            )
+            guard let reference = ceilingReference(containing: currentPoint)
+                    ?? primaryCeilingReference() else {
+                return
+            }
+
+            let clampedPoint = clampToCeiling(requestedPoint, reference: reference)
+            let snapResult = snapCeilingLight(
+                clampedPoint,
+                movingLightID: id,
+                reference: reference
+            )
+            if let feedbackKey = snapResult.feedbackKey,
+               feedbackKey != activeAlignmentFeedbackKey {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            }
+            activeAlignmentFeedbackKey = snapResult.feedbackKey
+            lights[index].worldPosition = [
+                snapResult.point.x,
+                reference.ceilingHeight - 0.03,
+                snapResult.point.y
+            ]
+            project.ceilingLights = lights
         }
     }
 
@@ -912,6 +1090,25 @@ private struct Plan2DView: View {
         onProjectChanged()
     }
 
+    private func updateManualCeilingLight(
+        id: UUID,
+        colorHex: String?,
+        brightness: Float,
+        diameter: Float
+    ) {
+        guard var lights = project.ceilingLights,
+              let index = lights.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        lights[index].colorHex = colorHex
+        lights[index].brightness = min(max(brightness, 0), 1)
+        lights[index].diameterMeters = min(max(diameter, 0.02), 0.20)
+        project.ceilingLights = lights
+        selectedElement = nil
+        feedbackText = "تم حفظ خصائص إضاءة السقف."
+        onProjectChanged()
+    }
+
     private func deleteElement(_ selection: Plan2DElementSelection) {
         switch selection {
         case .surface(let id):
@@ -919,6 +1116,17 @@ private struct Plan2DView: View {
         case .electricalPoint(let id):
             project.points.removeAll { $0.id == id }
             project.normalizeElectricalGroups()
+        case .ceilingLight(let id):
+            guard let light = project.ceilingLights?.first(where: {
+                $0.id == id
+            }) else {
+                break
+            }
+            if let layoutID = light.layoutID {
+                deleteAutomaticCeilingLayout(layoutID)
+                return
+            }
+            project.ceilingLights?.removeAll { $0.id == id }
         }
         selectedElement = nil
         feedbackText = "تم حذف العنصر."
@@ -1063,6 +1271,11 @@ private struct Plan2DView: View {
     private func placeActiveTool(at location: CGPoint, viewSize: CGSize) {
         guard let tool = activeTool else { return }
 
+        if tool == .ceilingLightManual {
+            addManualCeilingLight(at: location, viewSize: viewSize)
+            return
+        }
+
         guard let placement = nearestWallPlacement(at: location, viewSize: viewSize),
               placement.distance <= 44 else {
             feedbackText = "اضغط أقرب إلى خط الحائط."
@@ -1189,6 +1402,328 @@ private struct Plan2DView: View {
         electricalDraft = nil
         activeTool = nil
         feedbackText = "تم إلغاء الإضافة."
+    }
+
+    private func beginAutomaticCeilingLighting() {
+        guard let reference = primaryCeilingReference() else {
+            feedbackText = "تعذر تحديد مساحة السقف من المسح."
+            return
+        }
+        editingAutomaticLayout = CeilingLightLayout(
+            centerX: reference.center.x,
+            centerZ: reference.center.y,
+            lengthAxisX: reference.lengthAxis.x,
+            lengthAxisZ: reference.lengthAxis.y,
+            widthAxisX: reference.widthAxis.x,
+            widthAxisZ: reference.widthAxis.y,
+            lengthMeters: reference.length,
+            widthMeters: reference.width,
+            ceilingHeight: reference.ceilingHeight
+        )
+    }
+
+    private func saveAutomaticCeilingLayout(_ layout: CeilingLightLayout) {
+        var layouts = project.ceilingLightLayouts ?? []
+        let isNew = !layouts.contains { $0.id == layout.id }
+        if let index = layouts.firstIndex(where: { $0.id == layout.id }) {
+            layouts[index] = layout
+        } else {
+            layouts.append(layout)
+        }
+        project.ceilingLightLayouts = layouts
+
+        var lights = project.ceilingLights ?? []
+        lights.removeAll { $0.layoutID == layout.id }
+        lights.append(contentsOf: generatedLights(for: layout))
+        project.ceilingLights = lights
+
+        if isNew {
+            lastAddition = .ceilingLightLayout(layout.id)
+        }
+        editingAutomaticLayout = nil
+        feedbackText = "تم حفظ توزيع إضاءة السقف التلقائي."
+        onProjectChanged()
+    }
+
+    private func deleteAutomaticCeilingLayout(_ layoutID: UUID) {
+        project.ceilingLightLayouts?.removeAll { $0.id == layoutID }
+        project.ceilingLights?.removeAll { $0.layoutID == layoutID }
+        editingAutomaticLayout = nil
+        selectedElement = nil
+        feedbackText = "تم حذف مجموعة إضاءة السقف."
+        onProjectChanged()
+    }
+
+    private func generatedLights(for layout: CeilingLightLayout) -> [CeilingLight] {
+        let reference = ceilingReference(from: layout)
+        let maximumInset = max(
+            0,
+            min(reference.length, reference.width) / 2 - 0.02
+        )
+        let inset = min(max(layout.cornerOffsetMeters, 0), maximumInset)
+        let minimumLength = -reference.length / 2 + inset
+        let maximumLength = reference.length / 2 - inset
+        let minimumWidth = -reference.width / 2 + inset
+        let maximumWidth = reference.width / 2 - inset
+
+        let lengthPositions: [Float]
+        let widthPositions: [Float]
+        if layout.cornersOnly {
+            lengthPositions = uniqueCoordinates([minimumLength, maximumLength])
+            widthPositions = uniqueCoordinates([minimumWidth, maximumWidth])
+        } else {
+            lengthPositions = distributedCoordinates(
+                count: layout.countAlongLength,
+                minimum: minimumLength,
+                maximum: maximumLength
+            )
+            widthPositions = distributedCoordinates(
+                count: layout.countAlongWidth,
+                minimum: minimumWidth,
+                maximum: maximumWidth
+            )
+        }
+
+        var lights: [CeilingLight] = []
+        for lengthValue in lengthPositions {
+            for widthValue in widthPositions {
+                let point = reference.center
+                    + reference.lengthAxis * lengthValue
+                    + reference.widthAxis * widthValue
+                lights.append(
+                    CeilingLight(
+                        layoutID: layout.id,
+                        placementMode: .automatic,
+                        worldPosition: [
+                            point.x,
+                            reference.ceilingHeight - 0.03,
+                            point.y
+                        ],
+                        colorHex: layout.colorHex,
+                        brightness: layout.brightness,
+                        diameterMeters: layout.diameterMeters
+                    )
+                )
+            }
+        }
+        return lights
+    }
+
+    private func distributedCoordinates(
+        count requestedCount: Int,
+        minimum: Float,
+        maximum: Float
+    ) -> [Float] {
+        let count = min(max(requestedCount, 1), 20)
+        guard count > 1 else {
+            return [(minimum + maximum) / 2]
+        }
+        let step = (maximum - minimum) / Float(count - 1)
+        return (0..<count).map { minimum + Float($0) * step }
+    }
+
+    private func uniqueCoordinates(_ values: [Float]) -> [Float] {
+        var result: [Float] = []
+        for value in values where !result.contains(where: {
+            abs($0 - value) < 0.001
+        }) {
+            result.append(value)
+        }
+        return result
+    }
+
+    private func addManualCeilingLight(at location: CGPoint, viewSize: CGSize) {
+        guard let point = worldPlanPoint(at: location, viewSize: viewSize),
+              let reference = ceilingReference(containing: point) else {
+            feedbackText = "اضغط داخل حدود السقف لإضافة اللمبة."
+            return
+        }
+
+        let light = CeilingLight(
+            placementMode: .manual,
+            worldPosition: [
+                point.x,
+                reference.ceilingHeight - 0.03,
+                point.y
+            ]
+        )
+        var lights = project.ceilingLights ?? []
+        lights.append(light)
+        project.ceilingLights = lights
+        lastAddition = .ceilingLight(light.id)
+        activeTool = nil
+        feedbackText = "تمت إضافة إضاءة سقف يدوية."
+        onProjectChanged()
+    }
+
+    private func worldPlanPoint(
+        at screenPoint: CGPoint,
+        viewSize: CGSize
+    ) -> SIMD2<Float>? {
+        let transform = viewTransform(for: viewSize)
+        let canvasPoint = screenPoint.applying(transform.inverted())
+        return PlanProjection(project: project, size: viewSize).unmap(canvasPoint)
+    }
+
+    private func primaryCeilingReference() -> CeilingReference? {
+        ceilingReferences().max {
+            $0.length * $0.width < $1.length * $1.width
+        }
+    }
+
+    private func ceilingReference(containing point: SIMD2<Float>) -> CeilingReference? {
+        ceilingReferences().first {
+            ceilingContains(point, reference: $0, tolerance: 0.06)
+        }
+    }
+
+    private func ceilingReferences() -> [CeilingReference] {
+        let wallTop = project.walls.map {
+            $0.matrix.columns.3.y + $0.height / 2
+        }.max()
+
+        let floorReferences = (project.floors ?? []).map { floor in
+            CeilingReference(
+                center: planCenter(floor.matrix),
+                lengthAxis: normalizedPlanAxis(floor.matrix.columns.0),
+                widthAxis: normalizedPlanAxis(floor.matrix.columns.1),
+                length: floor.width,
+                width: floor.depth,
+                ceilingHeight: wallTop ?? floor.matrix.columns.3.y + 2.70
+            )
+        }
+        if !floorReferences.isEmpty {
+            return floorReferences
+        }
+
+        let endpoints = project.walls.flatMap { wall -> [SIMD2<Float>] in
+            let pair = wallPlanEndpoints(wall)
+            return [pair.0, pair.1]
+        }
+        guard let minimumX = endpoints.map(\.x).min(),
+              let maximumX = endpoints.map(\.x).max(),
+              let minimumZ = endpoints.map(\.y).min(),
+              let maximumZ = endpoints.map(\.y).max() else {
+            return []
+        }
+        return [
+            CeilingReference(
+                center: SIMD2(
+                    (minimumX + maximumX) / 2,
+                    (minimumZ + maximumZ) / 2
+                ),
+                lengthAxis: SIMD2(1, 0),
+                widthAxis: SIMD2(0, 1),
+                length: max(maximumX - minimumX, 0.10),
+                width: max(maximumZ - minimumZ, 0.10),
+                ceilingHeight: wallTop ?? 2.70
+            )
+        ]
+    }
+
+    private func ceilingReference(from layout: CeilingLightLayout) -> CeilingReference {
+        let rawLengthAxis = SIMD2(layout.lengthAxisX, layout.lengthAxisZ)
+        let rawWidthAxis = SIMD2(layout.widthAxisX, layout.widthAxisZ)
+        let lengthAxisLength = simd_length(rawLengthAxis)
+        let widthAxisLength = simd_length(rawWidthAxis)
+        return CeilingReference(
+            center: SIMD2(layout.centerX, layout.centerZ),
+            lengthAxis: lengthAxisLength > 0.0001
+                ? rawLengthAxis / lengthAxisLength
+                : SIMD2(1, 0),
+            widthAxis: widthAxisLength > 0.0001
+                ? rawWidthAxis / widthAxisLength
+                : SIMD2(0, 1),
+            length: layout.lengthMeters,
+            width: layout.widthMeters,
+            ceilingHeight: layout.ceilingHeight
+        )
+    }
+
+    private func ceilingContains(
+        _ point: SIMD2<Float>,
+        reference: CeilingReference,
+        tolerance: Float = 0
+    ) -> Bool {
+        let local = point - reference.center
+        let lengthValue = simd_dot(local, reference.lengthAxis)
+        let widthValue = simd_dot(local, reference.widthAxis)
+        return abs(lengthValue) <= reference.length / 2 + tolerance
+            && abs(widthValue) <= reference.width / 2 + tolerance
+    }
+
+    private func clampToCeiling(
+        _ point: SIMD2<Float>,
+        reference: CeilingReference
+    ) -> SIMD2<Float> {
+        let local = point - reference.center
+        let margin: Float = 0.02
+        let lengthValue = min(
+            max(
+                simd_dot(local, reference.lengthAxis),
+                -reference.length / 2 + margin
+            ),
+            reference.length / 2 - margin
+        )
+        let widthValue = min(
+            max(
+                simd_dot(local, reference.widthAxis),
+                -reference.width / 2 + margin
+            ),
+            reference.width / 2 - margin
+        )
+        return reference.center
+            + reference.lengthAxis * lengthValue
+            + reference.widthAxis * widthValue
+    }
+
+    private func snapCeilingLight(
+        _ point: SIMD2<Float>,
+        movingLightID: UUID,
+        reference: CeilingReference
+    ) -> CeilingLightSnapResult {
+        var local = point - reference.center
+        var lengthValue = simd_dot(local, reference.lengthAxis)
+        var widthValue = simd_dot(local, reference.widthAxis)
+        var bestLengthDifference = Float.greatestFiniteMagnitude
+        var bestWidthDifference = Float.greatestFiniteMagnitude
+        var feedbackParts: [String] = []
+        let snapTolerance: Float = 0.08
+
+        for light in (project.ceilingLights ?? [])
+            where light.id != movingLightID && light.worldPosition.count >= 3 {
+            let otherPoint = SIMD2(light.worldPosition[0], light.worldPosition[2])
+            local = otherPoint - reference.center
+            let otherLength = simd_dot(local, reference.lengthAxis)
+            let otherWidth = simd_dot(local, reference.widthAxis)
+            let lengthDifference = abs(lengthValue - otherLength)
+            let widthDifference = abs(widthValue - otherWidth)
+
+            if lengthDifference <= snapTolerance,
+               lengthDifference < bestLengthDifference {
+                lengthValue = otherLength
+                bestLengthDifference = lengthDifference
+                feedbackParts.removeAll { $0.hasPrefix("L") }
+                feedbackParts.append("L-\(light.id.uuidString)")
+            }
+            if widthDifference <= snapTolerance,
+               widthDifference < bestWidthDifference {
+                widthValue = otherWidth
+                bestWidthDifference = widthDifference
+                feedbackParts.removeAll { $0.hasPrefix("W") }
+                feedbackParts.append("W-\(light.id.uuidString)")
+            }
+        }
+
+        let snappedPoint = reference.center
+            + reference.lengthAxis * lengthValue
+            + reference.widthAxis * widthValue
+        return CeilingLightSnapResult(
+            point: clampToCeiling(snappedPoint, reference: reference),
+            feedbackKey: feedbackParts.isEmpty
+                ? nil
+                : feedbackParts.sorted().joined(separator: "|")
+        )
     }
 
     private func nearestWallPlacement(
@@ -1468,6 +2003,11 @@ private struct Plan2DView: View {
         case .electricalPoint(let id):
             project.points.removeAll { $0.id == id }
             project.normalizeElectricalGroups()
+        case .ceilingLight(let id):
+            project.ceilingLights?.removeAll { $0.id == id }
+        case .ceilingLightLayout(let id):
+            project.ceilingLightLayouts?.removeAll { $0.id == id }
+            project.ceilingLights?.removeAll { $0.layoutID == id }
         }
         self.lastAddition = nil
         feedbackText = "تم التراجع عن آخر إضافة."
@@ -1518,6 +2058,27 @@ private struct Plan2DView: View {
             for point in project.points {
                 drawElectricalPoint(point, context: &context, projection: projection)
             }
+        }
+
+        if layers.ceilingLighting {
+            for light in project.ceilingLights ?? [] {
+                drawCeilingLight(light, context: &context, projection: projection)
+            }
+        }
+
+        if layers.electricalDimensions {
+            drawAllElectricalDimensions(
+                context: &context,
+                projection: projection
+            )
+        }
+
+        if let draggedElement {
+            drawMovingElementDimensions(
+                draggedElement,
+                context: &context,
+                projection: projection
+            )
         }
     }
 
@@ -1678,6 +2239,268 @@ private struct Plan2DView: View {
             context.fill(Path(ellipseIn: rect), with: .color(color))
             context.stroke(Path(ellipseIn: rect), with: .color(.white), lineWidth: 1.5)
         }
+    }
+
+    private func drawCeilingLight(
+        _ light: CeilingLight,
+        context: inout GraphicsContext,
+        projection: PlanProjection
+    ) {
+        guard light.worldPosition.count >= 3 else { return }
+        let center = projection.map(
+            SIMD2(light.worldPosition[0], light.worldPosition[2])
+        )
+        let radius = max(
+            5,
+            projection.scaledLength(light.diameterMeters / 2)
+        )
+        let rect = CGRect(
+            x: center.x - radius,
+            y: center.y - radius,
+            width: radius * 2,
+            height: radius * 2
+        )
+        let color = Color(
+            uiColor: uiColor(hex: light.colorHex, fallback: .systemYellow)
+        )
+        let intensity = Double(min(max(light.brightness, 0), 1))
+        context.fill(
+            Path(ellipseIn: rect.insetBy(dx: -3, dy: -3)),
+            with: .color(color.opacity(0.12 + intensity * 0.20))
+        )
+        context.fill(
+            Path(ellipseIn: rect),
+            with: .color(color.opacity(0.45 + intensity * 0.55))
+        )
+        context.stroke(
+            Path(ellipseIn: rect),
+            with: .color(
+                light.placementMode == .automatic ? .blue : .white
+            ),
+            lineWidth: 1.5
+        )
+    }
+
+    private func drawAllElectricalDimensions(
+        context: inout GraphicsContext,
+        projection: PlanProjection
+    ) {
+        for point in project.points {
+            if let groupID = point.groupID,
+               project.points.first(where: { $0.groupID == groupID })?.id
+                    != point.id {
+                continue
+            }
+            guard let wall = project.walls.first(where: {
+                $0.id == point.wallID
+            }) else {
+                continue
+            }
+            drawWallEndDimensions(
+                wall: wall,
+                leftLocalX: point.localX,
+                rightLocalX: point.localX,
+                color: .purple.opacity(0.75),
+                context: &context,
+                projection: projection
+            )
+        }
+    }
+
+    private func drawMovingElementDimensions(
+        _ selection: Plan2DElementSelection,
+        context: inout GraphicsContext,
+        projection: PlanProjection
+    ) {
+        switch selection {
+        case .surface(let id):
+            guard let surface = project.surfaces.first(where: {
+                $0.id == id
+            }), let placement = wallPlacement(for: surface) else {
+                return
+            }
+            drawWallEndDimensions(
+                wall: placement.wall,
+                leftLocalX: placement.localX - surface.width / 2,
+                rightLocalX: placement.localX + surface.width / 2,
+                color: .orange,
+                context: &context,
+                projection: projection
+            )
+        case .electricalPoint(let id):
+            guard let point = project.points.first(where: {
+                $0.id == id
+            }), let wall = project.walls.first(where: {
+                $0.id == point.wallID
+            }) else {
+                return
+            }
+            drawWallEndDimensions(
+                wall: wall,
+                leftLocalX: point.localX,
+                rightLocalX: point.localX,
+                color: .orange,
+                context: &context,
+                projection: projection
+            )
+        case .ceilingLight(let id):
+            drawCeilingLightDistances(
+                lightID: id,
+                context: &context,
+                projection: projection
+            )
+        }
+    }
+
+    private func drawWallEndDimensions(
+        wall: WallSnapshot,
+        leftLocalX: Float,
+        rightLocalX: Float,
+        color: Color,
+        context: inout GraphicsContext,
+        projection: PlanProjection
+    ) {
+        let axis = normalizedPlanAxis(wall.matrix.columns.0)
+        let normal = SIMD2(-axis.y, axis.x) * 0.14
+        let wallCenter = planCenter(wall.matrix)
+        let startLocal = -wall.width / 2
+        let endLocal = wall.width / 2
+        let clampedLeft = min(max(leftLocalX, startLocal), endLocal)
+        let clampedRight = min(max(rightLocalX, startLocal), endLocal)
+
+        let startPoint = wallCenter + axis * startLocal + normal
+        let leftPoint = wallCenter + axis * clampedLeft + normal
+        let rightPoint = wallCenter + axis * clampedRight + normal
+        let endPoint = wallCenter + axis * endLocal + normal
+
+        drawMeasurementSegment(
+            from: startPoint,
+            to: leftPoint,
+            distance: max(0, clampedLeft - startLocal),
+            color: color,
+            context: &context,
+            projection: projection
+        )
+        drawMeasurementSegment(
+            from: rightPoint,
+            to: endPoint,
+            distance: max(0, endLocal - clampedRight),
+            color: color,
+            context: &context,
+            projection: projection
+        )
+    }
+
+    private func drawCeilingLightDistances(
+        lightID: UUID,
+        context: inout GraphicsContext,
+        projection: PlanProjection
+    ) {
+        guard let light = project.ceilingLights?.first(where: {
+            $0.id == lightID
+        }), light.worldPosition.count >= 3 else {
+            return
+        }
+        let point = SIMD2(light.worldPosition[0], light.worldPosition[2])
+
+        let wallMeasurements = project.walls.map { wall in
+            let endpoints = wallPlanEndpoints(wall)
+            let nearest = nearestPoint(
+                to: point,
+                segmentStart: endpoints.0,
+                segmentEnd: endpoints.1
+            )
+            return (
+                target: nearest,
+                distance: simd_distance(point, nearest)
+            )
+        }
+        .sorted { $0.distance < $1.distance }
+        .prefix(2)
+
+        for measurement in wallMeasurements {
+            drawMeasurementSegment(
+                from: point,
+                to: measurement.target,
+                distance: measurement.distance,
+                color: .orange,
+                context: &context,
+                projection: projection
+            )
+        }
+
+        let lightMeasurements = (project.ceilingLights ?? [])
+            .filter { $0.id != lightID && $0.worldPosition.count >= 3 }
+            .map { other -> (target: SIMD2<Float>, distance: Float) in
+                let target = SIMD2(
+                    other.worldPosition[0],
+                    other.worldPosition[2]
+                )
+                return (target, simd_distance(point, target))
+            }
+            .sorted { $0.distance < $1.distance }
+            .prefix(2)
+
+        for measurement in lightMeasurements {
+            drawMeasurementSegment(
+                from: point,
+                to: measurement.target,
+                distance: measurement.distance,
+                color: .yellow,
+                context: &context,
+                projection: projection
+            )
+        }
+    }
+
+    private func drawMeasurementSegment(
+        from start: SIMD2<Float>,
+        to end: SIMD2<Float>,
+        distance: Float,
+        color: Color,
+        context: inout GraphicsContext,
+        projection: PlanProjection
+    ) {
+        var path = Path()
+        path.move(to: projection.map(start))
+        path.addLine(to: projection.map(end))
+        context.stroke(
+            path,
+            with: .color(color),
+            style: StrokeStyle(lineWidth: 1.2, dash: [5, 3])
+        )
+        let midpoint = (start + end) / 2
+        context.draw(
+            Text(formattedPlanDistance(distance))
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(color),
+            at: projection.map(midpoint),
+            anchor: .bottom
+        )
+    }
+
+    private func nearestPoint(
+        to point: SIMD2<Float>,
+        segmentStart: SIMD2<Float>,
+        segmentEnd: SIMD2<Float>
+    ) -> SIMD2<Float> {
+        let segment = segmentEnd - segmentStart
+        let lengthSquared = simd_length_squared(segment)
+        guard lengthSquared > 0.0001 else {
+            return segmentStart
+        }
+        let progress = min(
+            max(simd_dot(point - segmentStart, segment) / lengthSquared, 0),
+            1
+        )
+        return segmentStart + segment * progress
+    }
+
+    private func formattedPlanDistance(_ meters: Float) -> String {
+        if meters < 1 {
+            return String(format: "%.0f سم", meters * 100)
+        }
+        return String(format: "%.2f م", meters)
     }
 }
 
@@ -1877,6 +2700,299 @@ private struct Plan2DElectricalEditor: View {
     }
 }
 
+private struct ManualCeilingLightEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var color: ElementColorOption
+    @State private var brightnessPercent: Double
+    @State private var diameterCentimeters: Double
+    @State private var showDeleteConfirmation = false
+
+    let light: CeilingLight
+    let onSave: (String?, Float, Float) -> Void
+    let onDelete: () -> Void
+
+    init(
+        light: CeilingLight,
+        onSave: @escaping (String?, Float, Float) -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.light = light
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _color = State(
+            initialValue: ElementColorOption(hexValue: light.colorHex)
+        )
+        _brightnessPercent = State(
+            initialValue: Double(light.brightness * 100)
+        )
+        _diameterCentimeters = State(
+            initialValue: Double(light.diameterMeters * 100)
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("المظهر") {
+                    ColorOptionPicker(selection: $color)
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent(
+                            "شدة الإضاءة",
+                            value: "\(Int(brightnessPercent.rounded()))%"
+                        )
+                        Slider(
+                            value: $brightnessPercent,
+                            in: 0...100,
+                            step: 5
+                        )
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent(
+                            "قطر اللمبة الدائرية",
+                            value: "\(Int(diameterCentimeters.rounded())) سم"
+                        )
+                        Slider(
+                            value: $diameterCentimeters,
+                            in: 2...20,
+                            step: 1
+                        )
+                    }
+                }
+
+                Section {
+                    Button("حذف اللمبة", role: .destructive) {
+                        showDeleteConfirmation = true
+                    }
+                }
+            }
+            .navigationTitle("خصائص إضاءة السقف")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("حفظ") {
+                        onSave(
+                            color.hexValue,
+                            Float(brightnessPercent / 100),
+                            Float(diameterCentimeters / 100)
+                        )
+                        dismiss()
+                    }
+                }
+            }
+            .confirmationDialog(
+                "حذف اللمبة؟",
+                isPresented: $showDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("حذف", role: .destructive) {
+                    onDelete()
+                    dismiss()
+                }
+                Button("إلغاء", role: .cancel) {}
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+}
+
+private struct AutomaticCeilingLightingEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var cornerOffsetCentimeters: Double
+    @State private var countAlongLength: Int
+    @State private var countAlongWidth: Int
+    @State private var cornersOnly: Bool
+    @State private var color: ElementColorOption
+    @State private var brightnessPercent: Double
+    @State private var diameterCentimeters: Double
+    @State private var showDeleteConfirmation = false
+
+    let layout: CeilingLightLayout
+    let isExisting: Bool
+    let onSave: (CeilingLightLayout) -> Void
+    let onDelete: () -> Void
+
+    init(
+        layout: CeilingLightLayout,
+        isExisting: Bool,
+        onSave: @escaping (CeilingLightLayout) -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.layout = layout
+        self.isExisting = isExisting
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _cornerOffsetCentimeters = State(
+            initialValue: Double(layout.cornerOffsetMeters * 100)
+        )
+        _countAlongLength = State(initialValue: layout.countAlongLength)
+        _countAlongWidth = State(initialValue: layout.countAlongWidth)
+        _cornersOnly = State(initialValue: layout.cornersOnly)
+        _color = State(
+            initialValue: ElementColorOption(hexValue: layout.colorHex)
+        )
+        _brightnessPercent = State(
+            initialValue: Double(layout.brightness * 100)
+        )
+        _diameterCentimeters = State(
+            initialValue: Double(layout.diameterMeters * 100)
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("مقاس السقف") {
+                    LabeledContent(
+                        "الطول",
+                        value: String(format: "%.2f م", layout.lengthMeters)
+                    )
+                    LabeledContent(
+                        "العرض",
+                        value: String(format: "%.2f م", layout.widthMeters)
+                    )
+                }
+
+                Section("طريقة التوزيع") {
+                    Picker("النطاق", selection: $cornersOnly) {
+                        Text("كامل السقف").tag(false)
+                        Text("الأركان فقط").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+
+                    HStack {
+                        Text("البعد عن الأركان")
+                        Spacer()
+                        TextField(
+                            "30",
+                            value: $cornerOffsetCentimeters,
+                            format: .number.precision(.fractionLength(0...1))
+                        )
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 72)
+                        Text("سم")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Stepper(
+                        "عدد الطول (\(String(format: "%.2f", layout.lengthMeters)) م): \(countAlongLength)",
+                        value: $countAlongLength,
+                        in: 1...20
+                    )
+                    .disabled(cornersOnly)
+
+                    Stepper(
+                        "عدد العرض (\(String(format: "%.2f", layout.widthMeters)) م): \(countAlongWidth)",
+                        value: $countAlongWidth,
+                        in: 1...20
+                    )
+                    .disabled(cornersOnly)
+
+                    LabeledContent(
+                        "إجمالي اللمبات",
+                        value: "\(cornersOnly ? 4 : countAlongLength * countAlongWidth)"
+                    )
+                    if cornersOnly {
+                        Text("سيتم وضع أربع لمبات فقط على بُعد الأركان المحدد.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("خصائص اللمبات") {
+                    ColorOptionPicker(selection: $color)
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent(
+                            "شدة الإضاءة",
+                            value: "\(Int(brightnessPercent.rounded()))%"
+                        )
+                        Slider(
+                            value: $brightnessPercent,
+                            in: 0...100,
+                            step: 5
+                        )
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent(
+                            "قطر اللمبة",
+                            value: "\(Int(diameterCentimeters.rounded())) سم"
+                        )
+                        Slider(
+                            value: $diameterCentimeters,
+                            in: 2...20,
+                            step: 1
+                        )
+                    }
+                }
+
+                if isExisting {
+                    Section {
+                        Button("حذف مجموعة الإضاءة", role: .destructive) {
+                            showDeleteConfirmation = true
+                        }
+                    }
+                }
+            }
+            .navigationTitle(
+                isExisting ? "تعديل الإضافة التلقائية" : "إضافة إضاءة تلقائية"
+            )
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isExisting ? "حفظ" : "تطبيق") {
+                        var updated = layout
+                        let maximumOffset = max(
+                            0,
+                            min(layout.lengthMeters, layout.widthMeters) / 2
+                                - 0.02
+                        )
+                        updated.cornerOffsetMeters = min(
+                            max(Float(cornerOffsetCentimeters / 100), 0),
+                            maximumOffset
+                        )
+                        updated.countAlongLength = min(
+                            max(countAlongLength, 1),
+                            20
+                        )
+                        updated.countAlongWidth = min(
+                            max(countAlongWidth, 1),
+                            20
+                        )
+                        updated.cornersOnly = cornersOnly
+                        updated.colorHex = color.hexValue
+                        updated.brightness = Float(brightnessPercent / 100)
+                        updated.diameterMeters = Float(
+                            diameterCentimeters / 100
+                        )
+                        onSave(updated)
+                        dismiss()
+                    }
+                }
+            }
+            .confirmationDialog(
+                "حذف مجموعة الإضاءة؟",
+                isPresented: $showDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("حذف المجموعة", role: .destructive) {
+                    onDelete()
+                    dismiss()
+                }
+                Button("إلغاء", role: .cancel) {}
+            } message: {
+                Text("سيتم حذف جميع اللمبات التابعة لهذا التوزيع.")
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+}
+
 private struct ColorOptionPicker: View {
     @Binding var selection: ElementColorOption
 
@@ -1908,6 +3024,9 @@ private struct PlanLegendView: View {
                 legendDot(.cyan, title: "شباك")
             }
             if layers.electrical { legendDot(.green, title: "كهرباء") }
+            if layers.ceilingLighting {
+                legendDot(.yellow, title: "سقف")
+            }
         }
         .font(.caption2)
         .padding(.horizontal, 10)
@@ -1942,6 +3061,11 @@ private struct PlanProjection {
             guard point.worldPosition.count >= 3 else { return nil }
             return SIMD2(point.worldPosition[0], point.worldPosition[2])
         })
+        points.append(contentsOf: (project.ceilingLights ?? []).compactMap {
+            light in
+            guard light.worldPosition.count >= 3 else { return nil }
+            return SIMD2(light.worldPosition[0], light.worldPosition[2])
+        })
 
         if points.isEmpty {
             points = [SIMD2(-2, -2), SIMD2(2, 2)]
@@ -1971,6 +3095,10 @@ private struct PlanProjection {
             midpointX + Float((point.x - size.width / 2) / projectionScale),
             midpointZ + Float((point.y - size.height / 2) / projectionScale)
         )
+    }
+
+    func scaledLength(_ meters: Float) -> CGFloat {
+        CGFloat(meters) * projectionScale
     }
 
     private var projectionScale: CGFloat {
@@ -2042,6 +3170,7 @@ private struct USDZRoomView: UIViewRepresentable {
             view.scene = scene
             scene.rootNode.childNode(withName: "Section_grp", recursively: true)?.isHidden = true
             addElectricalMarkers(to: scene)
+            addCeilingLights(to: scene)
             addManualOpenings(to: scene)
             configureCamera(for: scene, in: view)
             applyLayerVisibility(to: scene)
@@ -2054,6 +3183,7 @@ private struct USDZRoomView: UIViewRepresentable {
             }
             guard let scene = view.scene else { return }
             addElectricalMarkers(to: scene)
+            addCeilingLights(to: scene)
             addManualOpenings(to: scene)
             applyLayerVisibility(to: scene)
         }
@@ -2113,6 +3243,46 @@ private struct USDZRoomView: UIViewRepresentable {
                     point.worldPosition[0],
                     point.worldPosition[1],
                     point.worldPosition[2]
+                )
+                root.addChildNode(node)
+            }
+        }
+
+        private func addCeilingLights(to scene: SCNScene) {
+            scene.rootNode.childNode(
+                withName: "3e-ceiling-lights",
+                recursively: false
+            )?.removeFromParentNode()
+
+            let root = SCNNode()
+            root.name = "3e-ceiling-lights"
+            root.isHidden = !parent.layers.ceilingLighting
+            scene.rootNode.addChildNode(root)
+
+            for light in (parent.project.ceilingLights ?? [])
+                where light.worldPosition.count >= 3 {
+                let geometry = SCNCylinder(
+                    radius: CGFloat(light.diameterMeters / 2),
+                    height: 0.025
+                )
+                geometry.radialSegmentCount = 32
+                let material = SCNMaterial()
+                let color = uiColor(
+                    hex: light.colorHex,
+                    fallback: .systemYellow
+                )
+                material.diffuse.contents = color
+                material.emission.contents = color.withAlphaComponent(
+                    CGFloat(min(max(light.brightness, 0), 1))
+                )
+                geometry.materials = [material]
+
+                let node = SCNNode(geometry: geometry)
+                node.name = "3e-ceiling-light-\(light.id.uuidString)"
+                node.position = SCNVector3(
+                    light.worldPosition[0],
+                    light.worldPosition[1],
+                    light.worldPosition[2]
                 )
                 root.addChildNode(node)
             }
@@ -2216,6 +3386,7 @@ private struct USDZRoomView: UIViewRepresentable {
             scene.rootNode.childNode(withName: "Floor_grp", recursively: true)?.isHidden = !parent.layers.floor
             scene.rootNode.childNode(withName: "Object_grp", recursively: true)?.isHidden = !parent.layers.furniture
             scene.rootNode.childNode(withName: "3e-electrical-markers", recursively: false)?.isHidden = !parent.layers.electrical
+            scene.rootNode.childNode(withName: "3e-ceiling-lights", recursively: false)?.isHidden = !parent.layers.ceilingLighting
             scene.rootNode.childNode(withName: "3e-manual-openings", recursively: false)?.isHidden = !parent.layers.openings
         }
 
@@ -2243,6 +3414,10 @@ private struct ScanInformationSheet: View {
                     LabeledContent("الشبابيك", value: "\(project.windowCount)")
                     LabeledContent("قطع الأثاث", value: "\(project.furnitureCount)")
                     LabeledContent("نقاط الكهرباء", value: "\(project.points.count)")
+                    LabeledContent(
+                        "إضاءة السقف",
+                        value: "\(project.ceilingLightCount)"
+                    )
                     if let settings = project.electricalSettings {
                         LabeledContent("نمط الكهرباء", value: settings.designMode.title)
                     }
