@@ -1410,7 +1410,7 @@ private enum TakeoffPDFRenderer {
                 white: Int(y / 25).isMultiple(of: 2) ? 0.97 : 1,
                 alpha: 1
             ).setFill()
-            rowRect.fill()
+            UIBezierPath(rect: rowRect).fill()
             drawText(
                 value,
                 in: CGRect(
@@ -1485,7 +1485,7 @@ private enum TakeoffPDFRenderer {
                     height: height
                 )
                 background.setFill()
-                rect.fill()
+                UIBezierPath(rect: rect).fill()
                 UIColor(white: 0.84, alpha: 1).setStroke()
                 UIBezierPath(rect: rect).stroke()
                 drawText(
@@ -1605,7 +1605,7 @@ private enum PlanPDFRenderer {
         pageCount: Int
     ) {
         UIColor.white.setFill()
-        page.fill()
+        UIBezierPath(rect: page).fill()
 
         let header = CGRect(
             x: margin,
@@ -1804,7 +1804,7 @@ private enum PlanPDFRenderer {
         context: CGContext
     ) {
         UIColor.white.setFill()
-        rect.fill()
+        UIBezierPath(rect: rect).fill()
         UIColor(white: 0.82, alpha: 1).setStroke()
         UIBezierPath(
             roundedRect: rect,
