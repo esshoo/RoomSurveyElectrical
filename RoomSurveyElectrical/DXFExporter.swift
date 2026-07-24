@@ -1069,6 +1069,10 @@ private struct DXFPlanBuilder {
         dxf.pair(2, "HEADER")
         dxf.pair(9, "$ACADVER")
         dxf.pair(1, "AC1027")
+        // Required once Smart DXF adds explicit object handles.
+        // Keep the next available handle above reserved F000xx handles.
+        dxf.pair(9, "$HANDSEED")
+        dxf.pair(5, "FFFFFF")
         dxf.pair(9, "$DWGCODEPAGE")
         dxf.pair(3, "UTF-8")
         dxf.pair(9, "$INSUNITS")

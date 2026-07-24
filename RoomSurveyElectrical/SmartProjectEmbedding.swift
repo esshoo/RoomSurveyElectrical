@@ -47,7 +47,7 @@ enum DXFSmartProjectEmbedder {
     static let formatIdentifier =
         "com.3essam.3eroomelectrical.dxf-package"
     static let packageFormat = "3EROOM_DXF_PACKAGE_V1"
-    static let appID = "3EROOMELECTRICAL"
+    static let dictionaryKey = "3EROOMELECTRICAL"
 
     // DXF stores binary XRECORD data as hexadecimal text, so the final
     // document is roughly twice the embedded package size. Keep a guard
@@ -58,8 +58,6 @@ enum DXFSmartProjectEmbedder {
     private static let smartDictionaryHandle = "F00001"
     private static let packageRecordHandle = "F00002"
     private static let metadataRecordHandle = "F00003"
-    private static let appIDTableHandle = "F00010"
-    private static let appIDRecordHandle = "F00011"
 
     static func embed(
         packageData: Data,
@@ -75,7 +73,6 @@ enum DXFSmartProjectEmbedder {
         }
 
         var pairs = try parse(dxf)
-        try registerApplication(in: &pairs)
 
         let envelope = SmartEmbeddedProjectEnvelope(
             formatIdentifier: formatIdentifier,
@@ -97,6 +94,7 @@ enum DXFSmartProjectEmbedder {
             packageData: packageData,
             to: &pairs
         )
+        try validateSmartDXF(pairs)
         return render(pairs)
     }
 
@@ -111,7 +109,7 @@ enum DXFSmartProjectEmbedder {
                 section: objects
               ),
               let smartDictionaryHandle = dictionaryValueHandle(
-                key: appID,
+                key: dictionaryKey,
                 in: pairs,
                 range: root.start..<root.end
               ),
@@ -167,8 +165,23 @@ enum DXFSmartProjectEmbedder {
                 )
         }
 
+        let packageRecordPairs = pairs[
+            packageRecord.start..<packageRecord.end
+        ]
+        guard packageRecordPairs.contains(where: {
+            $0.code == 300 && $0.value == packageFormat
+        }) else {
+            throw SmartProjectEmbeddingError.invalidEnvelope
+        }
+        if let declaredByteCount = packageRecordPairs
+            .first(where: { $0.code == 90 })
+            .flatMap({ Int($0.value) }),
+           declaredByteCount != envelope.payloadByteCount {
+            throw SmartProjectEmbeddingError.damagedPackage
+        }
+
         var packageData = Data()
-        for pair in pairs[packageRecord.start..<packageRecord.end]
+        for pair in packageRecordPairs
         where pair.code == 310 {
             guard let chunk = dataFromHex(pair.value) else {
                 throw SmartProjectEmbeddingError.damagedPackage
@@ -182,43 +195,6 @@ enum DXFSmartProjectEmbedder {
         return SmartEmbeddedProjectPayload(
             envelope: envelope,
             packageData: packageData
-        )
-    }
-
-    private static func registerApplication(
-        in pairs: inout [DXFPair]
-    ) throws {
-        guard let tables = section(named: "TABLES", in: pairs) else {
-            throw SmartProjectEmbeddingError.invalidDXF
-        }
-
-        if let appTable = table(named: "APPID", in: pairs, section: tables) {
-            let alreadyRegistered = pairs[appTable.start..<appTable.end]
-                .contains { $0.code == 2 && $0.value == appID }
-            guard !alreadyRegistered else { return }
-
-            if let countIndex = pairs[appTable.start..<appTable.end]
-                .firstIndex(where: { $0.code == 70 }),
-               let oldCount = Int(pairs[countIndex].value) {
-                pairs[countIndex].value = String(oldCount + 1)
-            }
-            let ownerHandle = value(
-                code: 5,
-                in: pairs,
-                range: appTable.start..<appTable.end
-            ) ?? appIDTableHandle
-            pairs.insert(
-                contentsOf: appIDRecordPairs(
-                    ownerHandle: ownerHandle
-                ),
-                at: appTable.end
-            )
-            return
-        }
-
-        pairs.insert(
-            contentsOf: appIDTablePairs,
-            at: tables.end
         )
     }
 
@@ -249,12 +225,12 @@ enum DXFSmartProjectEmbedder {
             let hasSmartEntry = pairs[root.start..<root.end]
                 .contains {
                     $0.code == 3 &&
-                    $0.value == appID
+                    $0.value == dictionaryKey
                 }
             if !hasSmartEntry {
                 pairs.insert(
                     contentsOf: [
-                        DXFPair(3, appID),
+                        DXFPair(3, dictionaryKey),
                         DXFPair(350, smartDictionaryHandle)
                     ],
                     at: root.end
@@ -290,8 +266,9 @@ enum DXFSmartProjectEmbedder {
             DXFPair(5, rootDictionaryHandle),
             DXFPair(330, "0"),
             DXFPair(100, "AcDbDictionary"),
+            DXFPair(280, "0"),
             DXFPair(281, "1"),
-            DXFPair(3, appID),
+            DXFPair(3, dictionaryKey),
             DXFPair(350, smartDictionaryHandle)
         ]
         sectionPairs += smartObjects.map {
@@ -312,6 +289,7 @@ enum DXFSmartProjectEmbedder {
             DXFPair(5, smartDictionaryHandle),
             DXFPair(330, ownerPlaceholder),
             DXFPair(100, "AcDbDictionary"),
+            DXFPair(280, "0"),
             DXFPair(281, "1"),
             DXFPair(3, "PROJECT_METADATA"),
             DXFPair(350, metadataRecordHandle),
@@ -334,9 +312,10 @@ enum DXFSmartProjectEmbedder {
             DXFPair(330, smartDictionaryHandle),
             DXFPair(100, "AcDbXrecord"),
             DXFPair(280, "1"),
-            DXFPair(1001, appID),
-            DXFPair(1000, packageFormat),
-            DXFPair(1070, "1")
+            // XRECORD data must use normal DXF group codes below 1000.
+            // Do not start an XDATA block (1001+) before binary 310 data.
+            DXFPair(300, packageFormat),
+            DXFPair(90, String(packageData.count))
         ]
         for chunk in binaryChunks(packageData, length: 127) {
             result.append(DXFPair(310, hex(chunk)))
@@ -344,31 +323,58 @@ enum DXFSmartProjectEmbedder {
         return result
     }
 
-    private static var appIDTablePairs: [DXFPair] {
-        [
-            DXFPair(0, "TABLE"),
-            DXFPair(2, "APPID"),
-            DXFPair(5, appIDTableHandle),
-            DXFPair(330, "0"),
-            DXFPair(100, "AcDbSymbolTable"),
-            DXFPair(70, "1")
-        ] + appIDRecordPairs(
-            ownerHandle: appIDTableHandle
-        ) + [DXFPair(0, "ENDTAB")]
-    }
+    private static func validateSmartDXF(
+        _ pairs: [DXFPair]
+    ) throws {
+        guard let objects = section(named: "OBJECTS", in: pairs),
+              let smartDictionary = object(
+                type: "DICTIONARY",
+                handle: smartDictionaryHandle,
+                in: pairs,
+                section: objects
+              ),
+              let packageRecord = object(
+                type: "XRECORD",
+                handle: packageRecordHandle,
+                in: pairs,
+                section: objects
+              ) else {
+            throw SmartProjectEmbeddingError.invalidDXF
+        }
 
-    private static func appIDRecordPairs(
-        ownerHandle: String
-    ) -> [DXFPair] {
-        [
-            DXFPair(0, "APPID"),
-            DXFPair(5, appIDRecordHandle),
-            DXFPair(330, ownerHandle),
-            DXFPair(100, "AcDbSymbolTableRecord"),
-            DXFPair(100, "AcDbRegAppTableRecord"),
-            DXFPair(2, appID),
-            DXFPair(70, "0")
-        ]
+        guard value(
+            code: 330,
+            in: pairs,
+            range: smartDictionary.start..<smartDictionary.end
+        ) != nil else {
+            throw SmartProjectEmbeddingError.invalidDXF
+        }
+
+        let recordPairs = pairs[packageRecord.start..<packageRecord.end]
+        guard recordPairs.contains(where: {
+            $0.code == 300 && $0.value == packageFormat
+        }) else {
+            throw SmartProjectEmbeddingError.invalidDXF
+        }
+
+        // AutoCAD treats 1001 as the beginning of XDATA. Once XDATA
+        // begins, normal object data such as group 310 may not follow.
+        // Smart project XRECORDs deliberately contain no XDATA.
+        guard !recordPairs.contains(where: { $0.code >= 1000 }) else {
+            throw SmartProjectEmbeddingError.invalidDXF
+        }
+
+        for pair in recordPairs where pair.code == 310 {
+            let value = pair.value.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            guard !value.isEmpty,
+                  value.count <= 254,
+                  value.count.isMultiple(of: 2),
+                  dataFromHex(value) != nil else {
+                throw SmartProjectEmbeddingError.invalidDXF
+            }
+        }
     }
 
     private static func parse(_ dxf: String) throws -> [DXFPair] {
@@ -423,29 +429,6 @@ enum DXFSmartProjectEmbedder {
                 var end = index + 2
                 while end < pairs.count {
                     if pairs[end] == DXFPair(0, "ENDSEC") {
-                        return DXFRange(start: index, end: end)
-                    }
-                    end += 1
-                }
-                return nil
-            }
-            index += 1
-        }
-        return nil
-    }
-
-    private static func table(
-        named name: String,
-        in pairs: [DXFPair],
-        section: DXFRange
-    ) -> DXFRange? {
-        var index = section.start + 2
-        while index + 1 < section.end {
-            if pairs[index] == DXFPair(0, "TABLE"),
-               pairs[index + 1] == DXFPair(2, name) {
-                var end = index + 2
-                while end < section.end {
-                    if pairs[end] == DXFPair(0, "ENDTAB") {
                         return DXFRange(start: index, end: end)
                     }
                     end += 1

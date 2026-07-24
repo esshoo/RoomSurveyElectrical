@@ -36,7 +36,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.7.2 • Smart DXF",
+                                    "الإصدار 1.7.3 • AutoCAD Smart DXF Fix",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))

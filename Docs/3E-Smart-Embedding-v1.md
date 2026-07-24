@@ -75,3 +75,17 @@ normal drawing and can still be opened as geometry-only content.
 Binary DXF chunks are represented as hexadecimal text, approximately doubling
 the embedded package size. This implementation rejects packages above 256 MB to
 avoid unsafe memory pressure during export on iPhone/iPad.
+
+
+## AutoCAD compatibility correction (container revision 1)
+
+The package XRECORD contains only normal DXF group codes below 1000:
+
+- `300`: package marker `3EROOM_DXF_PACKAGE_V1`
+- `90`: original package byte count
+- `310`: binary package chunks, at most 127 bytes / 254 hex characters each
+
+Do not place XDATA group codes (`1001`-`1071`) before `310` records. AutoCAD
+interprets `1001` as the start of XDATA and requires extended data to follow the
+normal object definition. The project is detected through the Named Object
+Dictionary entry `3EROOMELECTRICAL`, so XDATA is unnecessary.
