@@ -38,7 +38,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.8 • مركز الملفات والمشروعات",
+                                    "الإصدار 1.8.1 • إصلاح البناء",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))

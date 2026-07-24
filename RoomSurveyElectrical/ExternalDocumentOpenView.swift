@@ -71,7 +71,7 @@ struct ExternalDocumentOpenView: View {
                 }
 
                 if let metrics = matchedProjectMetrics {
-                    Section("بيانات المشروع الأصلية") {
+                    Section {
                         CountRow(title: "المسحات", value: metrics.scans)
                         CountRow(title: "الأرضيات", value: metrics.floors)
                         CountRow(title: "الجدران", value: metrics.walls)
@@ -87,6 +87,8 @@ struct ExternalDocumentOpenView: View {
                             title: "إضاءة السقف",
                             value: metrics.ceilingLights
                         )
+                    } header: {
+                        Text("بيانات المشروع الأصلية")
                     } footer: {
                         Text(
                             "هذه الأرقام مأخوذة من المشروع المرتبط ببصمة الملف على هذا الجهاز."
@@ -95,7 +97,7 @@ struct ExternalDocumentOpenView: View {
                 }
 
                 if let counts = inspection.dxfCounts, counts.hasValues {
-                    Section("تحليل DXF") {
+                    Section {
                         CountRow(title: "الأرضيات", value: counts.floors)
                         CountRow(title: "الجدران", value: counts.walls)
                         CountRow(title: "الأبواب", value: counts.doors)
@@ -110,6 +112,8 @@ struct ExternalDocumentOpenView: View {
                             title: "إضاءة السقف",
                             value: counts.ceilingLights
                         )
+                    } header: {
+                        Text("تحليل DXF")
                     } footer: {
                         Text(
                             "الأرقام محسوبة من طبقات وكيانات DXF التي ينشئها التطبيق، وليست تخمينًا بصريًا."

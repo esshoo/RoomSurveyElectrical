@@ -1,3 +1,11 @@
+# 3ERoomElectrical v1.8.1 Build 16
+
+Build-fix release for the v1.8 document hub.
+
+- Fixes SwiftUI `Section` header/footer construction in `ExternalDocumentOpenView.swift`.
+- Keeps original DXF and PDF exporters unchanged.
+- The obsolete `SmartProjectEmbedding.swift` file must not exist in the project.
+
 # 3E Room Electrical — v1.8 Build 15
 
 This source restores the original AutoCAD-compatible DXF and PDF exporters. It does not embed `.3eroom` packages or custom XRECORD objects inside exported drawings.
