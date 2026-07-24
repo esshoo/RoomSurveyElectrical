@@ -85,7 +85,7 @@ enum ProjectPackageService {
     static let formatVersion = 1
     static let maximumPackageBytes = 1_500_000_000
 
-    static func makePackageData(projectID: UUID) throws -> Data {
+    static func makePackage(projectID: UUID) throws -> URL {
         guard let project = WorkspaceRepository.load(
             projectID: projectID
         ) else {
@@ -185,17 +185,8 @@ enum ProjectPackageService {
         for payload in payloads {
             archive.add(name: payload.path, data: payload.data)
         }
-        return archive.data()
-    }
-
-    static func makePackage(projectID: UUID) throws -> URL {
-        guard let project = WorkspaceRepository.load(
-            projectID: projectID
-        ) else {
-            throw ProjectPackageError.projectNotFound
-        }
         return try ProjectExportService.writeTemporaryFile(
-            makePackageData(projectID: projectID),
+            archive.data(),
             name: ProjectExportService.sanitized(project.name),
             extension: "3eroom"
         )

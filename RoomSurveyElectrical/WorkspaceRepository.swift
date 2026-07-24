@@ -59,12 +59,12 @@ enum WorkspaceRepository {
 
     private static var projectsDirectory: URL {
         get throws {
-            guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            do {
+                try ApplicationFileLayout.prepare()
+                return try ApplicationFileLayout.workspaceProjectsDirectory
+            } catch {
                 throw RepositoryError.documentsDirectoryUnavailable
             }
-            let directory = documents.appendingPathComponent("3ERoomElectricalProjects", isDirectory: true)
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            return directory
         }
     }
 
