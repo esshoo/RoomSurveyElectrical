@@ -145,6 +145,7 @@ struct ExportCenterView: View {
 
     private var exportMetadata: ExportDocumentMetadata {
         ExportDocumentMetadata(
+            projectID: surveyProject.id,
             projectName: surveyProject.name,
             projectCreatedAt: surveyProject.createdAt
         )

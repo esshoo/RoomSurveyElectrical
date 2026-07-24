@@ -416,6 +416,7 @@ struct RoomViewerView: View {
     private var currentExportMetadata: ExportDocumentMetadata {
         if let surveyProject = store.project(id: surveyProjectID) {
             return ExportDocumentMetadata(
+                projectID: surveyProject.id,
                 projectName: surveyProject.name,
                 projectCreatedAt: surveyProject.createdAt
             )

@@ -7,12 +7,13 @@ extension ProjectExportService {
         room: ExportRoomRecord,
         metadata: ExportDocumentMetadata
     ) throws -> URL {
-        let data = Data(
+        let data = try smartDXFData(
             DXFPlanBuilder(
                 title: title,
                 record: room,
                 metadata: metadata
-            ).build().utf8
+            ).build(),
+            metadata: metadata
         )
         return try writeTemporaryFile(
             data,
@@ -35,6 +36,9 @@ extension ProjectExportService {
             )
         }
 
+        let embeddedPackageData = try metadata.projectID.map {
+            try ProjectPackageService.makePackageData(projectID: $0)
+        }
         var archive = StoredZIPArchive()
         for (index, room) in rooms.enumerated() {
             let name = String(
@@ -44,12 +48,14 @@ extension ProjectExportService {
             )
             archive.add(
                 name: name,
-                data: Data(
+                data: try smartDXFData(
                     DXFPlanBuilder(
                         title: room.scan.name,
                         record: room,
                         metadata: metadata
-                    ).build().utf8
+                    ).build(),
+                    metadata: metadata,
+                    packageData: embeddedPackageData
                 )
             )
         }
@@ -73,12 +79,13 @@ extension ProjectExportService {
                 metadata: metadata
             )
         }
-        let data = Data(
+        let data = try smartDXFData(
             DXFPlanBuilder.combined(
                 title: title,
                 rooms: rooms,
                 metadata: metadata
-            ).utf8
+            ),
+            metadata: metadata
         )
         return try writeTemporaryFile(
             data,
@@ -93,12 +100,13 @@ extension ProjectExportService {
         metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
-        let data = Data(
+        let data = try smartDXFData(
             DXFPlanBuilder.layouts(
                 title: title,
                 rooms: rooms,
                 metadata: metadata
-            ).utf8
+            ),
+            metadata: metadata
         )
         return try writeTemporaryFile(
             data,
@@ -106,6 +114,32 @@ extension ProjectExportService {
             extension: "dxf"
         )
     }
+
+    private static func smartDXFData(
+        _ dxf: String,
+        metadata: ExportDocumentMetadata,
+        packageData: Data? = nil
+    ) throws -> Data {
+        guard let projectID = metadata.projectID else {
+            return Data(dxf.utf8)
+        }
+        let resolvedPackageData: Data
+        if let packageData {
+            resolvedPackageData = packageData
+        } else {
+            resolvedPackageData = try ProjectPackageService
+                .makePackageData(projectID: projectID)
+        }
+        let smartDXF = try DXFSmartProjectEmbedder.embed(
+            packageData: resolvedPackageData,
+            projectID: projectID,
+            projectName: metadata.projectName,
+            exportedAt: metadata.exportedAt,
+            in: dxf
+        )
+        return Data(smartDXF.utf8)
+    }
+
 }
 
 private struct DXFPlanBuilder {

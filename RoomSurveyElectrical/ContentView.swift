@@ -36,7 +36,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.7.1 • إصلاح البناء وملفات .3eroom",
+                                    "الإصدار 1.7.2 • Smart DXF",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
