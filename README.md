@@ -1,3 +1,15 @@
+# 3ERoomElectrical v1.9.1 (Build 18)
+
+## Important upgrade cleanup
+
+Before building over an older checkout, remove the obsolete source file:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Tools\Clean-ObsoleteFiles.ps1
+```
+
+The removed file is `RoomSurveyElectrical/SmartProjectEmbedding.swift`. It belongs to the abandoned embedded-project experiment and is not part of v1.9.1.
+
 # 3ERoomElectrical v1.9 Build 17
 
 This release adds a native DXF viewer, repairs the DXF writer for strict AutoCAD-compatible structure, and adds a real WidgetKit Home Screen widget for recent projects.

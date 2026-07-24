@@ -17,6 +17,12 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Remove obsolete source files
+        shell: bash
+        run: |
+          ./Tools/clean-obsolete-files.sh
+          test ! -e RoomSurveyElectrical/SmartProjectEmbedding.swift
+
       - name: Build for a physical iPhone
         id: xcodebuild
         shell: bash
