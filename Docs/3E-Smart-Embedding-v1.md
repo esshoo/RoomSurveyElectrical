@@ -1,91 +1,75 @@
-# 3E Smart Embedding v1
+# 3E Smart Embedding V1
 
-## Scope of this phase
+This document describes how 3E Room Electrical stores a recoverable project
+package inside exported DXF and PDF files without changing the visible drawing.
 
-This phase makes every DXF exported from a workspace project carry the original
-`.3eroom` project package. The visible geometry, layers, layouts, units, and
-annotations are unchanged.
+## Common Marker
 
-PDF associated-file embedding and import detection are intentionally deferred to
-the next phase so DXF can be validated independently.
+- Marker: `3EROOM_PROJECT_PACKAGE_V1`
+- App ID: `3EROOMELECTRICAL`
+- Embedded package filename: `3ERoomElectrical.project.3eroom`
+- Package format: the same `.3eroom` ZIP package exported by the app
+- Integrity: read `packageSHA256` from the manifest and verify the extracted
+  package bytes before import
 
-## DXF marker
+## Manifest
 
-The application registers this DXF APPID:
+The embedded manifest is JSON encoded as UTF-8. It includes:
 
-```text
-3EROOMELECTRICAL
-```
+- `formatIdentifier`
+- `formatVersion`
+- `marker`
+- `application`
+- `readableBy`
+- `packageFileName`
+- `packageByteCount`
+- `packageSHA256`
+- `packageEncoding`
+- `projectID`
+- `projectName`
+- `projectCreatedAt`
+- `exportedAt`
 
-The package XRECORD also carries XDATA:
+## DXF Storage
 
-```text
-1001 3EROOMELECTRICAL
-1000 3EROOM_DXF_PACKAGE_V1
-1070 1
-```
+DXF exports use standard DXF mechanisms only:
 
-## Named object dictionary
+- Register `APPID`: `3EROOMELECTRICAL`
+- Store data in the `OBJECTS` section
+- Add a root `DICTIONARY` entry named `3EROOMELECTRICAL_PACKAGE`
+- The entry points to an `XRECORD` with handle `E3E001`
 
-The root named object dictionary contains:
+The `XRECORD` uses repeated group code `1` strings:
 
-```text
-3EROOMELECTRICAL -> smart project dictionary
-```
+1. `3EROOM_PROJECT_PACKAGE_V1`
+2. `MANIFEST_BASE64_BEGIN`
+3. Base64 manifest chunks
+4. `MANIFEST_BASE64_END`
+5. Group code `90`: raw package byte count
+6. Group code `90`: package Base64 chunk count
+7. `PACKAGE_BASE64_BEGIN`
+8. Base64 package chunks
+9. `PACKAGE_BASE64_END`
 
-The smart project dictionary contains two XRECORD values:
+Readers should concatenate chunks between the begin/end markers, Base64-decode
+the package, then verify SHA-256.
 
-- `PROJECT_METADATA`: Base64-encoded JSON envelope.
-- `PROJECT_PACKAGE`: binary `.3eroom` bytes in DXF group-code `310` chunks.
+## PDF Storage
 
-## Envelope
+Layered 2D PDF exports use standard PDF mechanisms:
 
-The envelope contains:
+- Catalog `/Names << /EmbeddedFiles ... >>`
+- Catalog `/AF [...]`
+- `/Filespec` with `/AFRelationship /Data`
+- `/EmbeddedFile` stream containing raw `.3eroom` package bytes
+- Catalog `/Metadata` XMP stream containing the marker and package SHA-256
 
-- format identifier and container version
-- project UUID and name
-- export date and app version
-- embedded file name
-- exact byte count
-- SHA-256 of the embedded package
-- package compression description
+Readers should look for the embedded file named
+`3ERoomElectrical.project.3eroom`, verify SHA-256 against XMP/manifest data,
+then import it as a normal `.3eroom` package.
 
-The current identifiers are:
+## Compatibility
 
-```text
-com.3essam.3eroomelectrical.dxf-package
-3EROOM_DXF_PACKAGE_V1
-```
-
-## Integrity and compatibility
-
-A future importer must:
-
-1. Find the registered APPID or root dictionary entry.
-2. Reassemble every `310` chunk in order.
-3. Decode the metadata envelope.
-4. Verify byte count and SHA-256.
-5. Pass the recovered bytes to `ProjectPackageService.prepareImport`.
-
-If the smart objects are stripped by another CAD program, the DXF remains a
-normal drawing and can still be opened as geometry-only content.
-
-## Mobile memory guard
-
-Binary DXF chunks are represented as hexadecimal text, approximately doubling
-the embedded package size. This implementation rejects packages above 256 MB to
-avoid unsafe memory pressure during export on iPhone/iPad.
-
-
-## AutoCAD compatibility correction (container revision 1)
-
-The package XRECORD contains only normal DXF group codes below 1000:
-
-- `300`: package marker `3EROOM_DXF_PACKAGE_V1`
-- `90`: original package byte count
-- `310`: binary package chunks, at most 127 bytes / 254 hex characters each
-
-Do not place XDATA group codes (`1001`-`1071`) before `310` records. AutoCAD
-interprets `1001` as the start of XDATA and requires extended data to follow the
-normal object definition. The project is detected through the Named Object
-Dictionary entry `3EROOMELECTRICAL`, so XDATA is unnecessary.
+The visible DXF/PDF drawing must remain valid without the embedded package.
+If another CAD/PDF application strips the custom data while saving, the file is
+still viewable, but full project recovery will no longer be available.

@@ -2,17 +2,20 @@ import Foundation
 
 struct ExportDocumentMetadata {
     let brandName: String
+    let projectID: UUID?
     let projectName: String
     let projectCreatedAt: Date
     let exportedAt: Date
 
     init(
+        projectID: UUID? = nil,
         projectName: String,
         projectCreatedAt: Date,
         exportedAt: Date = Date(),
         brandName: String = "3Essam"
     ) {
         self.brandName = brandName
+        self.projectID = projectID
         self.projectName = projectName
         self.projectCreatedAt = projectCreatedAt
         self.exportedAt = exportedAt

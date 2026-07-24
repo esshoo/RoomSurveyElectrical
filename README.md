@@ -1,62 +1,41 @@
-# 3ERoomElectrical v1.8.1 Build 16
+# Room Survey Electrical — إثبات الفكرة
 
-Build-fix release for the v1.8 document hub.
+تطبيق iPhone شخصي يستخدم Apple RoomPlan لمسح الغرفة، ثم يحتفظ بنفس جلسة AR لإضافة نقاط كهرباء مرتبطة بحوائط الغرفة.
 
-- Fixes SwiftUI `Section` header/footer construction in `ExternalDocumentOpenView.swift`.
-- Keeps original DXF and PDF exporters unchanged.
-- The obsolete `SmartProjectEmbedding.swift` file must not exist in the project.
+## ما تنفذه النسخة الحالية
 
-# 3E Room Electrical — v1.8 Build 15
+- مسح الغرفة بالكاميرا وLiDAR عبر RoomPlan.
+- حفظ `project.json` و`raw-room.json` و`room.json` و`room.usdz` محليًا.
+- استخراج الحوائط والأبواب والشبابيك مع المعرّفات والتحويلات ثلاثية الأبعاد.
+- استمرار جلسة AR بعد المسح ورسم حدود الحوائط أمام المستخدم.
+- الضغط على الحائط وإضافة فيش أو مفتاح أو نقطة تكييف/سخان/بيانات/تلفزيون.
+- ربط كل نقطة بمعرّف الحائط وإحداثيات محلية وارتفاع وحالة: موجود أو مقترح.
+- حفظ النقاط وإظهار حصر مجمّع حسب النوع والحالة.
 
-This source restores the original AutoCAD-compatible DXF and PDF exporters. It does not embed `.3eroom` packages or custom XRECORD objects inside exported drawings.
+## المتطلبات
 
-## Document hub
+- iPhone أو iPad مزود بـLiDAR؛ الهدف الأساسي iPhone 15 Pro Max.
+- iOS 17 أو أحدث.
+- صلاحية الكاميرا.
 
-On launch the app creates this structure inside its iOS Documents container:
+## بناء IPA دون امتلاك Mac
 
-```text
-3Essam/
-└── 3ERoomElectrical/
-    ├── Projects/
-    │   ├── Workspaces/
-    │   └── Scans/
-    ├── Exports/
-    ├── Opened Files/
-    ├── Previews/
-    └── Index/
-```
+المستودع يحتوي على GitHub Action باسم `Build unsigned IPA`:
 
-Legacy folders are migrated automatically:
+1. افتح تبويب **Actions** في GitHub.
+2. اختر **Build unsigned IPA** ثم **Run workflow**.
+3. بعد نجاح التشغيل نزّل artifact باسم `RoomSurveyElectrical-unsigned`.
+4. فك الضغط لتحصل على `RoomSurveyElectrical-unsigned.ipa`.
+5. على Windows استخدم Sideloadly لتوقيع الملف بحساب Apple ID وتثبيته على الآيفون.
 
-- `3ERoomElectricalProjects` → `Projects/Workspaces`
-- `RoomSurveyProjects` → `Projects/Scans`
+التوقيع المجاني ينتهي بعد سبعة أيام ويحتاج إلى إعادة توقيع/تحديث. لا يحتوي المشروع على iCloud أو Push Notifications أو أي entitlement مدفوع.
 
-`UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` expose the Documents container in the iOS Files app.
+## معيار نجاح المرحلة الأولى
 
-## PDF, DXF and .3eroom opening
+لا نعتبر المرحلة ناجحة إلا بعد تنفيذ التالي على الجهاز الحقيقي:
 
-The app registers as:
-
-- Owner/editor for `.3eroom`
-- Alternate viewer for PDF
-- Alternate viewer for DXF
-
-Opening a PDF or DXF copies it into `Opened Files`, calculates SHA-256, and compares it with the local export registry.
-
-## Export registry
-
-Exported files are copied into `Exports/<format>` before sharing. The app records:
-
-- SHA-256
-- export method
-- project ID and name
-- scope and room IDs
-- file size and export date
-
-The registry identifies an unchanged export exactly even after the file is renamed or moved. No project package is embedded inside PDF or DXF.
-
-When no local registry match exists, the app uses the existing PDF metadata or the known DXF brand/layer signature. It never labels a fallback match as an exact project restoration.
-
-## Recent projects
-
-The home screen includes a recent-project carousel. It renders and caches a static 3D preview from the latest USDZ scan when available and falls back to a 2D plan preview.
+1. تثبيت IPA وفتح التطبيق ومنح صلاحية الكاميرا.
+2. مسح غرفة وإنهاء المعالجة.
+3. التأكد من ظهور حدود الحوائط في الكاميرا.
+4. إضافة نقطة واحدة وحفظها وظهورها في الحصر.
+5. مشاركة ملفات JSON وUSDZ من صفحة المشروع المحفوظ.

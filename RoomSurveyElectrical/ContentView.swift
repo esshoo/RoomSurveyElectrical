@@ -7,9 +7,7 @@ struct ContentView: View {
     @State private var showNewProject = false
     @State private var showGlobalSettings = false
     @State private var showProjectImporter = false
-    @State private var showDocumentImporter = false
     @State private var pendingImport: PreparedProjectPackage?
-    @State private var pendingExternalDocument: ExternalDocumentInspection?
     @State private var packageNotice: ProjectPackageNotice?
 
     var body: some View {
@@ -38,7 +36,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.8.1 • إصلاح البناء",
+                                    "الإصدار 1.8 • بصمة PDF/DXF الذكية",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
@@ -60,25 +58,6 @@ struct ContentView: View {
                         }
                     }
                     .padding(.vertical, 8)
-                }
-
-                if !store.activeProjects.isEmpty {
-                    Section("آخر المشروعات") {
-                        RecentProjectsWidget(
-                            projects: store.activeProjects.sorted {
-                                $0.updatedAt > $1.updatedAt
-                            }
-                        )
-                        .listRowInsets(
-                            EdgeInsets(
-                                top: 6,
-                                leading: 0,
-                                bottom: 8,
-                                trailing: 0
-                            )
-                        )
-                        .listRowBackground(Color.clear)
-                    }
                 }
 
                 Section("المشروعات") {
@@ -134,28 +113,14 @@ struct ContentView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            showDocumentImporter = true
-                        } label: {
-                            Label(
-                                "فتح PDF أو DXF",
-                                systemImage: "doc.text.magnifyingglass"
-                            )
-                        }
-
-                        Button {
-                            showProjectImporter = true
-                        } label: {
-                            Label(
-                                "استيراد مشروع .3eroom",
-                                systemImage: "archivebox.fill"
-                            )
-                        }
+                    Button {
+                        showProjectImporter = true
                     } label: {
                         Image(systemName: "doc.badge.plus")
                     }
-                    .accessibilityLabel("فتح أو استيراد ملف")
+                    .accessibilityLabel(
+                        "استيراد مشروع 3ERoomElectrical"
+                    )
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -221,27 +186,6 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(item: $pendingExternalDocument) { inspection in
-            ExternalDocumentOpenView(inspection: inspection)
-                .environmentObject(store)
-        }
-        .fileImporter(
-            isPresented: $showDocumentImporter,
-            allowedContentTypes: [UTType.pdf, UTType.threeEDXF],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first {
-                    handleOpenedURL(url)
-                }
-            case .failure(let error):
-                packageNotice = ProjectPackageNotice(
-                    title: "تعذر اختيار الملف",
-                    message: error.localizedDescription
-                )
-            }
-        }
         .fileImporter(
             isPresented: $showProjectImporter,
             allowedContentTypes: [UTType.threeERoomProject],
@@ -259,7 +203,7 @@ struct ContentView: View {
                 )
             }
         }
-        .onOpenURL(perform: handleOpenedURL)
+        .onOpenURL(perform: prepareProjectImport)
         .alert(item: $packageNotice) { notice in
             Alert(
                 title: Text(notice.title),
@@ -270,42 +214,7 @@ struct ContentView: View {
         .onAppear(perform: store.reload)
     }
 
-    private func handleOpenedURL(_ url: URL) {
-        switch url.pathExtension.lowercased() {
-        case "3eroom":
-            prepareProjectImport(from: url)
-        case "pdf", "dxf":
-            Task {
-                do {
-                    let inspection = try await Task.detached(
-                        priority: .userInitiated
-                    ) {
-                        try ExternalDocumentInspector.inspect(url)
-                    }.value
-                    pendingExternalDocument = inspection
-                } catch {
-                    packageNotice = ProjectPackageNotice(
-                        title: "تعذر فتح الملف",
-                        message: error.localizedDescription
-                    )
-                }
-            }
-        default:
-            packageNotice = ProjectPackageNotice(
-                title: "نوع ملف غير مدعوم",
-                message: "يدعم التطبيق ملفات .3eroom وPDF وDXF."
-            )
-        }
-    }
-
     private func prepareProjectImport(from url: URL) {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
         do {
             pendingImport = try ProjectPackageService.prepareImport(
                 from: url
@@ -600,7 +509,7 @@ private struct SurveyProjectRow: View {
     }
 }
 
-struct ProjectBrowserView: View {
+private struct ProjectBrowserView: View {
     @EnvironmentObject private var store: ProjectStore
     @Environment(\.dismiss) private var dismiss
 
@@ -1025,20 +934,11 @@ struct ProjectBrowserView: View {
 
     private func exportProjectPackage() {
         do {
-            guard let project = store.project(id: projectID) else {
-                throw WorkspaceRepository.RepositoryError.projectNotFound
-            }
-            let temporaryURL = try ProjectPackageService.makePackage(
-                projectID: projectID
+            exportedProjectFile = ExportedFile(
+                url: try ProjectPackageService.makePackage(
+                    projectID: projectID
+                )
             )
-            let savedURL = try ExportRegistry.register(
-                sourceURL: temporaryURL,
-                kind: .projectPackage,
-                project: project,
-                scopeItemID: parentItemID,
-                roomIDs: project.scans.map(\.id)
-            )
-            exportedProjectFile = ExportedFile(url: savedURL)
         } catch {
             errorMessage = error.localizedDescription
         }

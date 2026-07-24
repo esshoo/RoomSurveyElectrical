@@ -7,11 +7,15 @@ extension ProjectExportService {
         room: ExportRoomRecord,
         metadata: ExportDocumentMetadata
     ) throws -> URL {
+        let embeddedPackage = SmartProjectEmbedding.makePackage(
+            metadata: metadata
+        )
         let data = Data(
             DXFPlanBuilder(
                 title: title,
                 record: room,
-                metadata: metadata
+                metadata: metadata,
+                embeddedPackage: embeddedPackage
             ).build().utf8
         )
         return try writeTemporaryFile(
@@ -27,11 +31,22 @@ extension ProjectExportService {
         metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
+        let embeddedPackage = SmartProjectEmbedding.makePackage(
+            metadata: metadata
+        )
         if rooms.count == 1 {
-            return try makeDXF(
-                title: title,
-                room: rooms[0],
-                metadata: metadata
+            let data = Data(
+                DXFPlanBuilder(
+                    title: title,
+                    record: rooms[0],
+                    metadata: metadata,
+                    embeddedPackage: embeddedPackage
+                ).build().utf8
+            )
+            return try writeTemporaryFile(
+                data,
+                name: "\(sanitized(title))-2D",
+                extension: "dxf"
             )
         }
 
@@ -48,7 +63,8 @@ extension ProjectExportService {
                     DXFPlanBuilder(
                         title: room.scan.name,
                         record: room,
-                        metadata: metadata
+                        metadata: metadata,
+                        embeddedPackage: embeddedPackage
                     ).build().utf8
                 )
             )
@@ -66,18 +82,30 @@ extension ProjectExportService {
         metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
+        let embeddedPackage = SmartProjectEmbedding.makePackage(
+            metadata: metadata
+        )
         if rooms.count == 1 {
-            return try makeDXF(
-                title: title,
-                room: rooms[0],
-                metadata: metadata
+            let data = Data(
+                DXFPlanBuilder(
+                    title: title,
+                    record: rooms[0],
+                    metadata: metadata,
+                    embeddedPackage: embeddedPackage
+                ).build().utf8
+            )
+            return try writeTemporaryFile(
+                data,
+                name: "\(sanitized(title))-2D",
+                extension: "dxf"
             )
         }
         let data = Data(
             DXFPlanBuilder.combined(
                 title: title,
                 rooms: rooms,
-                metadata: metadata
+                metadata: metadata,
+                embeddedPackage: embeddedPackage
             ).utf8
         )
         return try writeTemporaryFile(
@@ -93,11 +121,15 @@ extension ProjectExportService {
         metadata: ExportDocumentMetadata
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
+        let embeddedPackage = SmartProjectEmbedding.makePackage(
+            metadata: metadata
+        )
         let data = Data(
             DXFPlanBuilder.layouts(
                 title: title,
                 rooms: rooms,
-                metadata: metadata
+                metadata: metadata,
+                embeddedPackage: embeddedPackage
             ).utf8
         )
         return try writeTemporaryFile(
@@ -112,6 +144,7 @@ private struct DXFPlanBuilder {
     let title: String
     let record: ExportRoomRecord
     let metadata: ExportDocumentMetadata
+    let embeddedPackage: SmartProjectEmbeddedPackage?
     var translation: (x: Double, y: Double) = (0, 0)
 
     private struct Bounds {
@@ -167,7 +200,8 @@ private struct DXFPlanBuilder {
     static func combined(
         title: String,
         rooms: [ExportRoomRecord],
-        metadata: ExportDocumentMetadata
+        metadata: ExportDocumentMetadata,
+        embeddedPackage: SmartProjectEmbeddedPackage?
     ) -> String {
         guard let firstRoom = rooms.first else {
             return ""
@@ -202,7 +236,8 @@ private struct DXFPlanBuilder {
         let firstBuilder = DXFPlanBuilder(
             title: title,
             record: firstRoom,
-            metadata: metadata
+            metadata: metadata,
+            embeddedPackage: embeddedPackage
         )
         var dxf = DXFWriter()
         firstBuilder.addHeader(
@@ -223,6 +258,7 @@ private struct DXFPlanBuilder {
                 title: placement.room.scan.name,
                 record: placement.room,
                 metadata: metadata,
+                embeddedPackage: embeddedPackage,
                 translation: placement.translation
             )
             builder.addEntities(to: &dxf)
@@ -278,6 +314,7 @@ private struct DXFPlanBuilder {
             horizontalAlignment: 2
         )
         dxf.pair(0, "ENDSEC")
+        firstBuilder.addSmartProjectObjects(to: &dxf)
         dxf.pair(0, "EOF")
         return dxf.output
     }
@@ -285,7 +322,8 @@ private struct DXFPlanBuilder {
     static func layouts(
         title: String,
         rooms: [ExportRoomRecord],
-        metadata: ExportDocumentMetadata
+        metadata: ExportDocumentMetadata,
+        embeddedPackage: SmartProjectEmbeddedPackage?
     ) -> String {
         guard let firstRoom = rooms.first else {
             return ""
@@ -302,7 +340,8 @@ private struct DXFPlanBuilder {
         let documentBuilder = DXFPlanBuilder(
             title: title,
             record: firstRoom,
-            metadata: metadata
+            metadata: metadata,
+            embeddedPackage: embeddedPackage
         )
         var dxf = DXFWriter()
         documentBuilder.addLayoutHeader(
@@ -529,6 +568,21 @@ private struct DXFPlanBuilder {
             dxf.pair(6, "CONTINUOUS")
             dxf.pair(370, layer.lineWeight)
         }
+        dxf.pair(0, "ENDTAB")
+
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "APPID")
+        dxf.pair(5, "E3E010")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbSymbolTable")
+        dxf.pair(70, 1)
+        dxf.pair(0, "APPID")
+        dxf.pair(5, "E3E011")
+        dxf.pair(330, "E3E010")
+        dxf.pair(100, "AcDbSymbolTableRecord")
+        dxf.pair(100, "AcDbRegAppTableRecord")
+        dxf.pair(2, SmartProjectEmbedding.applicationID)
+        dxf.pair(70, 0)
         dxf.pair(0, "ENDTAB")
 
         dxf.pair(0, "TABLE")
@@ -802,6 +856,7 @@ private struct DXFPlanBuilder {
                 title: placement.room.scan.name,
                 record: placement.room,
                 metadata: metadata,
+                embeddedPackage: embeddedPackage,
                 translation: placement.translation
             )
             builder.addEntities(to: &dxf)
@@ -873,6 +928,10 @@ private struct DXFPlanBuilder {
         dxf.pair(281, 1)
         dxf.pair(3, "ACAD_LAYOUT")
         dxf.pair(350, "2")
+        if embeddedPackage != nil {
+            dxf.pair(3, SmartProjectEmbedding.dxfDictionaryEntry)
+            dxf.pair(350, SmartProjectEmbedding.dxfXRecordHandle)
+        }
 
         dxf.pair(0, "DICTIONARY")
         dxf.pair(5, "2")
@@ -907,6 +966,7 @@ private struct DXFPlanBuilder {
                 isModel: false
             )
         }
+        addSmartProjectXRecord(to: &dxf)
         dxf.pair(0, "ENDSEC")
     }
 
@@ -997,8 +1057,53 @@ private struct DXFPlanBuilder {
         addEntities(to: &dxf)
         addDrawingInformation(to: &dxf)
         dxf.pair(0, "ENDSEC")
+        addSmartProjectObjects(to: &dxf)
         dxf.pair(0, "EOF")
         return dxf.output
+    }
+
+    private func addSmartProjectObjects(to dxf: inout DXFWriter) {
+        guard embeddedPackage != nil else { return }
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "OBJECTS")
+        dxf.pair(0, "DICTIONARY")
+        dxf.pair(5, "1")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbDictionary")
+        dxf.pair(281, 1)
+        dxf.pair(3, SmartProjectEmbedding.dxfDictionaryEntry)
+        dxf.pair(350, SmartProjectEmbedding.dxfXRecordHandle)
+        addSmartProjectXRecord(to: &dxf)
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addSmartProjectXRecord(to dxf: inout DXFWriter) {
+        guard let embeddedPackage else { return }
+        let manifestChunks = SmartProjectEmbedding.chunks(
+            embeddedPackage.manifestBase64
+        )
+        let packageChunks = SmartProjectEmbedding.chunks(
+            embeddedPackage.packageBase64
+        )
+
+        dxf.pair(0, "XRECORD")
+        dxf.pair(5, SmartProjectEmbedding.dxfXRecordHandle)
+        dxf.pair(330, "1")
+        dxf.pair(100, "AcDbXrecord")
+        dxf.pair(280, 1)
+        dxf.pair(1, SmartProjectEmbedding.marker)
+        dxf.pair(1, "MANIFEST_BASE64_BEGIN")
+        for chunk in manifestChunks {
+            dxf.pair(1, chunk)
+        }
+        dxf.pair(1, "MANIFEST_BASE64_END")
+        dxf.pair(90, embeddedPackage.packageData.count)
+        dxf.pair(90, packageChunks.count)
+        dxf.pair(1, "PACKAGE_BASE64_BEGIN")
+        for chunk in packageChunks {
+            dxf.pair(1, chunk)
+        }
+        dxf.pair(1, "PACKAGE_BASE64_END")
     }
 
     private func addEntities(to dxf: inout DXFWriter) {
@@ -1117,6 +1222,14 @@ private struct DXFPlanBuilder {
             dxf.pair(6, "CONTINUOUS")
             dxf.pair(370, layer.lineWeight)
         }
+        dxf.pair(0, "ENDTAB")
+
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "APPID")
+        dxf.pair(70, 1)
+        dxf.pair(0, "APPID")
+        dxf.pair(2, SmartProjectEmbedding.applicationID)
+        dxf.pair(70, 0)
         dxf.pair(0, "ENDTAB")
 
         dxf.pair(0, "TABLE")
