@@ -122,6 +122,10 @@ enum DXFViewerParser {
                 layerNames.insert(layer)
             }
             guard currentSection == "ENTITIES" else { return }
+            let isPaperSpace = currentPairs.first {
+                $0.code == 67
+            }.flatMap { Int($0.value) } == 1
+            guard !isPaperSpace else { return }
             if let entity = parseEntity(
                 id: nextEntityID,
                 type: type,
@@ -350,6 +354,8 @@ enum DXFViewerParser {
 }
 
 struct DXFViewerScreen: View {
+    @Environment(\.dismiss) private var dismiss
+
     let url: URL
 
     @State private var document: DXFViewerDocument?
@@ -423,6 +429,15 @@ struct DXFViewerScreen: View {
             .navigationTitle(url.lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("إغلاق", systemImage: "xmark")
+                    }
+                    .accessibilityLabel("إغلاق عارض DXF")
+                }
+
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button(action: resetView) {
                         Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")

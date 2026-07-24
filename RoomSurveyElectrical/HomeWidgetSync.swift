@@ -126,3 +126,67 @@ enum HomeWidgetSnapshotStore {
         }
     }
 }
+
+enum HomeWidgetInstallationStatus: Equatable {
+    case ready
+    case extensionMissing
+    case appGroupUnavailable
+
+    var message: String? {
+        switch self {
+        case .ready:
+            nil
+        case .extensionMissing:
+            "نسخة التثبيت لا تحتوي امتداد الويدجت داخل PlugIns. يجب توقيع التطبيق والـWidget Extension معًا."
+        case .appGroupUnavailable:
+            "امتداد الويدجت موجود، لكن App Group غير متاح في التوقيع الحالي؛ قد لا تظهر بيانات آخر المشروعات."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .ready: "checkmark.circle.fill"
+        case .extensionMissing: "puzzlepiece.extension.fill"
+        case .appGroupUnavailable: "person.2.badge.gearshape.fill"
+        }
+    }
+}
+
+enum HomeWidgetDiagnostics {
+    private static let fileManager = FileManager.default
+
+    static var status: HomeWidgetInstallationStatus {
+        guard extensionIsEmbedded else {
+            return .extensionMissing
+        }
+        guard sharedContainerIsAvailable else {
+            return .appGroupUnavailable
+        }
+        return .ready
+    }
+
+    private static var extensionIsEmbedded: Bool {
+        guard let plugInsURL = Bundle.main.builtInPlugInsURL,
+              let children = try? fileManager.contentsOfDirectory(
+                  at: plugInsURL,
+                  includingPropertiesForKeys: nil,
+                  options: [.skipsHiddenFiles]
+              ) else {
+            return false
+        }
+        return children.contains {
+            $0.pathExtension.caseInsensitiveCompare("appex") == .orderedSame
+                && $0.lastPathComponent
+                    .caseInsensitiveCompare(
+                        "3ERoomElectricalWidgetExtension.appex"
+                    ) == .orderedSame
+        }
+    }
+
+    private static var sharedContainerIsAvailable: Bool {
+        fileManager.containerURL(
+            forSecurityApplicationGroupIdentifier:
+                HomeWidgetSharedConfiguration.appGroupIdentifier
+        ) != nil
+    }
+}

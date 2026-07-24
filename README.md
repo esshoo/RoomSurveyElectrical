@@ -1,4 +1,4 @@
-# 3ERoomElectrical v1.9.1 (Build 18)
+# 3ERoomElectrical v1.9.2 (Build 19)
 
 ## Important upgrade cleanup
 
@@ -8,7 +8,20 @@ Before building over an older checkout, remove the obsolete source file:
 powershell -ExecutionPolicy Bypass -File .\Tools\Clean-ObsoleteFiles.ps1
 ```
 
-The removed file is `RoomSurveyElectrical/SmartProjectEmbedding.swift`. It belongs to the abandoned embedded-project experiment and is not part of v1.9.1.
+The removed file is `RoomSurveyElectrical/SmartProjectEmbedding.swift`. It belongs to the abandoned embedded-project experiment and is not part of v1.9.2.
+
+## v1.9.2 fixes
+
+- Added an explicit **إغلاق** action to the full-screen DXF viewer.
+- Moved paper-space viewports and annotations from `BLOCKS` to `ENTITIES`.
+- Tagged every exported graphical entity with its Model or paper layout.
+- Added validation that every DXF contains real Model Space geometry.
+- Made the Model Space combined export the first multi-room DXF option.
+- Added strict widget-extension bundle checks to GitHub Actions.
+- Added installed-widget diagnostics inside the main app.
+- Added Windows tools for checking a DXF and inspecting the final signed IPA.
+
+See `Docs/3E-v1.9.2-runtime-fixes.md`.
 
 # 3ERoomElectrical v1.9 Build 17
 
@@ -64,7 +77,7 @@ com.personal.roomsurveyelectrical
 com.personal.roomsurveyelectrical.widget
 ```
 
-A sideload/re-signing tool must sign both the app and nested widget extension and preserve the App Group entitlements. Without the shared entitlement, the widget can still install but cannot receive recent-project data from the main app.
+A sideload/re-signing tool must sign both the app and nested widget extension and preserve the App Group entitlements. The final provisioning profiles must authorize the App Group for both the main app and the widget extension. A signer that drops the nested extension or rewrites only the main bundle identifier prevents iOS from registering the widget.
 
 ## 4. Existing document hub retained
 
@@ -89,8 +102,8 @@ The source has passed:
 - Swift syntax parsing for all app and widget files
 - plist and Xcode project validation
 - DXF validator round-trip tests
-- actual single, combined, and layout DXF generation through the exporter
-- independent DXF import tests
+- static Model/Paper Space structure checks
+- dependency-free DXF model-space validation
 - ZIP integrity validation
 
 A full Xcode/iOS build must still be run by GitHub Actions or Xcode because this preparation environment is not macOS.

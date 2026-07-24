@@ -222,14 +222,14 @@ struct ExportCenterView: View {
             Section("DXF – مخطط CAD متجه") {
                 if planRooms.count > 1 {
                     exportButton(
-                        "DXF Layouts – لاي أوت لكل مخطط",
-                        subtitle: "ملف واحد • Layout باسم كل مساحة • الطبقات موحّدة",
-                        systemImage: "rectangle.stack.fill",
-                        kind: .layoutDXF,
+                        "DXF موحد – Model Space",
+                        subtitle: "الخيار الأكثر توافقًا • كل المخططات داخل Model Space",
+                        systemImage: "rectangle.3.group.fill",
+                        kind: .combinedDXF,
                         roomIDs: planRooms.map(\.id),
                         disabled: planRooms.isEmpty
                     ) {
-                        try ProjectExportService.makeLayoutDXF(
+                        try ProjectExportService.makeCombinedDXF(
                             title: title,
                             rooms: planRooms,
                             metadata: exportMetadata
@@ -237,14 +237,14 @@ struct ExportCenterView: View {
                     }
 
                     exportButton(
-                        "DXF موحد – المخططات بجوار بعضها",
-                        subtitle: "ملف واحد • أسماء المساحات ظاهرة • 12 طبقة مشتركة",
-                        systemImage: "rectangle.3.group.fill",
-                        kind: .combinedDXF,
+                        "DXF Layouts – متقدم",
+                        subtitle: "الرسم كامل في Model Space • Layout مستقل لكل مساحة",
+                        systemImage: "rectangle.stack.fill",
+                        kind: .layoutDXF,
                         roomIDs: planRooms.map(\.id),
                         disabled: planRooms.isEmpty
                     ) {
-                        try ProjectExportService.makeCombinedDXF(
+                        try ProjectExportService.makeLayoutDXF(
                             title: title,
                             rooms: planRooms,
                             metadata: exportMetadata

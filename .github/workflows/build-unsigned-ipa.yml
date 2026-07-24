@@ -20,7 +20,7 @@ jobs:
       - name: Remove obsolete source files
         shell: bash
         run: |
-          ./Tools/clean-obsolete-files.sh
+          bash ./Tools/clean-obsolete-files.sh
           test ! -e RoomSurveyElectrical/SmartProjectEmbedding.swift
 
       - name: Build for a physical iPhone
@@ -49,15 +49,38 @@ jobs:
           tail -n 250 build.log
           exit 0
 
+      - name: Verify embedded widget extension
+        if: steps.xcodebuild.outputs.status == '0'
+        shell: bash
+        run: |
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/3ERoomElectrical.app"
+          WIDGET_PATH="$APP_PATH/PlugIns/3ERoomElectricalWidgetExtension.appex"
+          test -d "$APP_PATH"
+          test -d "$WIDGET_PATH"
+          test -f "$WIDGET_PATH/Info.plist"
+          MAIN_ID=$(plutil -extract CFBundleIdentifier raw "$APP_PATH/Info.plist")
+          WIDGET_ID=$(plutil -extract CFBundleIdentifier raw "$WIDGET_PATH/Info.plist")
+          EXTENSION_POINT=$(plutil -extract NSExtension.NSExtensionPointIdentifier raw "$WIDGET_PATH/Info.plist")
+          test "$WIDGET_ID" = "$MAIN_ID.widget"
+          test "$EXTENSION_POINT" = "com.apple.widgetkit-extension"
+          {
+            echo "Main bundle: $MAIN_ID"
+            echo "Widget bundle: $WIDGET_ID"
+            echo "Extension point: $EXTENSION_POINT"
+            echo "Widget path: $WIDGET_PATH"
+          } | tee build/widget-bundle-report.txt
+
       - name: Package unsigned IPA
         if: steps.xcodebuild.outputs.status == '0'
         run: |
           APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/3ERoomElectrical.app"
-          test -d "$APP_PATH"
+          test -d "$APP_PATH/PlugIns/3ERoomElectricalWidgetExtension.appex"
+          rm -rf build/Payload
           mkdir -p build/Payload
           ditto "$APP_PATH" build/Payload/3ERoomElectrical.app
           cd build
           zip -qry 3ERoomElectrical-unsigned.ipa Payload
+          unzip -l 3ERoomElectrical-unsigned.ipa | grep -q 'Payload/3ERoomElectrical.app/PlugIns/3ERoomElectricalWidgetExtension.appex/'
 
       - name: Upload IPA and diagnostics
         if: always()
@@ -68,6 +91,7 @@ jobs:
             build/3ERoomElectrical-unsigned.ipa
             build.log
             build/RoomSurveyElectrical.xcresult
+            build/widget-bundle-report.txt
           if-no-files-found: warn
           retention-days: 14
 

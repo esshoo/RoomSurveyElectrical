@@ -224,7 +224,10 @@ private struct DXFPlanBuilder {
         firstBuilder.addLayoutBlocks(to: &dxf, descriptors: [])
         dxf.pair(0, "SECTION")
         dxf.pair(2, "ENTITIES")
-        dxf.setEntityContext(ownerHandle: "4")
+        dxf.setEntityContext(
+            ownerHandle: "4",
+            layoutName: "Model"
+        )
 
         for placement in placements {
             let builder = DXFPlanBuilder(
@@ -611,6 +614,9 @@ private struct DXFPlanBuilder {
     ) {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "BLOCKS")
+
+        // Model-space and paper-space BLOCK definitions are containers only.
+        // Their graphical entities belong in the ENTITIES section.
         addLayoutBlockBegin(
             to: &dxf,
             handle: "6",
@@ -630,64 +636,6 @@ private struct DXFPlanBuilder {
                 owner: descriptor.blockRecordHandle,
                 name: descriptor.blockName
             )
-            addLayoutViewport(
-                to: &dxf,
-                handle: descriptor.defaultViewportHandle,
-                owner: descriptor.blockRecordHandle,
-                identifier: 1,
-                center: (210, 148.5),
-                size: (462, 326.7),
-                viewCenter: (210, 148.5),
-                viewHeight: 326.7,
-                isDefault: true
-            )
-            addLayoutViewport(
-                to: &dxf,
-                handle: descriptor.mainViewportHandle,
-                owner: descriptor.blockRecordHandle,
-                identifier: 2,
-                center: (210, 135),
-                size: (390, 235),
-                viewCenter: descriptor.viewCenter,
-                viewHeight: descriptor.viewHeight,
-                isDefault: false
-            )
-
-            dxf.setEntityContext(
-                ownerHandle: descriptor.blockRecordHandle,
-                paperSpace: true
-            )
-            dxf.text(
-                metadata.brandName,
-                at: (15, 285),
-                height: 5,
-                layer: "ANNOTATIONS",
-                horizontalAlignment: 0
-            )
-            dxf.text(
-                descriptor.name,
-                at: (15, 275),
-                height: 4,
-                layer: "ANNOTATIONS",
-                horizontalAlignment: 0
-            )
-            if !descriptor.placement.room.location.isEmpty {
-                dxf.text(
-                    descriptor.placement.room.location,
-                    at: (15, 267),
-                    height: 2.5,
-                    layer: "ANNOTATIONS",
-                    horizontalAlignment: 0
-                )
-            }
-            dxf.text(
-                metadata.exportLine,
-                at: (405, 8),
-                height: 2.5,
-                layer: "ANNOTATIONS",
-                horizontalAlignment: 2
-            )
-            dxf.setEntityContext(ownerHandle: nil)
             addLayoutBlockEnd(
                 to: &dxf,
                 handle: descriptor.blockEndHandle,
@@ -740,13 +688,15 @@ private struct DXFPlanBuilder {
         size: (width: Double, height: Double),
         viewCenter: (x: Double, y: Double),
         viewHeight: Double,
-        isDefault: Bool
+        isDefault: Bool,
+        layoutName: String
     ) {
         dxf.pair(0, "VIEWPORT")
         dxf.pair(5, handle)
         dxf.pair(330, owner)
         dxf.pair(100, "AcDbEntity")
         dxf.pair(67, 1)
+        dxf.pair(410, layoutName)
         dxf.pair(8, "ANNOTATIONS")
         dxf.pair(100, "AcDbViewport")
         dxf.pair(10, center.x)
@@ -804,7 +754,77 @@ private struct DXFPlanBuilder {
     ) {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "ENTITIES")
-        dxf.setEntityContext(ownerHandle: "4")
+
+        // AutoCAD writes paper-space entities first, followed by model-space
+        // entities. Group code 67 and layout name 410 keep both spaces
+        // unambiguous for strict DXF readers.
+        for descriptor in descriptors {
+            addLayoutViewport(
+                to: &dxf,
+                handle: descriptor.defaultViewportHandle,
+                owner: descriptor.blockRecordHandle,
+                identifier: 1,
+                center: (210, 148.5),
+                size: (462, 326.7),
+                viewCenter: (210, 148.5),
+                viewHeight: 326.7,
+                isDefault: true,
+                layoutName: descriptor.name
+            )
+            addLayoutViewport(
+                to: &dxf,
+                handle: descriptor.mainViewportHandle,
+                owner: descriptor.blockRecordHandle,
+                identifier: 2,
+                center: (210, 135),
+                size: (390, 235),
+                viewCenter: descriptor.viewCenter,
+                viewHeight: descriptor.viewHeight,
+                isDefault: false,
+                layoutName: descriptor.name
+            )
+
+            dxf.setEntityContext(
+                ownerHandle: descriptor.blockRecordHandle,
+                paperSpace: true,
+                layoutName: descriptor.name
+            )
+            dxf.text(
+                metadata.brandName,
+                at: (15, 285),
+                height: 5,
+                layer: "ANNOTATIONS",
+                horizontalAlignment: 0
+            )
+            dxf.text(
+                descriptor.name,
+                at: (15, 275),
+                height: 4,
+                layer: "ANNOTATIONS",
+                horizontalAlignment: 0
+            )
+            if !descriptor.placement.room.location.isEmpty {
+                dxf.text(
+                    descriptor.placement.room.location,
+                    at: (15, 267),
+                    height: 2.5,
+                    layer: "ANNOTATIONS",
+                    horizontalAlignment: 0
+                )
+            }
+            dxf.text(
+                metadata.exportLine,
+                at: (405, 8),
+                height: 2.5,
+                layer: "ANNOTATIONS",
+                horizontalAlignment: 2
+            )
+        }
+
+        dxf.setEntityContext(
+            ownerHandle: "4",
+            layoutName: "Model"
+        )
 
         for descriptor in descriptors {
             let placement = descriptor.placement
@@ -931,6 +951,9 @@ private struct DXFPlanBuilder {
     ) {
         dxf.pair(0, "LAYOUT")
         dxf.pair(5, handle)
+        dxf.pair(102, "{ACAD_REACTORS")
+        dxf.pair(330, "2")
+        dxf.pair(102, "}")
         dxf.pair(330, "2")
         dxf.pair(100, "AcDbPlotSettings")
         dxf.pair(1, "")
@@ -1006,7 +1029,10 @@ private struct DXFPlanBuilder {
         addLayoutBlocks(to: &dxf, descriptors: [])
         dxf.pair(0, "SECTION")
         dxf.pair(2, "ENTITIES")
-        dxf.setEntityContext(ownerHandle: "4")
+        dxf.setEntityContext(
+            ownerHandle: "4",
+            layoutName: "Model"
+        )
         addEntities(to: &dxf)
         addDrawingInformation(to: &dxf)
         dxf.setEntityContext(ownerHandle: nil)
@@ -1465,14 +1491,17 @@ private struct DXFWriter {
     private(set) var output = ""
     private var entityOwnerHandle: String?
     private var paperSpaceEntity = false
+    private var entityLayoutName: String?
     private var nextEntityHandleValue = 0x100000
 
     mutating func setEntityContext(
         ownerHandle: String?,
-        paperSpace: Bool = false
+        paperSpace: Bool = false,
+        layoutName: String? = nil
     ) {
         entityOwnerHandle = ownerHandle
         paperSpaceEntity = ownerHandle == nil ? false : paperSpace
+        entityLayoutName = ownerHandle == nil ? nil : layoutName
     }
 
     mutating func pair(_ code: Int, _ value: String) {
@@ -1670,8 +1699,9 @@ private struct DXFWriter {
         pair(5, nextEntityHandle())
         pair(330, entityOwnerHandle)
         pair(100, "AcDbEntity")
-        if paperSpaceEntity {
-            pair(67, 1)
+        pair(67, paperSpaceEntity ? 1 : 0)
+        if let entityLayoutName {
+            pair(410, entityLayoutName)
         }
         pair(8, layer)
         pair(100, subclass)

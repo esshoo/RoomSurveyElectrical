@@ -38,7 +38,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.9 • عارض DXF وويدجت الشاشة",
+                                    "الإصدار 1.9.2 • إصلاح Model Space والويدجت",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
@@ -78,6 +78,21 @@ struct ContentView: View {
                             )
                         )
                         .listRowBackground(Color.clear)
+
+                        if let message = HomeWidgetDiagnostics.status.message {
+                            Label(
+                                message,
+                                systemImage:
+                                    HomeWidgetDiagnostics.status.systemImage
+                            )
+                            .font(.caption)
+                            .foregroundStyle(
+                                HomeWidgetDiagnostics.status
+                                    == .extensionMissing
+                                    ? Color.red
+                                    : Color.orange
+                            )
+                        }
                     }
                 }
 

@@ -5,6 +5,9 @@ enum DXFCompatibilityError: LocalizedError {
     case missingSection(String)
     case invalidSectionOrder
     case missingModelSpace
+    case missingModelEntities
+    case paperSpaceEntityInBlocks(String)
+    case paperEntityAfterModelEntity
     case invalidEntity(type: String, missingCode: String)
     case duplicateHandle(String)
     case stringTooLong(code: Int)
@@ -19,6 +22,12 @@ enum DXFCompatibilityError: LocalizedError {
             "تعذر إنشاء DXF لأن ترتيب الأقسام غير متوافق مع AutoCAD."
         case .missingModelSpace:
             "تعذر إنشاء DXF لأن تعريف Model Space غير مكتمل."
+        case .missingModelEntities:
+            "تعذر إنشاء DXF لأن قسم ENTITIES لا يحتوي رسمًا فعليًا في Model Space."
+        case .paperSpaceEntityInBlocks(let type):
+            "تعذر إنشاء DXF لأن كيان Paper Space من النوع \(type) كُتب داخل BLOCKS بدل ENTITIES."
+        case .paperEntityAfterModelEntity:
+            "تعذر إنشاء DXF لأن ترتيب كيانات Paper Space وModel Space غير متوافق."
         case .invalidEntity(let type, let missingCode):
             "تعذر إنشاء DXF لأن كيان \(type) يفتقد \(missingCode)."
         case .duplicateHandle(let handle):
@@ -75,6 +84,8 @@ enum DXFCompatibilityValidator {
         var currentSection: String?
         var sawModelBlockRecord = false
         var sawModelBlock = false
+        var modelEntityCount = 0
+        var reachedModelEntities = false
         var handles: Set<String> = []
         var currentRecordType: String?
         var currentRecordPairs: [Pair] = []
@@ -138,6 +149,43 @@ enum DXFCompatibilityValidator {
                         type: upperType,
                         missingCode: "\(subclass) subclass"
                     )
+                }
+
+                let paperSpace = currentRecordPairs.first {
+                    $0.code == 67
+                }.flatMap { Int($0.value) } == 1
+                let layoutName = currentRecordPairs.first {
+                    $0.code == 410
+                }?.value
+
+                if currentSection == "BLOCKS", paperSpace {
+                    throw DXFCompatibilityError
+                        .paperSpaceEntityInBlocks(upperType)
+                }
+
+                if currentSection == "ENTITIES" {
+                    guard let layoutName, !layoutName.isEmpty else {
+                        throw DXFCompatibilityError.invalidEntity(
+                            type: upperType,
+                            missingCode: "layout name (410)"
+                        )
+                    }
+                    if paperSpace {
+                        if reachedModelEntities {
+                            throw DXFCompatibilityError
+                                .paperEntityAfterModelEntity
+                        }
+                    } else {
+                        reachedModelEntities = true
+                        modelEntityCount += 1
+                        guard layoutName.caseInsensitiveCompare("Model")
+                                == .orderedSame else {
+                            throw DXFCompatibilityError.invalidEntity(
+                                type: upperType,
+                                missingCode: "Model layout tag (410)"
+                            )
+                        }
+                    }
                 }
             }
 
@@ -208,6 +256,9 @@ enum DXFCompatibilityValidator {
         }
         guard sawModelBlockRecord, sawModelBlock else {
             throw DXFCompatibilityError.missingModelSpace
+        }
+        guard modelEntityCount > 0 else {
+            throw DXFCompatibilityError.missingModelEntities
         }
     }
 
