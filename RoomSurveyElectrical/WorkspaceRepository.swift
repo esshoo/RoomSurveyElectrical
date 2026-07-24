@@ -710,4 +710,17 @@ final class ProjectStore: ObservableObject {
         _ = try WorkspaceRepository.deleteScan(projectID: projectID, scanID: scanID)
         reload()
     }
+
+    @discardableResult
+    func importProjectPackage(
+        _ package: PreparedProjectPackage,
+        strategy: ProjectPackageImportStrategy
+    ) throws -> SurveyProject {
+        let project = try ProjectPackageService.importPackage(
+            package,
+            strategy: strategy
+        )
+        reload()
+        return project
+    }
 }

@@ -1,10 +1,14 @@
 import RoomPlan
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var store = ProjectStore()
     @State private var showNewProject = false
     @State private var showGlobalSettings = false
+    @State private var showProjectImporter = false
+    @State private var pendingImport: PreparedProjectPackage?
+    @State private var packageNotice: ProjectPackageNotice?
 
     var body: some View {
         NavigationStack {
@@ -32,7 +36,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.6 • DXF Layouts",
+                                    "الإصدار 1.7 • ملفات .3eroom",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
@@ -107,6 +111,17 @@ struct ContentView: View {
                     }
                     .accessibilityLabel("الإعدادات العامة")
                 }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showProjectImporter = true
+                    } label: {
+                        Image(systemName: "doc.badge.plus")
+                    }
+                    .accessibilityLabel(
+                        "استيراد مشروع 3ERoomElectrical"
+                    )
+                }
             }
             .safeAreaInset(edge: .bottom) {
                 HStack {
@@ -149,7 +164,282 @@ struct ContentView: View {
                 GlobalSettingsRepository.save(settings)
             }
         }
+        .sheet(item: $pendingImport) { package in
+            ProjectPackageImportSheet(
+                package: package,
+                existingProjects: store.projects
+            ) { strategy in
+                do {
+                    let project = try store.importProjectPackage(
+                        package,
+                        strategy: strategy
+                    )
+                    pendingImport = nil
+                    packageNotice = ProjectPackageNotice(
+                        title: "تم استيراد المشروع",
+                        message:
+                            "تمت إضافة «\(project.name)» بكل المجلدات والمسحات والملفات التابعة له."
+                    )
+                    return nil
+                } catch {
+                    return error.localizedDescription
+                }
+            }
+        }
+        .fileImporter(
+            isPresented: $showProjectImporter,
+            allowedContentTypes: [.threeERoomProject],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    prepareProjectImport(from: url)
+                }
+            case .failure(let error):
+                packageNotice = ProjectPackageNotice(
+                    title: "تعذر اختيار الملف",
+                    message: error.localizedDescription
+                )
+            }
+        }
+        .onOpenURL(perform: prepareProjectImport)
+        .alert(item: $packageNotice) { notice in
+            Alert(
+                title: Text(notice.title),
+                message: Text(notice.message),
+                dismissButton: .default(Text("حسنًا"))
+            )
+        }
         .onAppear(perform: store.reload)
+    }
+
+    private func prepareProjectImport(from url: URL) {
+        do {
+            pendingImport = try ProjectPackageService.prepareImport(
+                from: url
+            )
+        } catch {
+            packageNotice = ProjectPackageNotice(
+                title: "تعذر استيراد المشروع",
+                message: error.localizedDescription
+            )
+        }
+    }
+}
+
+private struct ProjectPackageNotice: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
+private struct ProjectPackageImportSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let package: PreparedProjectPackage
+    let existingProjects: [SurveyProject]
+    let onImport: (ProjectPackageImportStrategy) -> String?
+
+    @State private var renamedProject = ""
+    @State private var errorMessage: String?
+    @State private var replacementProjectID: UUID?
+
+    private var conflictingProject: SurveyProject? {
+        existingProjects.first {
+            $0.id == package.preview.projectID
+        } ?? existingProjects.first {
+            namesMatch($0.name, package.preview.name)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("ملف المشروع") {
+                    LabeledContent(
+                        "الاسم",
+                        value: package.preview.name
+                    )
+                    LabeledContent(
+                        "النوع",
+                        value: package.preview.kind.title
+                    )
+                    LabeledContent(
+                        "تاريخ الإنشاء",
+                        value: package.preview.createdAt.formatted(
+                            date: .abbreviated,
+                            time: .shortened
+                        )
+                    )
+                    LabeledContent(
+                        "المجلدات والمساحات",
+                        value: "\(package.preview.folderCount)"
+                    )
+                    LabeledContent(
+                        "المسحات",
+                        value: "\(package.preview.scanCount)"
+                    )
+                    LabeledContent(
+                        "حجم البيانات",
+                        value: ByteCountFormatter.string(
+                            fromByteCount:
+                                Int64(package.preview.totalBytes),
+                            countStyle: .file
+                        )
+                    )
+                }
+
+                if package.preview.missingAssetCount > 0 {
+                    Section {
+                        Label(
+                            "الحزمة لا تحتوي على \(package.preview.missingAssetCount) من ملفات المسح الاختيارية التي كانت مفقودة أصلًا عند التصدير.",
+                            systemImage:
+                                "exclamationmark.triangle.fill"
+                        )
+                        .foregroundStyle(.orange)
+                    }
+                }
+
+                if let conflictingProject {
+                    Section("يوجد مشروع مطابق") {
+                        Label(
+                            "يوجد مشروع باسم «\(conflictingProject.name)». اختر طريقة الاستيراد.",
+                            systemImage: "exclamationmark.circle.fill"
+                        )
+                        .foregroundStyle(.orange)
+
+                        Button {
+                            runImport(.copy)
+                        } label: {
+                            Label(
+                                "استيراد كنسخة جديدة",
+                                systemImage:
+                                    "plus.square.on.square"
+                            )
+                        }
+
+                        TextField(
+                            "اسم جديد للمشروع",
+                            text: $renamedProject
+                        )
+                        Button {
+                            runImport(.rename(renamedProject))
+                        } label: {
+                            Label(
+                                "استيراد بالاسم الجديد",
+                                systemImage: "pencil"
+                            )
+                        }
+                        .disabled(
+                            renamedProject.trimmingCharacters(
+                                in: .whitespacesAndNewlines
+                            ).isEmpty
+                        )
+
+                        Button(role: .destructive) {
+                            replacementProjectID =
+                                conflictingProject.id
+                        } label: {
+                            Label(
+                                "استبدال المشروع الموجود",
+                                systemImage:
+                                    "arrow.triangle.2.circlepath"
+                            )
+                        }
+                    }
+                } else {
+                    Section {
+                        Button {
+                            runImport(.add)
+                        } label: {
+                            Label(
+                                "استيراد المشروع",
+                                systemImage: "square.and.arrow.down"
+                            )
+                        }
+                    } footer: {
+                        Text(
+                            "سيتم استعادة الهيكل التنظيمي والمسحات والأبواب والشبابيك والكهرباء والإضاءة والإعدادات وملفات JSON وUSDZ."
+                        )
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Label(
+                            errorMessage,
+                            systemImage:
+                                "exclamationmark.octagon.fill"
+                        )
+                        .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("استيراد مشروع")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") {
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                renamedProject = "\(package.preview.name) مستورد"
+            }
+            .confirmationDialog(
+                "استبدال المشروع الموجود؟",
+                isPresented: Binding(
+                    get: { replacementProjectID != nil },
+                    set: {
+                        if !$0 {
+                            replacementProjectID = nil
+                        }
+                    }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button(
+                    "استبدال المشروع وكل مسحاته",
+                    role: .destructive
+                ) {
+                    if let replacementProjectID {
+                        runImport(
+                            .replace(replacementProjectID)
+                        )
+                        self.replacementProjectID = nil
+                    }
+                }
+                Button("إلغاء", role: .cancel) {
+                    replacementProjectID = nil
+                }
+            } message: {
+                Text(
+                    "سيُحذف محتوى المشروع الموجود ويحل محله محتوى الملف المستورد. لا يمكن التراجع عن هذه العملية."
+                )
+            }
+        }
+    }
+
+    private func runImport(
+        _ strategy: ProjectPackageImportStrategy
+    ) {
+        errorMessage = onImport(strategy)
+        if errorMessage == nil {
+            dismiss()
+        }
+    }
+
+    private func namesMatch(
+        _ first: String,
+        _ second: String
+    ) -> Bool {
+        first.compare(
+            second,
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale(identifier: "ar")
+        ) == .orderedSame
     }
 }
 
@@ -236,6 +526,7 @@ private struct ProjectBrowserView: View {
     @State private var showMove = false
     @State private var showDeleteConfirmation = false
     @State private var errorMessage: String?
+    @State private var exportedProjectFile: ExportedFile?
 
     var body: some View {
         Group {
@@ -342,6 +633,9 @@ private struct ProjectBrowserView: View {
                     }
                 }
             }
+        }
+        .sheet(item: $exportedProjectFile) { file in
+            ExportShareSheet(items: [file.url])
         }
         .fullScreenCover(item: $activeDestination, onDismiss: store.reload) { destination in
             RoomWorkflowView(destination: destination) {
@@ -560,6 +854,15 @@ private struct ProjectBrowserView: View {
         Menu {
             if parentItemID == nil {
                 Button {
+                    exportProjectPackage()
+                } label: {
+                    Label(
+                        "تصدير ملف المشروع .3eroom",
+                        systemImage: "doc.zipper"
+                    )
+                }
+
+                Button {
                     showProjectSettings = true
                 } label: {
                     Label("إعدادات المشروع", systemImage: "slider.horizontal.3")
@@ -624,6 +927,18 @@ private struct ProjectBrowserView: View {
             } else {
                 try store.duplicateProject(projectID: projectID)
             }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func exportProjectPackage() {
+        do {
+            exportedProjectFile = ExportedFile(
+                url: try ProjectPackageService.makePackage(
+                    projectID: projectID
+                )
+            )
         } catch {
             errorMessage = error.localizedDescription
         }

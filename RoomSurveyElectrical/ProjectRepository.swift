@@ -6,6 +6,8 @@ enum ProjectRepository {
         case documentsDirectoryUnavailable
         case projectNotFound
         case invalidName
+        case projectAlreadyExists
+        case invalidImportedFiles
 
         var errorDescription: String? {
             switch self {
@@ -15,6 +17,10 @@ enum ProjectRepository {
                 "ملفات المشروع غير موجودة."
             case .invalidName:
                 "اكتب اسمًا صحيحًا قبل الحفظ."
+            case .projectAlreadyExists:
+                "يوجد مسح آخر بنفس المعرّف ولا يمكن استبداله مباشرة."
+            case .invalidImportedFiles:
+                "ملفات المسح داخل حزمة المشروع غير مكتملة أو غير صالحة."
             }
         }
     }
@@ -250,9 +256,78 @@ enum ProjectRepository {
         return copy
     }
 
+    static func installImported(
+        _ project: RoomProject,
+        files: [String: Data]
+    ) throws {
+        let requiredFiles = [
+            project.processedJSONFile,
+            project.usdzFile
+        ] + (project.rawJSONFile.map { [$0] } ?? [])
+        guard requiredFiles.allSatisfy({
+            isSafeImportedFileName($0)
+        }),
+        files.keys.allSatisfy({
+            isSafeImportedFileName($0)
+        }) else {
+            throw RepositoryError.invalidImportedFiles
+        }
+
+        let root = try projectsDirectory
+        let destination = root.appendingPathComponent(
+            project.id.uuidString,
+            isDirectory: true
+        )
+        guard !fileManager.fileExists(atPath: destination.path) else {
+            throw RepositoryError.projectAlreadyExists
+        }
+
+        let staging = root.appendingPathComponent(
+            ".import-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: staging,
+            withIntermediateDirectories: false
+        )
+        defer {
+            if fileManager.fileExists(atPath: staging.path) {
+                try? fileManager.removeItem(at: staging)
+            }
+        }
+
+        for (fileName, data) in files {
+            try data.write(
+                to: staging.appendingPathComponent(fileName),
+                options: .atomic
+            )
+        }
+        let projectData = try encoder.encode(project)
+        try projectData.write(
+            to: staging.appendingPathComponent("project.json"),
+            options: .atomic
+        )
+        try fileManager.moveItem(at: staging, to: destination)
+    }
+
     static func delete(projectID: UUID) throws {
         let projectDirectory = try directory(for: projectID, create: false)
         try fileManager.removeItem(at: projectDirectory)
+    }
+
+    private static func isSafeImportedFileName(
+        _ fileName: String
+    ) -> Bool {
+        guard !fileName.isEmpty,
+              fileName != ".",
+              fileName != "..",
+              fileName.utf8.count <= 255,
+              !fileName.contains("/"),
+              !fileName.contains("\\"),
+              !fileName.contains("\0") else {
+            return false
+        }
+        return true
     }
 
     private static func directory(
