@@ -1,41 +1,84 @@
-# Room Survey Electrical — إثبات الفكرة
+# 3ERoomElectrical v1.9 Build 17
 
-تطبيق iPhone شخصي يستخدم Apple RoomPlan لمسح الغرفة، ثم يحتفظ بنفس جلسة AR لإضافة نقاط كهرباء مرتبطة بحوائط الغرفة.
+This release adds a native DXF viewer, repairs the DXF writer for strict AutoCAD-compatible structure, and adds a real WidgetKit Home Screen widget for recent projects.
 
-## ما تنفذه النسخة الحالية
+## 1. Strict DXF export
 
-- مسح الغرفة بالكاميرا وLiDAR عبر RoomPlan.
-- حفظ `project.json` و`raw-room.json` و`room.json` و`room.usdz` محليًا.
-- استخراج الحوائط والأبواب والشبابيك مع المعرّفات والتحويلات ثلاثية الأبعاد.
-- استمرار جلسة AR بعد المسح ورسم حدود الحوائط أمام المستخدم.
-- الضغط على الحائط وإضافة فيش أو مفتاح أو نقطة تكييف/سخان/بيانات/تلفزيون.
-- ربط كل نقطة بمعرّف الحائط وإحداثيات محلية وارتفاع وحالة: موجود أو مقترح.
-- حفظ النقاط وإظهار حصر مجمّع حسب النوع والحالة.
+The exporter no longer writes a minimal modern DXF that only tolerant viewers accept. Every generated DXF now includes the modern sections and ownership structure expected by strict readers:
 
-## المتطلبات
+```text
+HEADER
+CLASSES
+TABLES
+BLOCKS
+ENTITIES
+OBJECTS
+EOF
+```
 
-- iPhone أو iPad مزود بـLiDAR؛ الهدف الأساسي iPhone 15 Pro Max.
-- iOS 17 أو أحدث.
-- صلاحية الكاميرا.
+The file contains Model Space table/block records, handles, owners, and entity subclass markers. A built-in validator checks every DXF before it is written; an invalid drawing is rejected instead of being shared.
 
-## بناء IPA دون امتلاك Mac
+The exported drawing does **not** contain embedded `.3eroom` data or custom project XRECORD payloads.
 
-المستودع يحتوي على GitHub Action باسم `Build unsigned IPA`:
+## 2. Native DXF viewer
 
-1. افتح تبويب **Actions** في GitHub.
-2. اختر **Build unsigned IPA** ثم **Run workflow**.
-3. بعد نجاح التشغيل نزّل artifact باسم `RoomSurveyElectrical-unsigned`.
-4. فك الضغط لتحصل على `RoomSurveyElectrical-unsigned.ipa`.
-5. على Windows استخدم Sideloadly لتوقيع الملف بحساب Apple ID وتثبيته على الآيفون.
+Opening a `.dxf` file now offers **Open DXF Viewer**. The viewer supports:
 
-التوقيع المجاني ينتهي بعد سبعة أيام ويحتاج إلى إعادة توقيع/تحديث. لا يحتوي المشروع على iCloud أو Push Notifications أو أي entitlement مدفوع.
+- LINE
+- LWPOLYLINE
+- CIRCLE
+- TEXT and MTEXT
+- layer visibility controls
+- pan and pinch zoom
+- double-tap or toolbar fit-to-screen
+- layer/entity counters and unsupported-entity notice
 
-## معيار نجاح المرحلة الأولى
+The renderer is optimized for the layers produced by 3ERoomElectrical while remaining able to display supported entities from ordinary ASCII DXF files.
 
-لا نعتبر المرحلة ناجحة إلا بعد تنفيذ التالي على الجهاز الحقيقي:
+## 3. iPhone Home Screen widget
 
-1. تثبيت IPA وفتح التطبيق ومنح صلاحية الكاميرا.
-2. مسح غرفة وإنهاء المعالجة.
-3. التأكد من ظهور حدود الحوائط في الكاميرا.
-4. إضافة نقطة واحدة وحفظها وظهورها في الحصر.
-5. مشاركة ملفات JSON وUSDZ من صفحة المشروع المحفوظ.
+A new `3ERoomElectricalWidgetExtension` target provides small, medium, and large widgets showing recent projects. It uses a cached 3D preview when available and falls back to project artwork.
+
+Shared widget data uses this App Group:
+
+```text
+group.com.personal.roomsurveyelectrical
+```
+
+Before distribution, enable that App Group for both identifiers in the Apple Developer portal:
+
+```text
+com.personal.roomsurveyelectrical
+com.personal.roomsurveyelectrical.widget
+```
+
+A sideload/re-signing tool must sign both the app and nested widget extension and preserve the App Group entitlements. Without the shared entitlement, the widget can still install but cannot receive recent-project data from the main app.
+
+## 4. Existing document hub retained
+
+The v1.8 document hub remains in place:
+
+```text
+3Essam/
+└── 3ERoomElectrical/
+    ├── Projects/
+    ├── Exports/
+    ├── Opened Files/
+    ├── Previews/
+    └── Index/
+```
+
+PDF and DXF exports remain free of embedded project packages. The local SHA-256 export registry continues to identify unchanged files exported on the same installation.
+
+## Build status
+
+The source has passed:
+
+- Swift syntax parsing for all app and widget files
+- plist and Xcode project validation
+- DXF validator round-trip tests
+- actual single, combined, and layout DXF generation through the exporter
+- independent DXF import tests
+- ZIP integrity validation
+
+A full Xcode/iOS build must still be run by GitHub Actions or Xcode because this preparation environment is not macOS.

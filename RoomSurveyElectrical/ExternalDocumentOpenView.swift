@@ -7,6 +7,7 @@ struct ExternalDocumentOpenView: View {
 
     let inspection: ExternalDocumentInspection
     @State private var showPreview = false
+    @State private var showDXFViewer = false
 
     private var matchedProject: SurveyProject? {
         guard let projectID = inspection.registryRecord?.projectID else {
@@ -130,6 +131,17 @@ struct ExternalDocumentOpenView: View {
                         }
                     }
 
+                    if inspection.format == .dxf {
+                        Button {
+                            showDXFViewer = true
+                        } label: {
+                            Label(
+                                "فتح عارض DXF",
+                                systemImage: "viewfinder.rectangular"
+                            )
+                        }
+                    }
+
                     if let matchedProject {
                         NavigationLink {
                             ProjectBrowserView(
@@ -179,6 +191,9 @@ struct ExternalDocumentOpenView: View {
             .sheet(isPresented: $showPreview) {
                 QuickLookFilePreview(url: inspection.localURL)
                     .ignoresSafeArea()
+            }
+            .fullScreenCover(isPresented: $showDXFViewer) {
+                DXFViewerScreen(url: inspection.localURL)
             }
         }
     }

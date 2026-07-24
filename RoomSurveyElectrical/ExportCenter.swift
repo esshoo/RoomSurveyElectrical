@@ -145,7 +145,6 @@ struct ExportCenterView: View {
 
     private var exportMetadata: ExportDocumentMetadata {
         ExportDocumentMetadata(
-            projectID: surveyProject.id,
             projectName: surveyProject.name,
             projectCreatedAt: surveyProject.createdAt
         )
@@ -158,6 +157,8 @@ struct ExportCenterView: View {
                     "تصدير الحصر XLSX",
                     subtitle: "ملخص وغرف وأرضيات وحوائط وفتحات وكهرباء",
                     systemImage: "tablecells.fill",
+                    kind: .takeoffXLSX,
+                    roomIDs: takeoffRooms.map(\.id),
                     disabled: takeoffRooms.isEmpty
                 ) {
                     try ProjectExportService.makeTakeoffXLSX(
@@ -171,6 +172,8 @@ struct ExportCenterView: View {
                     "تصدير تقرير الحصر PDF",
                     subtitle: "تقرير عربي للطباعة بالمجاميع والتفاصيل",
                     systemImage: "doc.richtext.fill",
+                    kind: .takeoffPDF,
+                    roomIDs: takeoffRooms.map(\.id),
                     disabled: takeoffRooms.isEmpty
                 ) {
                     try ProjectExportService.makeTakeoffPDF(
@@ -186,6 +189,8 @@ struct ExportCenterView: View {
                     "PDF مطابق لمخطط DXF",
                     subtitle: "صفحة لكل مسح مع طبقات حقيقية قابلة للإظهار والإخفاء",
                     systemImage: "square.3.layers.3d.top.filled",
+                    kind: .layeredPlanPDF,
+                    roomIDs: planRooms.map(\.id),
                     disabled: planRooms.isEmpty
                 ) {
                     try ProjectExportService.makePlanPDF(
@@ -201,7 +206,9 @@ struct ExportCenterView: View {
                         subtitle: room.location.isEmpty
                             ? "PDF متجه بطبقات CAD حقيقية"
                             : "\(room.location) • طبقات CAD حقيقية",
-                        systemImage: "doc.text.image"
+                        systemImage: "doc.text.image",
+                        kind: .layeredPlanPDF,
+                        roomIDs: [room.id]
                     ) {
                         try ProjectExportService.makePlanPDF(
                             title: room.scan.name,
@@ -218,6 +225,8 @@ struct ExportCenterView: View {
                         "DXF Layouts – لاي أوت لكل مخطط",
                         subtitle: "ملف واحد • Layout باسم كل مساحة • الطبقات موحّدة",
                         systemImage: "rectangle.stack.fill",
+                        kind: .layoutDXF,
+                        roomIDs: planRooms.map(\.id),
                         disabled: planRooms.isEmpty
                     ) {
                         try ProjectExportService.makeLayoutDXF(
@@ -231,6 +240,8 @@ struct ExportCenterView: View {
                         "DXF موحد – المخططات بجوار بعضها",
                         subtitle: "ملف واحد • أسماء المساحات ظاهرة • 12 طبقة مشتركة",
                         systemImage: "rectangle.3.group.fill",
+                        kind: .combinedDXF,
+                        roomIDs: planRooms.map(\.id),
                         disabled: planRooms.isEmpty
                     ) {
                         try ProjectExportService.makeCombinedDXF(
@@ -249,6 +260,8 @@ struct ExportCenterView: View {
                         ? "طبقات CAD مستقلة ووحدة الرسم بالمتر"
                         : "ملف ZIP يحتوي DXF مستقل لكل مسح",
                     systemImage: "ruler.fill",
+                    kind: planRooms.count == 1 ? .singleDXF : .dxfPackage,
+                    roomIDs: planRooms.map(\.id),
                     disabled: planRooms.isEmpty
                 ) {
                     try ProjectExportService.makeDXFPackage(
@@ -263,7 +276,9 @@ struct ExportCenterView: View {
                         exportButton(
                             room.scan.name,
                             subtitle: "DXF منفرد • طبقات كاملة",
-                            systemImage: "doc.badge.gearshape"
+                            systemImage: "doc.badge.gearshape",
+                            kind: .singleDXF,
+                            roomIDs: [room.id]
                         ) {
                             try ProjectExportService.makeDXF(
                                 title: room.scan.name,
@@ -284,6 +299,8 @@ struct ExportCenterView: View {
                         ? "صورة عالية الدقة بكامل الطبقات"
                         : "ملف ZIP يحتوي صورة لكل مسح",
                     systemImage: "photo.fill",
+                    kind: planRooms.count == 1 ? .planPNG : .planPNGPackage,
+                    roomIDs: planRooms.map(\.id),
                     disabled: planRooms.isEmpty
                 ) {
                     try ProjectExportService.makePlanPNGPackage(
@@ -298,7 +315,9 @@ struct ExportCenterView: View {
                         exportButton(
                             room.scan.name,
                             subtitle: "PNG منفرد • 3000×2121",
-                            systemImage: "photo"
+                            systemImage: "photo",
+                            kind: .planPNG,
+                            roomIDs: [room.id]
                         ) {
                             try ProjectExportService.makePlanPNG(
                                 title: room.scan.name,
@@ -319,6 +338,8 @@ struct ExportCenterView: View {
                         ? "مجسم خفيف بالألوان والكهرباء والإضاءة"
                         : "ملف ZIP يحتوي GLB مستقل لكل مسح",
                     systemImage: "cube.fill",
+                    kind: planRooms.count == 1 ? .singleGLB : .glbPackage,
+                    roomIDs: planRooms.map(\.id),
                     disabled: planRooms.isEmpty
                 ) {
                     try ProjectExportService.makeGLBPackage(
@@ -333,7 +354,9 @@ struct ExportCenterView: View {
                         exportButton(
                             room.scan.name,
                             subtitle: "GLB منفرد • طبقات ملونة",
-                            systemImage: "cube.transparent"
+                            systemImage: "cube.transparent",
+                            kind: .singleGLB,
+                            roomIDs: [room.id]
                         ) {
                             try ProjectExportService.makeGLB(
                                 title: room.scan.name,
@@ -402,11 +425,17 @@ struct ExportCenterView: View {
         _ label: String,
         subtitle: String,
         systemImage: String,
+        kind: ExportArtifactKind,
+        roomIDs: [UUID] = [],
         disabled: Bool = false,
         action: @escaping () throws -> URL
     ) -> some View {
         Button {
-            performExport(action)
+            performExport(
+                kind: kind,
+                roomIDs: roomIDs,
+                action
+            )
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: systemImage)
@@ -430,13 +459,25 @@ struct ExportCenterView: View {
         .disabled(disabled || isExporting)
     }
 
-    private func performExport(_ action: @escaping () throws -> URL) {
+    private func performExport(
+        kind: ExportArtifactKind,
+        roomIDs: [UUID],
+        _ action: @escaping () throws -> URL
+    ) {
         isExporting = true
         Task { @MainActor in
             await Task.yield()
             defer { isExporting = false }
             do {
-                exportedFile = ExportedFile(url: try action())
+                let temporaryURL = try action()
+                let savedURL = try ExportRegistry.register(
+                    sourceURL: temporaryURL,
+                    kind: kind,
+                    project: surveyProject,
+                    scopeItemID: scopeItemID,
+                    roomIDs: roomIDs
+                )
+                exportedFile = ExportedFile(url: savedURL)
             } catch {
                 errorMessage = error.localizedDescription
             }

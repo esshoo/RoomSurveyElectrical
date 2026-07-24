@@ -416,7 +416,6 @@ struct RoomViewerView: View {
     private var currentExportMetadata: ExportDocumentMetadata {
         if let surveyProject = store.project(id: surveyProjectID) {
             return ExportDocumentMetadata(
-                projectID: surveyProject.id,
                 projectName: surveyProject.name,
                 projectCreatedAt: surveyProject.createdAt
             )
@@ -428,7 +427,7 @@ struct RoomViewerView: View {
     }
 
     private func exportCurrentPlanPDF() {
-        performExport {
+        performExport(kind: .layeredPlanPDF) {
             try ProjectExportService.makePlanPDF(
                 title: project.name,
                 rooms: [currentExportRecord],
@@ -438,7 +437,7 @@ struct RoomViewerView: View {
     }
 
     private func exportCurrentTakeoffPDF() {
-        performExport {
+        performExport(kind: .takeoffPDF) {
             try ProjectExportService.makeTakeoffPDF(
                 title: project.name,
                 rooms: [currentExportRecord],
@@ -448,7 +447,7 @@ struct RoomViewerView: View {
     }
 
     private func exportCurrentTakeoffXLSX() {
-        performExport {
+        performExport(kind: .takeoffXLSX) {
             try ProjectExportService.makeTakeoffXLSX(
                 title: project.name,
                 rooms: [currentExportRecord],
@@ -458,7 +457,7 @@ struct RoomViewerView: View {
     }
 
     private func exportCurrentDXF() {
-        performExport {
+        performExport(kind: .singleDXF) {
             try ProjectExportService.makeDXF(
                 title: project.name,
                 room: currentExportRecord,
@@ -468,7 +467,7 @@ struct RoomViewerView: View {
     }
 
     private func exportCurrentPNG() {
-        performExport {
+        performExport(kind: .planPNG) {
             try ProjectExportService.makePlanPNG(
                 title: project.name,
                 room: currentExportRecord,
@@ -478,7 +477,7 @@ struct RoomViewerView: View {
     }
 
     private func exportCurrentGLB() {
-        performExport {
+        performExport(kind: .singleGLB) {
             try ProjectExportService.makeGLB(
                 title: project.name,
                 room: currentExportRecord,
@@ -487,13 +486,28 @@ struct RoomViewerView: View {
         }
     }
 
-    private func performExport(_ action: @escaping () throws -> URL) {
+    private func performExport(
+        kind: ExportArtifactKind,
+        _ action: @escaping () throws -> URL
+    ) {
         isExporting = true
         Task { @MainActor in
             await Task.yield()
             defer { isExporting = false }
             do {
-                exportedFile = ExportedFile(url: try action())
+                let temporaryURL = try action()
+                if let surveyProject = store.project(id: surveyProjectID) {
+                    let savedURL = try ExportRegistry.register(
+                        sourceURL: temporaryURL,
+                        kind: kind,
+                        project: surveyProject,
+                        scopeItemID: scanReference?.parentID,
+                        roomIDs: [project.id]
+                    )
+                    exportedFile = ExportedFile(url: savedURL)
+                } else {
+                    exportedFile = ExportedFile(url: temporaryURL)
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }

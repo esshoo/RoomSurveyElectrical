@@ -70,13 +70,12 @@ enum ProjectRepository {
 
     static var projectsDirectory: URL {
         get throws {
-            guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            do {
+                try ApplicationFileLayout.prepare()
+                return try ApplicationFileLayout.roomScansDirectory
+            } catch {
                 throw RepositoryError.documentsDirectoryUnavailable
             }
-
-            let directory = documents.appendingPathComponent("RoomSurveyProjects", isDirectory: true)
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            return directory
         }
     }
 

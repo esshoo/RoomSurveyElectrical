@@ -190,6 +190,10 @@ private actor ProjectPreviewRenderer {
 
         if let data = try? Data(contentsOf: previewURL),
            let cached = UIImage(data: data) {
+            HomeWidgetSnapshotStore.publishPreview(
+                projectID: project.id,
+                data: data
+            )
             return cached
         }
 
@@ -207,6 +211,10 @@ private actor ProjectPreviewRenderer {
 
         if let data = rendered.pngData() {
             try? data.write(to: previewURL, options: .atomic)
+            HomeWidgetSnapshotStore.publishPreview(
+                projectID: project.id,
+                data: data
+            )
         }
         return rendered
     }

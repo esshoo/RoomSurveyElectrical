@@ -84,9 +84,6 @@ enum LayeredPlanPDFBuilder {
         guard !rooms.isEmpty else {
             throw ProjectExportError.noRooms
         }
-        let embeddedPackage = SmartProjectEmbedding.makePackage(
-            metadata: metadata
-        )
 
         let layerObjectStart = 3
         let layerObjectIDs = layers.indices.map {
@@ -106,19 +103,7 @@ enum LayeredPlanPDFBuilder {
         }
         let infoObjectID = firstPageObjectID
             + rooms.count * objectsPerPage
-        let embeddedFileObjectID = embeddedPackage == nil
-            ? nil
-            : infoObjectID + 1
-        let fileSpecObjectID = embeddedPackage == nil
-            ? nil
-            : infoObjectID + 2
-        let embeddedNamesObjectID = embeddedPackage == nil
-            ? nil
-            : infoObjectID + 3
-        let xmpMetadataObjectID = embeddedPackage == nil
-            ? nil
-            : infoObjectID + 4
-        let objectCount = xmpMetadataObjectID ?? infoObjectID
+        let objectCount = infoObjectID
         var objects = Array<Data?>(
             repeating: nil,
             count: objectCount + 1
@@ -127,23 +112,10 @@ enum LayeredPlanPDFBuilder {
         let layerReferences = layerObjectIDs.map {
             "\($0) 0 R"
         }.joined(separator: " ")
-        let smartCatalogEntries: String
-        if let fileSpecObjectID,
-           let embeddedNamesObjectID,
-           let xmpMetadataObjectID {
-            smartCatalogEntries = """
-               /Names << /EmbeddedFiles \(embeddedNamesObjectID) 0 R >>
-               /AF [\(fileSpecObjectID) 0 R]
-               /Metadata \(xmpMetadataObjectID) 0 R
-            """
-        } else {
-            smartCatalogEntries = ""
-        }
         objects[1] = Data(
             """
             << /Type /Catalog
                /Pages 2 0 R
-            \(smartCatalogEntries)
                /PageMode /UseOC
                /OCProperties <<
                    /OCGs [\(layerReferences)]
@@ -243,131 +215,22 @@ enum LayeredPlanPDFBuilder {
             )
         }
 
-        let smartInfoEntries: String
-        if embeddedPackage != nil {
-            smartInfoEntries = """
-               /Subject (\(SmartProjectEmbedding.marker))
-               /Keywords (3ERoomElectrical embedded project package)
-            """
-        } else {
-            smartInfoEntries = ""
-        }
         objects[infoObjectID] = Data(
             """
             << /Title (3ERoomElectrical Layered 2D Plan)
                /Author (3Essam)
                /Creator (3ERoomElectrical)
                /Producer (3ERoomElectrical Layered PDF Engine)
-            \(smartInfoEntries)
                /CreationDate (D:\(pdfDate(metadata.exportedAt)))
             >>
             """.utf8
         )
-
-        if let embeddedPackage,
-           let embeddedFileObjectID,
-           let fileSpecObjectID,
-           let embeddedNamesObjectID,
-           let xmpMetadataObjectID {
-            objects[embeddedFileObjectID] = embeddedFileObject(
-                embeddedPackage
-            )
-            objects[fileSpecObjectID] = fileSpecificationObject(
-                package: embeddedPackage,
-                embeddedFileObjectID: embeddedFileObjectID
-            )
-            objects[embeddedNamesObjectID] = Data(
-                """
-                << /Names [(\(pdfEscaped(embeddedPackage.packageFileName))) \(fileSpecObjectID) 0 R] >>
-                """.utf8
-            )
-            objects[xmpMetadataObjectID] = metadataStreamObject(
-                embeddedPackage
-            )
-        }
 
         return makePDF(
             objects: objects,
             rootObjectID: 1,
             infoObjectID: infoObjectID
         )
-    }
-
-    private static func embeddedFileObject(
-        _ package: SmartProjectEmbeddedPackage
-    ) -> Data {
-        let dictionary = """
-            << /Type /EmbeddedFile
-               /Subtype /application#2Fvnd.3essam.3eroom
-               /Params <<
-                   /Size \(package.packageData.count)
-                   /CreationDate (D:\(pdfDate(package.manifest.exportedAt)))
-                   /ModDate (D:\(pdfDate(package.manifest.exportedAt)))
-               >>
-               /Length \(package.packageData.count)
-            >>
-            """
-        var data = Data((dictionary + "\nstream\n").utf8)
-        data.append(package.packageData)
-        data.append(Data("\nendstream".utf8))
-        return data
-    }
-
-    private static func fileSpecificationObject(
-        package: SmartProjectEmbeddedPackage,
-        embeddedFileObjectID: Int
-    ) -> Data {
-        Data(
-            """
-            << /Type /Filespec
-               /F (\(pdfEscaped(package.packageFileName)))
-               /UF (\(pdfEscaped(package.packageFileName)))
-               /Desc (3E Room Electrical embedded project package)
-               /AFRelationship /Data
-               /EF <<
-                   /F \(embeddedFileObjectID) 0 R
-                   /UF \(embeddedFileObjectID) 0 R
-               >>
-            >>
-            """.utf8
-        )
-    }
-
-    private static func metadataStreamObject(
-        _ package: SmartProjectEmbeddedPackage
-    ) -> Data {
-        let manifest = package.manifest
-        let xml = """
-        <?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
-        <x:xmpmeta xmlns:x="adobe:ns:meta/">
-          <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-            <rdf:Description rdf:about=""
-              xmlns:threeeroom="https://3essam.local/ns/3eroomelectrical/1.0/"
-              threeeroom:Marker="\(xmlEscaped(manifest.marker))"
-              threeeroom:FormatIdentifier="\(xmlEscaped(manifest.formatIdentifier))"
-              threeeroom:FormatVersion="\(manifest.formatVersion)"
-              threeeroom:PackageFileName="\(xmlEscaped(manifest.packageFileName))"
-              threeeroom:PackageByteCount="\(manifest.packageByteCount)"
-              threeeroom:PackageSHA256="\(manifest.packageSHA256)"
-              threeeroom:ProjectID="\(manifest.projectID.uuidString)"
-              threeeroom:ProjectName="\(xmlEscaped(manifest.projectName))" />
-          </rdf:RDF>
-        </x:xmpmeta>
-        <?xpacket end="w"?>
-        """
-        let content = Data(xml.utf8)
-        var data = Data(
-            """
-            << /Type /Metadata
-               /Subtype /XML
-               /Length \(content.count)
-            >>
-            stream
-            """.utf8
-        )
-        data.append(content)
-        data.append(Data("\nendstream".utf8))
-        return data
     }
 
     private static func formStreamObject(
@@ -1416,15 +1279,6 @@ private func pdfEscaped(_ value: String) -> String {
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "(", with: "\\(")
         .replacingOccurrences(of: ")", with: "\\)")
-}
-
-private func xmlEscaped(_ value: String) -> String {
-    value
-        .replacingOccurrences(of: "&", with: "&amp;")
-        .replacingOccurrences(of: "\"", with: "&quot;")
-        .replacingOccurrences(of: "'", with: "&apos;")
-        .replacingOccurrences(of: "<", with: "&lt;")
-        .replacingOccurrences(of: ">", with: "&gt;")
 }
 
 private func pdfDate(_ value: Date) -> String {
