@@ -509,7 +509,7 @@ private struct SurveyProjectRow: View {
     }
 }
 
-private struct ProjectBrowserView: View {
+struct ProjectBrowserView: View {
     @EnvironmentObject private var store: ProjectStore
     @Environment(\.dismiss) private var dismiss
 
