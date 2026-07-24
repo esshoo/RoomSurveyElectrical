@@ -69,5 +69,14 @@ jobs:
         if: steps.xcodebuild.outputs.status != '0'
         shell: bash
         run: |
+          echo "===== Xcode failure lines ====="
+          grep -nEi 'error:|fatal error|failed|failure|multiple commands produce|build input file cannot be found' build.log | tail -n 80 || true
+          {
+            echo "### Xcode build failed"
+            echo
+            echo '```'
+            grep -nEi 'error:|fatal error|failed|failure|multiple commands produce|build input file cannot be found' build.log | tail -n 80 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           echo "::error::Xcode build failed. Download the 3ERoomElectrical-unsigned artifact for the complete build.log and xcresult."
           exit "${{ steps.xcodebuild.outputs.status }}"

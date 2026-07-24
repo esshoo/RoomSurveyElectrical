@@ -36,7 +36,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.7 • ملفات .3eroom",
+                                    "الإصدار 1.7.1 • إصلاح البناء وملفات .3eroom",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
@@ -188,7 +188,7 @@ struct ContentView: View {
         }
         .fileImporter(
             isPresented: $showProjectImporter,
-            allowedContentTypes: [.threeERoomProject],
+            allowedContentTypes: [UTType.threeERoomProject],
             allowsMultipleSelection: false
         ) { result in
             switch result {
