@@ -48,6 +48,14 @@ struct ElectricalARView: UIViewRepresentable {
         context.coordinator.renderCeilingLights()
     }
 
+    static func dismantleUIView(_ uiView: ARSCNView, coordinator: Coordinator) {
+        uiView.gestureRecognizers?.forEach { uiView.removeGestureRecognizer($0) }
+        uiView.scene = SCNScene()
+        // Release the shared RoomPlan session from this view without pausing it.
+        uiView.session = ARSession()
+        coordinator.sceneView = nil
+    }
+
     final class Coordinator: NSObject {
         var parent: ElectricalARView
         weak var sceneView: ARSCNView?

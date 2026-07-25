@@ -13,8 +13,8 @@ struct ElectricalEditorView: View {
     @State private var placementMessage: String?
     @State private var placementDraft: PlacementDraft?
     @State private var smartPrompt: SmartPlacementPrompt?
-    @State private var showPhotographicScanOffer = false
-    @State private var showPhotographicScan = false
+    @State private var cameraWorkspaceMode: CameraWorkspaceMode = .electrical
+    @State private var showInlinePhotographicPrompt = false
 
     let arSession: ARSession
     let settings: ElectricalPlacementSettings
@@ -36,14 +36,8 @@ struct ElectricalEditorView: View {
 
     var body: some View {
         ZStack {
-            if showPhotographicScan {
-                PhotographicWallScanView(
-                    project: $project,
-                    arSession: arSession,
-                    onProjectChanged: persistProject,
-                    onClose: { showPhotographicScan = false }
-                )
-            } else {
+            switch cameraWorkspaceMode {
+            case .electrical:
                 ElectricalARView(
                     project: project,
                     arSession: arSession,
@@ -59,6 +53,22 @@ struct ElectricalEditorView: View {
                     actionBar
                 }
                 .padding()
+
+            case .photographic:
+                PhotographicWallScanView(
+                    project: $project,
+                    arSession: arSession,
+                    onProjectChanged: {},
+                    onClose: returnToElectricalMode
+                )
+
+            case .transitioning:
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(.white)
+                }
             }
         }
         .sheet(item: $pendingTap) { tap in
@@ -77,12 +87,6 @@ struct ElectricalEditorView: View {
         }
         .sheet(isPresented: $showBOQ) {
             BOQSheet(project: project, settings: settings)
-        }
-        .sheet(isPresented: $showPhotographicScanOffer) {
-            PhotographicScanOfferSheet {
-                showPhotographicScan = true
-            }
-            .presentationDetents([.medium, .large])
         }
         .alert("تعذر تنفيذ العملية", isPresented: Binding(
             get: { errorMessage != nil },
@@ -110,7 +114,7 @@ struct ElectricalEditorView: View {
             Text(smartPromptMessage)
         }
         .onAppear {
-            preparePhotographicScanOffer()
+            prepareInlinePhotographicPrompt()
             persistProject()
         }
     }
@@ -122,15 +126,6 @@ struct ElectricalEditorView: View {
                     .frame(width: 42, height: 42)
                     .background(.ultraThinMaterial, in: Circle())
             }
-
-            Button {
-                showPhotographicScan = true
-            } label: {
-                Image(systemName: "camera.viewfinder")
-                    .frame(width: 42, height: 42)
-                    .background(.ultraThinMaterial, in: Circle())
-            }
-            .accessibilityLabel("المسح الفوتوغرافي للجدران")
 
             Spacer()
 
@@ -187,26 +182,85 @@ struct ElectricalEditorView: View {
     }
 
     private var actionBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                showBOQ = true
-            } label: {
-                Label("الحصر", systemImage: "list.clipboard.fill")
-                    .frame(maxWidth: .infinity)
+        VStack(spacing: 10) {
+            if showInlinePhotographicPrompt {
+                inlinePhotographicPrompt
+            }
+
+            Button(action: startPhotographicScan) {
+                HStack(spacing: 10) {
+                    Image(systemName: "camera.viewfinder")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("تصوير الجدران")
+                            .font(.headline)
+                        Text("المسح الفوتوغرافي • تغطية \(photoCoveragePercent)%")
+                            .font(.caption)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.left")
+                        .font(.caption.weight(.bold))
+                }
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.borderedProminent)
+            .tint(.indigo)
+            .disabled(cameraWorkspaceMode != .electrical)
 
-            Button {
-                removeLastPoint()
-            } label: {
-                Label("تراجع", systemImage: "arrow.uturn.backward")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 12) {
+                Button {
+                    showBOQ = true
+                } label: {
+                    Label("الحصر", systemImage: "list.clipboard.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    removeLastPoint()
+                } label: {
+                    Label("تراجع", systemImage: "arrow.uturn.backward")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(project.points.isEmpty && lastAddedCeilingLightID == nil)
             }
-            .buttonStyle(.bordered)
-            .disabled(project.points.isEmpty && lastAddedCeilingLightID == nil)
         }
         .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var inlinePhotographicPrompt: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label("المسح الفوتوغرافي اختياري", systemImage: "photo.on.rectangle.angled")
+                .font(.subheadline.weight(.semibold))
+            Text(
+                "أنت الآن داخل وضع إضافة الكهرباء. ابدأ تصوير الجدران عندما تكون جاهزًا، "
+                    + "أو أغلق الرسالة وأكمل إضافة المفاتيح والأفياش أولًا."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                Button("ابدأ التصوير") {
+                    startPhotographicScan()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("لاحقًا") {
+                    dismissInlinePhotographicPrompt()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var photoCoveragePercent: Int {
+        Int((project.photographicCoverage * 100).rounded())
     }
 
     private var existingCeilingLightCount: Int {
@@ -493,15 +547,58 @@ struct ElectricalEditorView: View {
         persistProject()
     }
 
-    private func preparePhotographicScanOffer() {
+    private func prepareInlinePhotographicPrompt() {
         project.normalizeWallPhotoMetadata()
+        let progress = project.photographicScanProgress ?? WallPhotographicScanProgress()
+        showInlinePhotographicPrompt = !progress.promptedAfterRoomScan
+    }
+
+    private func dismissInlinePhotographicPrompt() {
+        showInlinePhotographicPrompt = false
+        markPhotographicPromptHandled()
+    }
+
+    private func markPhotographicPromptHandled() {
         var progress = project.photographicScanProgress ?? WallPhotographicScanProgress()
-        guard !progress.promptedAfterRoomScan else { return }
         progress.promptedAfterRoomScan = true
         project.photographicScanProgress = progress
         persistProject()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-            showPhotographicScanOffer = true
+    }
+
+    private func startPhotographicScan() {
+        guard cameraWorkspaceMode == .electrical else { return }
+        guard !project.walls.isEmpty else {
+            errorMessage = "لا توجد حوائط مكتشفة لبدء المسح الفوتوغرافي."
+            return
+        }
+        guard arSession.currentFrame != nil else {
+            errorMessage = "الكاميرا لم تستقر بعد. انتظر لحظة ثم اضغط تصوير الجدران مرة واحدة."
+            return
+        }
+
+        pendingTap = nil
+        pendingCeilingTap = nil
+        placementDraft = nil
+        smartPrompt = nil
+        showInlinePhotographicPrompt = false
+        markPhotographicPromptHandled()
+
+        // Give the electrical ARSCNView one run-loop interval to detach from the
+        // shared ARSession before the photographic ARSCNView is created. This
+        // prevents repeated taps from mounting two camera views on one session.
+        cameraWorkspaceMode = .transitioning
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+            guard cameraWorkspaceMode == .transitioning else { return }
+            cameraWorkspaceMode = .photographic
+        }
+    }
+
+    private func returnToElectricalMode() {
+        guard cameraWorkspaceMode == .photographic else { return }
+        cameraWorkspaceMode = .transitioning
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+            guard cameraWorkspaceMode == .transitioning else { return }
+            cameraWorkspaceMode = .electrical
         }
     }
 
@@ -633,6 +730,12 @@ struct ElectricalEditorView: View {
     private func centimeters(_ meters: Float) -> String {
         String(format: "%.0f", meters * 100)
     }
+}
+
+private enum CameraWorkspaceMode: Equatable {
+    case electrical
+    case transitioning
+    case photographic
 }
 
 private struct PlacementDraft {

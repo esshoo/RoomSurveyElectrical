@@ -780,11 +780,22 @@ extension RoomProject {
         normalizeWallPhotoMetadata()
         let clampedWidth = min(max(targetWidth, 0.55), 2.50)
         let clampedHeight = min(max(targetHeight, 0.55), 2.50)
-        let existingByKey = Dictionary(
-            uniqueKeysWithValues: (wallPhotoSegments ?? []).map {
-                ("\($0.wallID.uuidString)-\($0.row)-\($0.column)-\($0.rowCount)-\($0.columnCount)", $0)
+        var existingByKey: [String: WallPhotoSegment] = [:]
+        for segment in wallPhotoSegments ?? [] {
+            let key = "\(segment.wallID.uuidString)-\(segment.row)-\(segment.column)-\(segment.rowCount)-\(segment.columnCount)"
+            // Old or interrupted photo sessions may contain duplicated segment
+            // records. Keep the best record instead of using
+            // Dictionary(uniqueKeysWithValues:), which traps on duplicates.
+            if let current = existingByKey[key] {
+                let currentScore = current.qualityScore ?? (current.state == .captured ? 0.5 : 0)
+                let candidateScore = segment.qualityScore ?? (segment.state == .captured ? 0.5 : 0)
+                if candidateScore >= currentScore {
+                    existingByKey[key] = segment
+                }
+            } else {
+                existingByKey[key] = segment
             }
-        )
+        }
         var generated: [WallPhotoSegment] = []
         for wall in walls {
             let columns = min(max(Int(ceil(wall.width / clampedWidth)), 1), 16)

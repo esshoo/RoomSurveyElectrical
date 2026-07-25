@@ -146,37 +146,52 @@ struct PhotographicWallScanView: View {
     }
 
     private var bottomBar: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 10) {
             Button {
+                guard !isFinishing else { return }
                 autoCaptureEnabled.toggle()
             } label: {
-                Label(
-                    autoCaptureEnabled ? "تلقائي" : "متوقف",
-                    systemImage: autoCaptureEnabled ? "camera.badge.clock" : "pause.circle"
-                )
+                HStack(spacing: 10) {
+                    Image(systemName: autoCaptureEnabled ? "camera.badge.clock" : "pause.circle")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(autoCaptureEnabled ? "الالتقاط التلقائي يعمل" : "الالتقاط التلقائي متوقف")
+                            .font(.headline)
+                        Text(
+                            autoCaptureEnabled
+                                ? "ثبّت الهاتف أمام الجزء الأصفر وسيتم التصوير تلقائيًا"
+                                : "اضغط مرة واحدة لإعادة تشغيل الالتقاط"
+                        )
+                        .font(.caption)
+                    }
+                    Spacer()
+                }
                 .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.borderedProminent)
             .tint(autoCaptureEnabled ? .blue : .gray)
-            .disabled(activeSegment == nil)
+            .disabled(activeSegment == nil || isFinishing)
 
-            Button {
-                skipActiveSegment()
-            } label: {
-                Label("تخطي", systemImage: "forward.end.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(activeSegment == nil)
+            HStack(spacing: 10) {
+                Button {
+                    skipActiveSegment()
+                } label: {
+                    Label("تخطي الجزء", systemImage: "forward.end.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(activeSegment == nil || isFinishing)
 
-            Button {
-                finishAndClose()
-            } label: {
-                Label("إنهاء", systemImage: "checkmark.circle.fill")
-                    .frame(maxWidth: .infinity)
+                Button {
+                    finishAndClose()
+                } label: {
+                    Label("إنهاء والعودة للكهرباء", systemImage: "checkmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isFinishing)
             }
-            .buttonStyle(.bordered)
-            .disabled(isFinishing)
         }
         .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -215,12 +230,11 @@ struct PhotographicWallScanView: View {
         let width = project.photographicScanProgress?.targetSegmentWidthMeters ?? 1.35
         let height = project.photographicScanProgress?.targetSegmentHeightMeters ?? 1.20
         project.ensurePhotographicWallSegments(targetWidth: width, targetHeight: height)
-        if let skippedIndices = project.wallPhotoSegments?.indices.filter({
-            project.wallPhotoSegments?[$0].state == .skipped
-        }) {
-            for index in skippedIndices {
-                project.wallPhotoSegments?[index].state = .pending
+        if var restoredSegments = project.wallPhotoSegments {
+            for index in restoredSegments.indices where restoredSegments[index].state == .skipped {
+                restoredSegments[index].state = .pending
             }
+            project.wallPhotoSegments = restoredSegments
         }
         var progress = project.photographicScanProgress ?? WallPhotographicScanProgress()
         progress.startedAt = progress.startedAt ?? Date()
@@ -307,9 +321,10 @@ struct PhotographicWallScanView: View {
     }
 
     private var orderedSegments: [WallPhotoSegment] {
-        let wallOrder = Dictionary(
-            uniqueKeysWithValues: project.walls.enumerated().map { ($0.element.id, $0.offset) }
-        )
+        var wallOrder: [UUID: Int] = [:]
+        for (index, wall) in project.walls.enumerated() where wallOrder[wall.id] == nil {
+            wallOrder[wall.id] = index
+        }
         return segments.sorted { first, second in
             let firstWall = wallOrder[first.wallID] ?? Int.max
             let secondWall = wallOrder[second.wallID] ?? Int.max
@@ -320,6 +335,7 @@ struct PhotographicWallScanView: View {
     }
 
     private func finishAndClose() {
+        guard !isFinishing else { return }
         isFinishing = true
         var progress = project.photographicScanProgress ?? WallPhotographicScanProgress()
         if activeSegmentID == nil {
@@ -372,6 +388,11 @@ private struct PhotographicWallScanARView: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: ARSCNView, coordinator: Coordinator) {
         coordinator.stopDisplayLink()
+        coordinator.cancelPendingCapture()
+        uiView.gestureRecognizers?.forEach { uiView.removeGestureRecognizer($0) }
+        uiView.scene = SCNScene()
+        // Detach this ARSCNView without pausing the shared RoomPlan ARSession.
+        uiView.session = ARSession()
         coordinator.sceneView = nil
     }
 
@@ -395,6 +416,7 @@ private struct PhotographicWallScanARView: UIViewRepresentable {
         }
 
         func startDisplayLink() {
+            guard displayLink == nil else { return }
             let link = CADisplayLink(target: self, selector: #selector(displayLinkTick))
             link.preferredFrameRateRange = CAFrameRateRange(minimum: 10, maximum: 20, preferred: 15)
             link.add(to: .main, forMode: .common)
@@ -404,6 +426,12 @@ private struct PhotographicWallScanARView: UIViewRepresentable {
         func stopDisplayLink() {
             displayLink?.invalidate()
             displayLink = nil
+        }
+
+        func cancelPendingCapture() {
+            captureInProgress = false
+            stableSince = nil
+            lastCapturedSegmentID = nil
         }
 
         func rebuildGuideNodesIfNeeded() {
@@ -669,10 +697,22 @@ private struct PhotographicWallScanARView: UIViewRepresentable {
             qualityScore: Float,
             sceneView: ARSCNView
         ) {
+            guard projectedCorners.count == 4,
+                  projectedCorners.allSatisfy({ $0.x.isFinite && $0.y.isFinite }),
+                  sceneView.bounds.width > 1,
+                  sceneView.bounds.height > 1 else {
+                captureInProgress = false
+                stableSince = nil
+                return
+            }
+
             guideRoot.isHidden = true
             sceneView.setNeedsDisplay()
             DispatchQueue.main.async { [weak self, weak sceneView] in
-                guard let self, let sceneView else { return }
+                guard let self, let sceneView else {
+                    self?.captureInProgress = false
+                    return
+                }
                 let snapshot = sceneView.snapshot()
                 self.guideRoot.isHidden = false
                 guard let corrected = self.perspectiveCorrectedImage(
@@ -717,6 +757,17 @@ private struct PhotographicWallScanARView: UIViewRepresentable {
             let imageHeight = CGFloat(cgImage.height)
             let scaleX = imageWidth / viewSize.width
             let scaleY = imageHeight / viewSize.height
+            let viewRect = CGRect(origin: .zero, size: viewSize).insetBy(dx: -2, dy: -2)
+            guard projectedCorners.allSatisfy({ viewRect.contains($0) }) else { return nil }
+
+            var polygonArea: CGFloat = 0
+            for index in projectedCorners.indices {
+                let nextIndex = (index + 1) % projectedCorners.count
+                let current = projectedCorners[index]
+                let next = projectedCorners[nextIndex]
+                polygonArea += current.x * next.y - next.x * current.y
+            }
+            guard abs(polygonArea) >= 2_000 else { return nil }
             func ciPoint(_ point: CGPoint) -> CIVector {
                 CIVector(
                     x: point.x * scaleX,
@@ -851,54 +902,5 @@ private extension ARCamera.TrackingState {
         case .notAvailable, .limited:
             return false
         }
-    }
-}
-
-struct PhotographicScanOfferSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let onStart: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("المسح الفوتوغرافي") {
-                    Label("تصوير موجّه حسب أجزاء الحائط", systemImage: "viewfinder.rectangular")
-                        .font(.headline)
-                    Text(
-                        "يقسم التطبيق كل حائط إلى شبكة تتناسب مع أبعاده، ثم يحفظ صورة "
-                            + "فقط عندما يكون الجزء واضحًا وكاملًا والهاتف ثابتًا."
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                }
-
-                Section("طريقة العمل") {
-                    Label("حرّك الهاتف نحو الجزء الأصفر", systemImage: "iphone.gen3")
-                    Label("الالتقاط يتم تلقائيًا عند اكتمال الجودة", systemImage: "camera.badge.clock")
-                    Label("يمكن تخطي أي جزء محجوب وإكماله لاحقًا", systemImage: "forward.end")
-                }
-
-                Section {
-                    Button {
-                        dismiss()
-                        DispatchQueue.main.async {
-                            onStart()
-                        }
-                    } label: {
-                        Label("بدء المسح الفوتوغرافي", systemImage: "camera.viewfinder")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-            .navigationTitle("صور الجدران")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("لاحقًا") { dismiss() }
-                }
-            }
-        }
-        .environment(\.layoutDirection, .rightToLeft)
     }
 }

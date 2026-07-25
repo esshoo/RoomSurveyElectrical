@@ -1,25 +1,21 @@
-# 3ERoomElectrical v1.9.15 — Build 33
+# 3ERoomElectrical v1.9.15.1 — Build 34
 
-## Guided photographic wall scan — Step 2 of 3
+## Photographic scan corrective build
 
-- After a RoomPlan scan reaches the electrical camera editor, the app offers to start **المسح الفوتوغرافي**.
-- The feature can be reopened at any time from the camera/viewfinder button without changing electrical placement modes.
-- Every planar wall detected by RoomPlan is divided into an adaptive rectangular grid based on its measured width and height.
-- Angled returns, column faces, protrusions or recess faces that RoomPlan reports as separate wall planes receive their own independent grid.
-- The app targets one highlighted segment at a time and does not save a continuous random stream of camera images.
-- Automatic capture requires normal AR tracking, complete framing, adequate projected size, a sufficiently frontal view and a stable phone.
-- The guide grid is hidden before capture; Core Image perspective correction crops the saved image to the four projected corners of the active segment.
-- Each saved JPEG is linked to its wall and segment, while the segment records capture state, quality score and capture time.
-- Skipped segments advance the workflow but become available again the next time the photographic scan is opened.
-- The **الصور** tab now shows per-wall coverage and a coloured captured/pending/skipped segment grid.
-- Captured segment photos remain separate in this build so their quality and geometric mapping can be tested safely on iPhone.
+- The app now enters the normal electrical placement camera first.
+- The photographic scan no longer appears as a modal step before electrical placement.
+- A clear **تصوير الجدران** button is shown inside the electrical editor, with current coverage percentage.
+- The first-time suggestion is an inline, non-blocking card with **ابدأ التصوير** and **لاحقًا**.
+- Repeated taps are ignored while the shared AR camera workspace transitions.
+- Electrical and photographic `ARSCNView` instances are detached in sequence instead of competing for the same `ARSession`.
+- Duplicate photographic segment records are reconciled safely instead of causing a duplicate-key runtime trap.
+- Capture projection is validated before Core Image perspective correction.
+- The photographic bottom controls are larger and explicitly labelled.
 
-## Remaining final step
+## Test focus
 
-- Stitch or compose neighbouring segment photos into final wall textures.
-- Render the dedicated image layer in 2D and the completed textures in 3D without covering electrical/lighting overlays.
-- Export textured GLB assets with the wall images included.
+Test entry to electrical mode, repeated presses on **تصوير الجدران**, repeated entry/exit from photographic mode, and the first automatic segment capture on a real iPhone.
 
-## Safety scope
+## Unchanged systems
 
-This build does not modify As-Built, Shop Drawing or new-installation rules; electrical merging; ceiling-light placement; takeoff calculations; DXF; layered PDF; PNG; current GLB geometry; widget code; or signing configuration.
+As-Built, Shop Drawing and new-installation logic; electrical placement and merging; existing ceiling-light capture; 2D manual/automatic lighting; interactive takeoff; DXF; PDF; PNG; current GLB geometry; widget and signing configuration remain unchanged.
