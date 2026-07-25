@@ -1,4 +1,4 @@
-# 3ERoomElectrical v1.9.3 Build 20
+# 3ERoomElectrical v1.9.4 Build 21
 
 ## Important upgrade cleanup
 
@@ -116,3 +116,12 @@ A full Xcode/iOS build must still be run by GitHub Actions or Xcode because this
 - The export validator rejects every Paper Space entity.
 - Widget gallery name now matches the application name.
 - `Tools/inspect-signed-ipa.py` diagnoses widget loss during signing.
+
+
+## v1.9.4 pure compatibility test
+
+- DXF export is now an ASCII AutoCAD R12 (`AC1009`) file.
+- Every graphical entity is written directly in `ENTITIES`; no `LAYOUT`, `VIEWPORT`, `OBJECTS`, `CLASSES`, group `67`, or group `410` is emitted.
+- Classic `POLYLINE` / `VERTEX` / `SEQEND` records replace `LWPOLYLINE`.
+- Exported names include `PureModel-R12`, and the file includes the marker `3ERoomElectrical v1.9.4 PURE_MODEL_R12`.
+- The Home Screen widget is intentionally static and has no App Group or custom entitlements, to isolate Sideloadly extension signing.

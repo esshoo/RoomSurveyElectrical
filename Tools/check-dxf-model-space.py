@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Check that a DXF contains readable model-space geometry.
+"""Validate a 3ERoomElectrical pure Model Space R12 DXF.
 
-This is intentionally small and dependency-free so it can run on Windows.
+Dependency-free so it can run on Windows and GitHub Actions.
 """
 
 from __future__ import annotations
@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 GRAPHICAL = {
-    "LINE", "LWPOLYLINE", "POLYLINE", "CIRCLE", "ARC", "TEXT",
-    "MTEXT", "INSERT", "HATCH", "SPLINE", "ELLIPSE", "POINT",
-    "VIEWPORT",
+    "LINE", "POLYLINE", "CIRCLE", "ARC", "TEXT", "POINT",
 }
+FORBIDDEN_RECORDS = {"LAYOUT", "VIEWPORT", "LWPOLYLINE"}
+FORBIDDEN_SECTIONS = {"CLASSES", "OBJECTS"}
 
 
 @dataclass
@@ -31,7 +31,7 @@ class Record:
 
 
 def read_pairs(path: Path) -> list[tuple[int, str]]:
-    text = path.read_text(encoding="utf-8-sig", errors="strict")
+    text = path.read_text(encoding="ascii", errors="strict")
     lines = text.splitlines()
     if len(lines) % 2:
         raise ValueError("Odd line count: incomplete DXF group-code pair")
@@ -47,8 +47,9 @@ def read_pairs(path: Path) -> list[tuple[int, str]]:
     return result
 
 
-def records(pairs: list[tuple[int, str]]) -> list[Record]:
+def records(pairs: list[tuple[int, str]]) -> tuple[list[Record], list[str]]:
     result: list[Record] = []
+    sections: list[str] = []
     section: str | None = None
     kind: str | None = None
     current: list[tuple[int, str]] = []
@@ -70,6 +71,7 @@ def records(pairs: list[tuple[int, str]]) -> list[Record]:
                 if index + 1 >= len(pairs) or pairs[index + 1][0] != 2:
                     raise ValueError("SECTION is missing its group-code 2 name")
                 section = pairs[index + 1][1].upper()
+                sections.append(section)
                 index += 2
                 continue
             if upper == "ENDSEC":
@@ -82,7 +84,7 @@ def records(pairs: list[tuple[int, str]]) -> list[Record]:
             current.append((code, value))
         index += 1
     finish()
-    return result
+    return result, sections
 
 
 def main() -> int:
@@ -93,63 +95,67 @@ def main() -> int:
     if not args.dxf.is_file():
         parser.error(f"File does not exist: {args.dxf}")
 
-    parsed = records(read_pairs(args.dxf))
-    graphical = [record for record in parsed if record.kind in GRAPHICAL]
-    model = []
-    paper = []
-    paper_in_blocks = []
-    reached_model = False
-    paper_after_model = []
-
-    for record in graphical:
-        is_paper = record.first(67) == "1"
-        if record.section == "BLOCKS" and is_paper:
-            paper_in_blocks.append(record)
-        if record.section != "ENTITIES":
-            continue
-        if is_paper:
-            paper.append(record)
-            if reached_model:
-                paper_after_model.append(record)
-        else:
-            reached_model = True
-            model.append(record)
-
+    pairs = read_pairs(args.dxf)
+    parsed, sections = records(pairs)
     errors: list[str] = []
-    if not model:
-        errors.append("ENTITIES contains no model-space graphical entities")
-    if paper_in_blocks:
+
+    required = ["HEADER", "TABLES", "BLOCKS", "ENTITIES"]
+    for section in required:
+        if section not in sections:
+            errors.append(f"Missing required section: {section}")
+    for section in FORBIDDEN_SECTIONS:
+        if section in sections:
+            errors.append(f"Forbidden layout-related section exists: {section}")
+
+    model = [
+        record for record in parsed
+        if record.section == "ENTITIES" and record.kind in GRAPHICAL
+    ]
+    forbidden_records = [
+        record for record in parsed if record.kind in FORBIDDEN_RECORDS
+    ]
+    if forbidden_records:
         errors.append(
-            f"{len(paper_in_blocks)} paper-space entities were written in BLOCKS"
-        )
-    if paper_after_model:
-        errors.append(
-            f"{len(paper_after_model)} paper-space entities appear after model entities"
-        )
-    if paper:
-        errors.append(
-            f"{len(paper)} paper-space entities exist; this build must export Model Space only"
+            "Forbidden records: "
+            + ", ".join(sorted({r.kind for r in forbidden_records}))
         )
 
-    for record in model:
-        layout = record.first(410)
-        if layout is not None and layout.lower() != "model":
-            errors.append(
-                f"Model entity {record.kind} has unexpected layout tag {layout!r}"
-            )
+    if not model:
+        errors.append("ENTITIES contains no Model Space geometry")
+
+    if any(code == 67 and value == "1" for code, value in pairs):
+        errors.append("Paper Space group code 67=1 exists")
+    if any(code == 410 for code, _ in pairs):
+        errors.append("Layout name group code 410 exists")
+    if any(code == 0 and value.upper() == "LAYOUT" for code, value in pairs):
+        errors.append("LAYOUT object exists")
+
+    marker = any(
+        code == 999 and value == "3ERoomElectrical v1.9.4 PURE_MODEL_R12"
+        for code, value in pairs
+    )
+    if not marker:
+        errors.append("v1.9.4 PURE_MODEL_R12 marker is missing")
+
+    acadver = None
+    for i, (code, value) in enumerate(pairs[:-1]):
+        if code == 9 and value == "$ACADVER" and pairs[i + 1][0] == 1:
+            acadver = pairs[i + 1][1]
             break
+    if acadver != "AC1009":
+        errors.append(f"Expected AC1009, got {acadver!r}")
 
     print(f"File: {args.dxf}")
-    print(f"Model-space entities: {len(model)}")
-    print(f"Paper-space entities: {len(paper)}")
-    print(f"Paper entities in BLOCKS: {len(paper_in_blocks)}")
+    print(f"Sections: {', '.join(sections)}")
+    print(f"Model-space graphical records: {len(model)}")
+    print(f"Forbidden layout records: {len(forbidden_records)}")
 
     if errors:
         for error in errors:
             print(f"ERROR: {error}")
         return 1
 
-    print("DXF model-space structure: PASS")
+    print("Pure Model R12 DXF: PASS")
     return 0
 
 

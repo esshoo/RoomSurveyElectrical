@@ -21,7 +21,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-2D",
+            name: "\(sanitized(title))-PureModel-R12",
             extension: "dxf"
         )
     }
@@ -43,7 +43,7 @@ extension ProjectExportService {
         var archive = StoredZIPArchive()
         for (index, room) in rooms.enumerated() {
             let name = String(
-                format: "%02d-%@-2D.dxf",
+                format: "%02d-%@-PureModel-R12.dxf",
                 index + 1,
                 sanitized(room.scan.name)
             )
@@ -87,7 +87,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-Combined-2D",
+            name: "\(sanitized(title))-Combined-PureModel-R12",
             extension: "dxf"
         )
     }
@@ -110,7 +110,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-ModelSpace-2D",
+            name: "\(sanitized(title))-PureModel-R12",
             extension: "dxf"
         )
     }
@@ -213,6 +213,7 @@ private struct DXFPlanBuilder {
             metadata: metadata
         )
         var dxf = DXFWriter()
+        dxf.pair(999, "3ERoomElectrical v1.9.4 PURE_MODEL_R12")
         firstBuilder.addHeader(
             to: &dxf,
             bounds: Bounds(
@@ -222,15 +223,13 @@ private struct DXFPlanBuilder {
                 maximumY: drawingMaximumY + 2
             )
         )
-        firstBuilder.addLayoutClasses(to: &dxf)
-        firstBuilder.addLayoutTables(to: &dxf, descriptors: [])
-        firstBuilder.addLayoutBlocks(to: &dxf, descriptors: [])
+        // Pure Model Space export: no CLASSES, LAYOUT, VIEWPORT,
+        // OBJECTS or Paper Space records are written at all.
+        firstBuilder.addTables(to: &dxf)
+        firstBuilder.addEmptyBlocks(to: &dxf)
         dxf.pair(0, "SECTION")
         dxf.pair(2, "ENTITIES")
-        dxf.setEntityContext(
-            ownerHandle: "4",
-            layoutName: "Model"
-        )
+        dxf.setEntityContext(ownerHandle: nil)
 
         for placement in placements {
             let builder = DXFPlanBuilder(
@@ -293,7 +292,6 @@ private struct DXFPlanBuilder {
         )
         dxf.setEntityContext(ownerHandle: nil)
         dxf.pair(0, "ENDSEC")
-        firstBuilder.addLayoutObjects(to: &dxf, descriptors: [])
         dxf.pair(0, "EOF")
         return dxf.output
     }
@@ -303,50 +301,9 @@ private struct DXFPlanBuilder {
         rooms: [ExportRoomRecord],
         metadata: ExportDocumentMetadata
     ) -> String {
-        guard let firstRoom = rooms.first else {
-            return ""
-        }
-        let descriptors = layoutDescriptors(for: rooms)
-        let maximumX = descriptors.map {
-            $0.placement.bounds.maximumX
-                + $0.placement.translation.x
-        }.max() ?? 1
-        let maximumY = descriptors.map {
-            $0.placement.bounds.maximumY
-                + $0.placement.translation.y
-        }.max() ?? 1
-        let documentBuilder = DXFPlanBuilder(
-            title: title,
-            record: firstRoom,
-            metadata: metadata
-        )
-        var dxf = DXFWriter()
-        documentBuilder.addLayoutHeader(
-            to: &dxf,
-            maximumX: maximumX,
-            maximumY: maximumY
-        )
-        documentBuilder.addLayoutClasses(to: &dxf)
-        documentBuilder.addLayoutTables(
-            to: &dxf,
-            descriptors: descriptors
-        )
-        documentBuilder.addLayoutBlocks(
-            to: &dxf,
-            descriptors: descriptors
-        )
-        documentBuilder.addLayoutModelEntities(
-            to: &dxf,
-            descriptors: descriptors,
-            maximumX: maximumX,
-            maximumY: maximumY
-        )
-        documentBuilder.addLayoutObjects(
-            to: &dxf,
-            descriptors: descriptors
-        )
-        dxf.pair(0, "EOF")
-        return dxf.output
+        // Kept only for binary/source compatibility with older callers.
+        // It deliberately produces the same pure Model Space file.
+        combined(title: title, rooms: rooms, metadata: metadata)
     }
 
     private static func layoutDescriptors(
@@ -456,11 +413,9 @@ private struct DXFPlanBuilder {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "HEADER")
         dxf.pair(9, "$ACADVER")
-        dxf.pair(1, "AC1027")
-        dxf.pair(9, "$HANDSEED")
-        dxf.pair(5, "FFFFFF")
+        dxf.pair(1, "AC1009")
         dxf.pair(9, "$DWGCODEPAGE")
-        dxf.pair(3, "UTF-8")
+        dxf.pair(3, "ANSI_1252")
         dxf.pair(9, "$INSUNITS")
         dxf.pair(70, 6)
         dxf.pair(9, "$MEASUREMENT")
@@ -543,7 +498,6 @@ private struct DXFPlanBuilder {
             dxf.pair(70, 0)
             dxf.pair(62, layer.color)
             dxf.pair(6, "CONTINUOUS")
-            dxf.pair(370, layer.lineWeight)
         }
         dxf.pair(0, "ENDTAB")
 
@@ -565,7 +519,7 @@ private struct DXFPlanBuilder {
         dxf.pair(50, 0.0)
         dxf.pair(71, 0)
         dxf.pair(42, 0.2)
-        dxf.pair(3, "Arial.ttf")
+        dxf.pair(3, "txt")
         dxf.pair(4, "")
         dxf.pair(0, "ENDTAB")
 
@@ -1026,21 +980,18 @@ private struct DXFPlanBuilder {
 
     func build() -> String {
         var dxf = DXFWriter()
+        dxf.pair(999, "3ERoomElectrical v1.9.4 PURE_MODEL_R12")
         addHeader(to: &dxf)
-        addLayoutClasses(to: &dxf)
-        addLayoutTables(to: &dxf, descriptors: [])
-        addLayoutBlocks(to: &dxf, descriptors: [])
+        // Pure Model Space export: intentionally omit all layout machinery.
+        addTables(to: &dxf)
+        addEmptyBlocks(to: &dxf)
         dxf.pair(0, "SECTION")
         dxf.pair(2, "ENTITIES")
-        dxf.setEntityContext(
-            ownerHandle: "4",
-            layoutName: "Model"
-        )
+        dxf.setEntityContext(ownerHandle: nil)
         addEntities(to: &dxf)
         addDrawingInformation(to: &dxf)
         dxf.setEntityContext(ownerHandle: nil)
         dxf.pair(0, "ENDSEC")
-        addLayoutObjects(to: &dxf, descriptors: [])
         dxf.pair(0, "EOF")
         return dxf.output
     }
@@ -1078,23 +1029,9 @@ private struct DXFPlanBuilder {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "HEADER")
         dxf.pair(9, "$ACADVER")
-        dxf.pair(1, "AC1027")
-        dxf.pair(9, "$HANDSEED")
-        dxf.pair(5, "FFFFFF")
+        dxf.pair(1, "AC1009")
         dxf.pair(9, "$DWGCODEPAGE")
-        dxf.pair(3, "UTF-8")
-        dxf.pair(9, "$INSUNITS")
-        dxf.pair(70, 6)
-        dxf.pair(9, "$MEASUREMENT")
-        dxf.pair(70, 1)
-        dxf.pair(9, "$LUNITS")
-        dxf.pair(70, 2)
-        dxf.pair(9, "$LUPREC")
-        dxf.pair(70, 3)
-        dxf.pair(9, "$TILEMODE")
-        dxf.pair(70, 1)
-        dxf.pair(9, "$CTAB")
-        dxf.pair(1, "Model")
+        dxf.pair(3, "ANSI_1252")
         dxf.pair(9, "$EXTMIN")
         dxf.pair(10, bounds.minimumX - 1)
         dxf.pair(20, bounds.minimumY - 1)
@@ -1158,14 +1095,18 @@ private struct DXFPlanBuilder {
 
         dxf.pair(0, "TABLE")
         dxf.pair(2, "LAYER")
-        dxf.pair(70, layers.count)
+        dxf.pair(70, layers.count + 1)
+        dxf.pair(0, "LAYER")
+        dxf.pair(2, "0")
+        dxf.pair(70, 0)
+        dxf.pair(62, 7)
+        dxf.pair(6, "CONTINUOUS")
         for layer in layers {
             dxf.pair(0, "LAYER")
             dxf.pair(2, layer.name)
             dxf.pair(70, 0)
             dxf.pair(62, layer.color)
             dxf.pair(6, "CONTINUOUS")
-            dxf.pair(370, layer.lineWeight)
         }
         dxf.pair(0, "ENDTAB")
 
@@ -1180,10 +1121,16 @@ private struct DXFPlanBuilder {
         dxf.pair(50, 0.0)
         dxf.pair(71, 0)
         dxf.pair(42, 0.2)
-        dxf.pair(3, "Arial.ttf")
+        dxf.pair(3, "txt")
         dxf.pair(4, "")
         dxf.pair(0, "ENDTAB")
 
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addEmptyBlocks(to dxf: inout DXFWriter) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "BLOCKS")
         dxf.pair(0, "ENDSEC")
     }
 
@@ -1547,17 +1494,33 @@ private struct DXFWriter {
         closed: Bool
     ) {
         guard points.count >= 2 else { return }
-        pair(0, "LWPOLYLINE")
         if entityOwnerHandle == nil {
-            pair(100, "AcDbEntity")
+            // Classic R12 POLYLINE/VERTEX records are understood by strict
+            // AutoCAD readers and do not depend on layout ownership.
+            pair(0, "POLYLINE")
             pair(8, layer)
-            pair(100, "AcDbPolyline")
-        } else {
-            addContextualEntityHeader(
-                layer: layer,
-                subclass: "AcDbPolyline"
-            )
+            pair(66, 1)
+            pair(10, 0.0)
+            pair(20, 0.0)
+            pair(30, 0.0)
+            pair(70, closed ? 1 : 0)
+            for point in points {
+                pair(0, "VERTEX")
+                pair(8, layer)
+                pair(10, point.x)
+                pair(20, point.y)
+                pair(30, 0.0)
+            }
+            pair(0, "SEQEND")
+            pair(8, layer)
+            return
         }
+
+        pair(0, "LWPOLYLINE")
+        addContextualEntityHeader(
+            layer: layer,
+            subclass: "AcDbPolyline"
+        )
         pair(90, points.count)
         pair(70, closed ? 1 : 0)
         for point in points {
@@ -1728,7 +1691,21 @@ private struct DXFWriter {
         let singleLine = value
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
-        return String(singleLine.prefix(255))
+        var result = ""
+        for scalar in singleLine.unicodeScalars {
+            if scalar.value >= 32, scalar.value <= 126 {
+                result.append(String(scalar))
+            } else if scalar.value <= 0xFFFF {
+                result += String(format: "\\U+%04X", scalar.value)
+            } else {
+                let value = scalar.value - 0x10000
+                let high = 0xD800 + (value >> 10)
+                let low = 0xDC00 + (value & 0x3FF)
+                result += String(format: "\\U+%04X\\U+%04X", high, low)
+            }
+            if result.count >= 255 { break }
+        }
+        return String(result.prefix(255))
     }
 
     private func number(_ value: Double) -> String {

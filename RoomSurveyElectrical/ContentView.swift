@@ -38,7 +38,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.9.2 • إصلاح Model Space والويدجت",
+                                    "الإصدار 1.9.4 • Pure Model DXF • Static Widget Test",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
@@ -79,20 +79,19 @@ struct ContentView: View {
                         )
                         .listRowBackground(Color.clear)
 
-                        if let message = HomeWidgetDiagnostics.status.message {
-                            Label(
-                                message,
-                                systemImage:
-                                    HomeWidgetDiagnostics.status.systemImage
-                            )
-                            .font(.caption)
-                            .foregroundStyle(
-                                HomeWidgetDiagnostics.status
-                                    == .extensionMissing
-                                    ? Color.red
-                                    : Color.orange
-                            )
-                        }
+                        Label(
+                            HomeWidgetDiagnostics.status == .ready
+                                ? "Widget Extension موجودة داخل التطبيق • Static Build 21"
+                                : HomeWidgetDiagnostics.status.message ?? "",
+                            systemImage:
+                                HomeWidgetDiagnostics.status.systemImage
+                        )
+                        .font(.caption)
+                        .foregroundStyle(
+                            HomeWidgetDiagnostics.status == .ready
+                                ? Color.green
+                                : Color.red
+                        )
                     }
                 }
 

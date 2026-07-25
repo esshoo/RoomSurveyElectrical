@@ -4,13 +4,10 @@ enum DXFCompatibilityError: LocalizedError {
     case malformedPairs
     case missingSection(String)
     case invalidSectionOrder
-    case missingModelSpace
     case missingModelEntities
-    case paperSpaceEntityInBlocks(String)
-    case paperEntityAfterModelEntity
     case paperSpaceNotSupported(String)
-    case invalidEntity(type: String, missingCode: String)
-    case duplicateHandle(String)
+    case forbiddenLayoutRecord(String)
+    case malformedPolyline
     case stringTooLong(code: Int)
 
     var errorDescription: String? {
@@ -20,21 +17,15 @@ enum DXFCompatibilityError: LocalizedError {
         case .missingSection(let section):
             "تعذر إنشاء DXF لأن قسم \(section) غير موجود."
         case .invalidSectionOrder:
-            "تعذر إنشاء DXF لأن ترتيب الأقسام غير متوافق مع AutoCAD."
-        case .missingModelSpace:
-            "تعذر إنشاء DXF لأن تعريف Model Space غير مكتمل."
+            "تعذر إنشاء DXF لأن ترتيب الأقسام غير متوافق."
         case .missingModelEntities:
             "تعذر إنشاء DXF لأن قسم ENTITIES لا يحتوي رسمًا فعليًا في Model Space."
-        case .paperSpaceEntityInBlocks(let type):
-            "تعذر إنشاء DXF لأن كيان Paper Space من النوع \(type) كُتب داخل BLOCKS بدل ENTITIES."
-        case .paperEntityAfterModelEntity:
-            "تعذر إنشاء DXF لأن ترتيب كيانات Paper Space وModel Space غير متوافق."
         case .paperSpaceNotSupported(let type):
-            "تعذر إنشاء DXF لأن كيان \(type) كُتب في Paper Space. التصدير الحالي يجب أن يكون Model Space فقط."
-        case .invalidEntity(let type, let missingCode):
-            "تعذر إنشاء DXF لأن كيان \(type) يفتقد \(missingCode)."
-        case .duplicateHandle(let handle):
-            "تعذر إنشاء DXF بسبب تكرار handle رقم \(handle)."
+            "تعذر إنشاء DXF لأن \(type) مرتبط بـPaper Space. التصدير يجب أن يكون Model Space فقط."
+        case .forbiddenLayoutRecord(let type):
+            "تعذر إنشاء DXF لأن الملف يحتوي سجل \(type) خاصًا بالـLayouts."
+        case .malformedPolyline:
+            "تعذر إنشاء DXF لأن POLYLINE لا تحتوي VERTEX وSEQEND بصورة صحيحة."
         case .stringTooLong(let code):
             "تعذر إنشاء DXF لأن قيمة نصية في group code \(code) تتجاوز الحد الآمن."
         }
@@ -61,21 +52,22 @@ enum DXFCompatibilityValidator {
 
         var pairs: [Pair] = []
         pairs.reserveCapacity(lines.count / 2)
-        var index = 0
-        while index < lines.count {
-            guard let code = Int(lines[index].trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )) else {
+        var lineIndex = 0
+        while lineIndex < lines.count {
+            guard let code = Int(
+                lines[lineIndex].trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+            ) else {
                 throw DXFCompatibilityError.malformedPairs
             }
-            let value = lines[index + 1].trimmingCharacters(
-                in: .newlines
-            )
+            let value = lines[lineIndex + 1]
+                .trimmingCharacters(in: .newlines)
             if isStringCode(code), value.count > 255 {
                 throw DXFCompatibilityError.stringTooLong(code: code)
             }
             pairs.append(Pair(code: code, value: value))
-            index += 2
+            lineIndex += 2
         }
 
         guard pairs.last?.code == 0,
@@ -85,141 +77,16 @@ enum DXFCompatibilityValidator {
 
         var sections: [String] = []
         var currentSection: String?
-        var sawModelBlockRecord = false
-        var modelBlockRecordHandle: String?
-        var sawModelBlock = false
-        var modelEntityCount = 0
-        var reachedModelEntities = false
-        var handles: Set<String> = []
-        var currentRecordType: String?
-        var currentRecordPairs: [Pair] = []
+        var entityCount = 0
+        var polylineOpen = false
+        var polylineVertexCount = 0
 
-        func validateCurrentRecord() throws {
-            guard let type = currentRecordType else { return }
-            let upperType = type.uppercased()
-            let codes = Set(currentRecordPairs.map(\.code))
-            let values100 = currentRecordPairs
-                .filter { $0.code == 100 }
-                .map { $0.value }
-            let handle = currentRecordPairs.first { $0.code == 5 }?.value
-
-            let recordsNeedingUniqueHandle: Set<String> = [
-                "LTYPE", "LAYER", "STYLE", "BLOCK_RECORD", "BLOCK",
-                "ENDBLK", "LINE", "LWPOLYLINE", "CIRCLE", "TEXT",
-                "MTEXT", "VIEWPORT", "DICTIONARY", "LAYOUT"
-            ]
-            if recordsNeedingUniqueHandle.contains(upperType) {
-                guard let handle, !handle.isEmpty else {
-                    throw DXFCompatibilityError.invalidEntity(
-                        type: upperType,
-                        missingCode: "handle (5)"
-                    )
-                }
-                if handles.contains(handle) {
-                    throw DXFCompatibilityError.duplicateHandle(handle)
-                }
-                handles.insert(handle)
-            }
-
-            let graphicalSubclasses: [String: String] = [
-                "LINE": "AcDbLine",
-                "LWPOLYLINE": "AcDbPolyline",
-                "CIRCLE": "AcDbCircle",
-                "TEXT": "AcDbText",
-                "MTEXT": "AcDbMText",
-                "VIEWPORT": "AcDbViewport"
-            ]
-            if let subclass = graphicalSubclasses[upperType] {
-                guard codes.contains(330) else {
-                    throw DXFCompatibilityError.invalidEntity(
-                        type: upperType,
-                        missingCode: "owner (330)"
-                    )
-                }
-                guard codes.contains(8) else {
-                    throw DXFCompatibilityError.invalidEntity(
-                        type: upperType,
-                        missingCode: "layer (8)"
-                    )
-                }
-                guard values100.contains("AcDbEntity") else {
-                    throw DXFCompatibilityError.invalidEntity(
-                        type: upperType,
-                        missingCode: "AcDbEntity subclass"
-                    )
-                }
-                guard values100.contains(subclass) else {
-                    throw DXFCompatibilityError.invalidEntity(
-                        type: upperType,
-                        missingCode: "\(subclass) subclass"
-                    )
-                }
-
-                let paperSpace = currentRecordPairs.first {
-                    $0.code == 67
-                }.flatMap { Int($0.value) } == 1
-                let ownerHandle = currentRecordPairs.first {
-                    $0.code == 330
-                }?.value
-
-                if currentSection == "BLOCKS", paperSpace {
-                    throw DXFCompatibilityError
-                        .paperSpaceEntityInBlocks(upperType)
-                }
-
-                if currentSection == "ENTITIES" {
-                    if paperSpace {
-                        if reachedModelEntities {
-                            throw DXFCompatibilityError
-                                .paperEntityAfterModelEntity
-                        }
-                        throw DXFCompatibilityError
-                            .paperSpaceNotSupported(upperType)
-                    }
-
-                    reachedModelEntities = true
-                    modelEntityCount += 1
-                    if let modelBlockRecordHandle,
-                       ownerHandle?.caseInsensitiveCompare(
-                           modelBlockRecordHandle
-                       ) != .orderedSame {
-                        throw DXFCompatibilityError.invalidEntity(
-                            type: upperType,
-                            missingCode: "Model Space owner (330)"
-                        )
-                    }
-                }
-            }
-
-            if upperType == "BLOCK_RECORD",
-               currentRecordPairs.contains(where: {
-                   $0.code == 2
-                       && $0.value.caseInsensitiveCompare("*MODEL_SPACE")
-                           == .orderedSame
-               }) {
-                sawModelBlockRecord = true
-                modelBlockRecordHandle = handle
-            }
-            if upperType == "BLOCK",
-               currentRecordPairs.contains(where: {
-                   $0.code == 2
-                       && $0.value.caseInsensitiveCompare("*MODEL_SPACE")
-                           == .orderedSame
-               }) {
-                sawModelBlock = true
-            }
-        }
-
-        index = 0
+        var index = 0
         while index < pairs.count {
             let pair = pairs[index]
             if pair.code == 0 {
-                try validateCurrentRecord()
-                currentRecordType = nil
-                currentRecordPairs.removeAll(keepingCapacity: true)
-
-                let upperValue = pair.value.uppercased()
-                if upperValue == "SECTION" {
+                let type = pair.value.uppercased()
+                if type == "SECTION" {
                     guard index + 1 < pairs.count,
                           pairs[index + 1].code == 2 else {
                         throw DXFCompatibilityError.malformedPairs
@@ -229,30 +96,69 @@ enum DXFCompatibilityValidator {
                     index += 2
                     continue
                 }
-                if upperValue == "ENDSEC" {
+                if type == "ENDSEC" {
+                    if polylineOpen {
+                        throw DXFCompatibilityError.malformedPolyline
+                    }
                     currentSection = nil
                     index += 1
                     continue
                 }
-                if upperValue != "EOF",
-                   currentSection != nil,
-                   !["TABLE", "ENDTAB"].contains(upperValue) {
-                    currentRecordType = upperValue
+
+                if ["LAYOUT", "VIEWPORT"].contains(type) {
+                    throw DXFCompatibilityError.forbiddenLayoutRecord(type)
                 }
-            } else if currentRecordType != nil {
-                currentRecordPairs.append(pair)
+
+                if currentSection == "ENTITIES" {
+                    switch type {
+                    case "POLYLINE":
+                        if polylineOpen {
+                            throw DXFCompatibilityError.malformedPolyline
+                        }
+                        polylineOpen = true
+                        polylineVertexCount = 0
+                        entityCount += 1
+                    case "VERTEX":
+                        guard polylineOpen else {
+                            throw DXFCompatibilityError.malformedPolyline
+                        }
+                        polylineVertexCount += 1
+                    case "SEQEND":
+                        guard polylineOpen, polylineVertexCount >= 2 else {
+                            throw DXFCompatibilityError.malformedPolyline
+                        }
+                        polylineOpen = false
+                    case "LINE", "CIRCLE", "TEXT", "ARC", "POINT":
+                        entityCount += 1
+                    default:
+                        break
+                    }
+                }
+            } else {
+                if pair.code == 67, Int(pair.value) == 1 {
+                    throw DXFCompatibilityError
+                        .paperSpaceNotSupported("group code 67")
+                }
+                if pair.code == 410 {
+                    throw DXFCompatibilityError
+                        .paperSpaceNotSupported("layout name 410")
+                }
             }
             index += 1
         }
-        try validateCurrentRecord()
 
-        for required in ["HEADER", "CLASSES", "TABLES", "BLOCKS", "ENTITIES", "OBJECTS"] {
-            guard sections.contains(required) else {
-                throw DXFCompatibilityError.missingSection(required)
-            }
+        let required = ["HEADER", "TABLES", "BLOCKS", "ENTITIES"]
+        for section in required where !sections.contains(section) {
+            throw DXFCompatibilityError.missingSection(section)
         }
-        let expectedOrder = ["HEADER", "CLASSES", "TABLES", "BLOCKS", "ENTITIES", "OBJECTS"]
-        let positions = try expectedOrder.map { section -> Int in
+        if sections.contains("CLASSES") {
+            throw DXFCompatibilityError.forbiddenLayoutRecord("CLASSES")
+        }
+        if sections.contains("OBJECTS") {
+            throw DXFCompatibilityError.forbiddenLayoutRecord("OBJECTS")
+        }
+
+        let positions = try required.map { section -> Int in
             guard let position = sections.firstIndex(of: section) else {
                 throw DXFCompatibilityError.missingSection(section)
             }
@@ -261,10 +167,7 @@ enum DXFCompatibilityValidator {
         guard zip(positions, positions.dropFirst()).allSatisfy(<) else {
             throw DXFCompatibilityError.invalidSectionOrder
         }
-        guard sawModelBlockRecord, sawModelBlock else {
-            throw DXFCompatibilityError.missingModelSpace
-        }
-        guard modelEntityCount > 0 else {
+        guard entityCount > 0 else {
             throw DXFCompatibilityError.missingModelEntities
         }
     }
