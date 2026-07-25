@@ -82,7 +82,7 @@ enum ProjectPackageError: LocalizedError {
 }
 
 enum ProjectPackageService {
-    static let formatVersion = 1
+    static let formatVersion = 2
     static let maximumPackageBytes = 1_500_000_000
 
     static func makePackage(projectID: UUID) throws -> URL {
@@ -102,6 +102,7 @@ enum ProjectPackageService {
             (workspaceRecord.path, workspaceData)
         ]
         var packagedScans: [ProjectPackageScanRecord] = []
+        var requiresWallPhotoReader = false
 
         for scanReference in project.scans {
             guard let room = ProjectRepository.load(
@@ -128,6 +129,15 @@ enum ProjectPackageService {
             ]
             if let rawJSONFile = room.rawJSONFile {
                 assetNames.append(rawJSONFile)
+            }
+            if !(room.wallPhotos ?? []).isEmpty {
+                requiresWallPhotoReader = true
+            }
+            for photo in room.wallPhotos ?? [] {
+                assetNames.append(photo.fileName)
+                if let thumbnailFileName = photo.thumbnailFileName {
+                    assetNames.append(thumbnailFileName)
+                }
             }
 
             var seenNames: Set<String> = []
@@ -168,8 +178,8 @@ enum ProjectPackageService {
         let manifest = ProjectPackageManifest(
             formatIdentifier:
                 "com.3essam.3eroomelectrical.project",
-            formatVersion: formatVersion,
-            minimumReaderVersion: 1,
+            formatVersion: requiresWallPhotoReader ? 2 : 1,
+            minimumReaderVersion: requiresWallPhotoReader ? 2 : 1,
             appVersion: appVersion,
             exportedAt: Date(),
             projectID: project.id,
@@ -310,11 +320,15 @@ enum ProjectPackageService {
                 }
                 verifiedBytes += asset.byteCount
             }
+            let wallPhotoAssets = (room.wallPhotos ?? []).flatMap { photo in
+                [photo.fileName] + (photo.thumbnailFileName.map { [$0] } ?? [])
+            }
             let declaredAssets = Set(
                 [
                     room.processedJSONFile,
                     room.usdzFile
                 ] + (room.rawJSONFile.map { [$0] } ?? [])
+                    + wallPhotoAssets
             )
             let availableAssets = Set(assets.keys)
             let missingAssets = Set(scanRecord.missingFiles)
@@ -531,7 +545,9 @@ enum ProjectPackageService {
             usdzFile: source.usdzFile,
             electricalSettings: source.electricalSettings,
             ceilingLights: source.ceilingLights,
-            ceilingLightLayouts: source.ceilingLightLayouts
+            ceilingLightLayouts: source.ceilingLightLayouts,
+            wallAppearances: source.wallAppearances,
+            wallPhotos: source.wallPhotos
         )
     }
 

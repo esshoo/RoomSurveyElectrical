@@ -6,10 +6,25 @@ import SwiftUI
 enum ScanPresentationMode: String, CaseIterable, Identifiable {
     case plan2D
     case model3D
+    case photos
 
     var id: String { rawValue }
-    var title: String { self == .plan2D ? "2D" : "3D" }
-    var systemImage: String { self == .plan2D ? "square.grid.2x2" : "cube.fill" }
+
+    var title: String {
+        switch self {
+        case .plan2D: "2D"
+        case .model3D: "3D"
+        case .photos: "الصور"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .plan2D: "square.grid.2x2"
+        case .model3D: "cube.fill"
+        case .photos: "photo.on.rectangle.angled"
+        }
+    }
 }
 
 struct ViewerLayerVisibility: Equatable {
@@ -21,6 +36,7 @@ struct ViewerLayerVisibility: Equatable {
     var ceilingLighting = true
     var dimensions = true
     var electricalDimensions = false
+    var wallPhotos = true
 }
 
 enum Plan2DHighlightTarget: Equatable, Identifiable {
@@ -54,6 +70,7 @@ struct RoomViewerView: View {
     @State private var exportedFile: ExportedFile?
     @State private var isExporting = false
     @State private var errorMessage: String?
+    @State private var focusedWallID: UUID?
 
     init(initialProject: RoomProject, surveyProjectID: UUID) {
         self.surveyProjectID = surveyProjectID
@@ -74,6 +91,15 @@ struct RoomViewerView: View {
                 )
             case .model3D:
                 model3D
+            case .photos:
+                WallPhotosTabView(
+                    project: $project,
+                    onProjectChanged: persistViewerProject,
+                    onOpenWall3D: { wallID in
+                        focusedWallID = wallID
+                        mode = .model3D
+                    }
+                )
             }
         }
         .navigationTitle(project.name)
@@ -185,7 +211,12 @@ struct RoomViewerView: View {
             projectID: project.id,
             fileName: project.usdzFile
         ) {
-            USDZRoomView(url: url, project: project, layers: layers)
+            USDZRoomView(
+                url: url,
+                project: project,
+                layers: layers,
+                focusedWallID: focusedWallID
+            )
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .top) {
                     Label(
@@ -234,6 +265,9 @@ struct RoomViewerView: View {
                 }
                 Toggle(isOn: $layers.ceilingLighting) {
                     Label("إضاءة السقف", systemImage: "light.recessed")
+                }
+                Toggle(isOn: $layers.wallPhotos) {
+                    Label("صور وألوان الجدران", systemImage: "photo.on.rectangle")
                 }
                 if mode == .plan2D {
                     Toggle(isOn: $layers.dimensions) {
@@ -3644,6 +3678,7 @@ private struct USDZRoomView: UIViewRepresentable {
     let url: URL
     let project: RoomProject
     let layers: ViewerLayerVisibility
+    let focusedWallID: UUID?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -3678,6 +3713,7 @@ private struct USDZRoomView: UIViewRepresentable {
         private weak var sceneView: SCNView?
         private var initialCameraPosition = SCNVector3(5, 4, 5)
         private var cameraTarget = SCNVector3Zero
+        private var lastFocusedWallID: UUID?
 
         init(parent: USDZRoomView) {
             self.parent = parent
@@ -3692,11 +3728,13 @@ private struct USDZRoomView: UIViewRepresentable {
             loadedURL = parent.url
             view.scene = scene
             scene.rootNode.childNode(withName: "Section_grp", recursively: true)?.isHidden = true
+            addWallAppearanceOverlays(to: scene)
             addElectricalMarkers(to: scene)
             addCeilingLights(to: scene)
             addManualOpenings(to: scene)
             configureCamera(for: scene, in: view)
             applyLayerVisibility(to: scene)
+            focusOnRequestedWall(in: scene, animated: false)
         }
 
         func updateScene(in view: SCNView) {
@@ -3705,10 +3743,12 @@ private struct USDZRoomView: UIViewRepresentable {
                 return
             }
             guard let scene = view.scene else { return }
+            addWallAppearanceOverlays(to: scene)
             addElectricalMarkers(to: scene)
             addCeilingLights(to: scene)
             addManualOpenings(to: scene)
             applyLayerVisibility(to: scene)
+            focusOnRequestedWall(in: scene, animated: true)
         }
 
         private func configureCamera(for scene: SCNScene, in view: SCNView) {
@@ -3741,6 +3781,262 @@ private struct USDZRoomView: UIViewRepresentable {
             cameraNode.look(at: center)
             scene.rootNode.addChildNode(cameraNode)
             view.pointOfView = cameraNode
+        }
+
+        private func addWallAppearanceOverlays(to scene: SCNScene) {
+            scene.rootNode.childNode(
+                withName: "3e-wall-appearance-overlays",
+                recursively: false
+            )?.removeFromParentNode()
+
+            let root = SCNNode()
+            root.name = "3e-wall-appearance-overlays"
+            root.isHidden = !parent.layers.wallPhotos || !parent.layers.walls
+            scene.rootNode.addChildNode(root)
+
+            for wall in parent.project.walls {
+                guard let appearance = parent.project.wallAppearance(for: wall.id),
+                      appearance.visualMode != .defaultMaterial else {
+                    continue
+                }
+
+                let material = SCNMaterial()
+                material.isDoubleSided = true
+                material.lightingModel = .constant
+                material.transparency = CGFloat(appearance.opacity)
+                material.writesToDepthBuffer = true
+                material.readsFromDepthBuffer = true
+
+                switch appearance.visualMode {
+                case .solidColor:
+                    let color = wallPhotoUIColor(
+                        hex: appearance.solidColorHex,
+                        fallback: .systemGray4
+                    )
+                    material.diffuse.contents = color
+                    material.emission.contents = color.withAlphaComponent(0.06)
+                case .capturedPhotos:
+                    guard let photo = parent.project.primaryPhoto(for: wall.id),
+                          let image = WallPhotoStorage.image(
+                            projectID: parent.project.id,
+                            asset: photo
+                          ) else {
+                        continue
+                    }
+                    material.diffuse.contents = image
+                    material.diffuse.magnificationFilter = .linear
+                    material.diffuse.minificationFilter = .linear
+                    material.diffuse.mipFilter = .linear
+                case .defaultMaterial:
+                    continue
+                }
+
+                let wallNode = SCNNode()
+                wallNode.name = "3e-wall-appearance-\(wall.id.uuidString)"
+                wallNode.simdTransform = wall.matrix
+                wallNode.renderingOrder = -2
+
+                for geometry in appearanceGeometries(
+                    for: wall,
+                    material: material
+                ) {
+                    let node = SCNNode(geometry: geometry)
+                    node.renderingOrder = -2
+                    wallNode.addChildNode(node)
+                }
+                root.addChildNode(wallNode)
+            }
+        }
+
+        private func appearanceGeometries(
+            for wall: WallSnapshot,
+            material: SCNMaterial
+        ) -> [SCNGeometry] {
+            let openings = wallOpeningRectangles(for: wall)
+            var xCuts: [Float] = [-wall.width / 2, wall.width / 2]
+            var yCuts: [Float] = [-wall.height / 2, wall.height / 2]
+            for opening in openings {
+                xCuts.append(max(-wall.width / 2, opening.minX))
+                xCuts.append(min(wall.width / 2, opening.maxX))
+                yCuts.append(max(-wall.height / 2, opening.minY))
+                yCuts.append(min(wall.height / 2, opening.maxY))
+            }
+            xCuts = uniqueSorted(xCuts)
+            yCuts = uniqueSorted(yCuts)
+
+            var result: [SCNGeometry] = []
+            guard xCuts.count >= 2, yCuts.count >= 2 else { return result }
+            for xIndex in 0..<(xCuts.count - 1) {
+                for yIndex in 0..<(yCuts.count - 1) {
+                    let minX = xCuts[xIndex]
+                    let maxX = xCuts[xIndex + 1]
+                    let minY = yCuts[yIndex]
+                    let maxY = yCuts[yIndex + 1]
+                    guard maxX - minX > 0.002,
+                          maxY - minY > 0.002 else { continue }
+                    let center = SIMD2<Float>(
+                        (minX + maxX) / 2,
+                        (minY + maxY) / 2
+                    )
+                    guard !openings.contains(where: { $0.contains(center) }) else {
+                        continue
+                    }
+                    result.append(
+                        wallQuadGeometry(
+                            wall: wall,
+                            minX: minX,
+                            maxX: maxX,
+                            minY: minY,
+                            maxY: maxY,
+                            material: material
+                        )
+                    )
+                }
+            }
+            return result
+        }
+
+        private func wallQuadGeometry(
+            wall: WallSnapshot,
+            minX: Float,
+            maxX: Float,
+            minY: Float,
+            maxY: Float,
+            material: SCNMaterial
+        ) -> SCNGeometry {
+            let depth: Float = 0.006
+            let vertices = [
+                SCNVector3(minX, minY, depth),
+                SCNVector3(maxX, minY, depth),
+                SCNVector3(maxX, maxY, depth),
+                SCNVector3(minX, maxY, depth)
+            ]
+            func textureCoordinate(x: Float, y: Float) -> CGPoint {
+                let u = CGFloat((x + wall.width / 2) / max(wall.width, 0.001))
+                let normalizedY = CGFloat(
+                    (y + wall.height / 2) / max(wall.height, 0.001)
+                )
+                return CGPoint(x: u, y: 1 - normalizedY)
+            }
+            let textureCoordinates = [
+                textureCoordinate(x: minX, y: minY),
+                textureCoordinate(x: maxX, y: minY),
+                textureCoordinate(x: maxX, y: maxY),
+                textureCoordinate(x: minX, y: maxY)
+            ]
+            let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
+            let geometry = SCNGeometry(
+                sources: [
+                    SCNGeometrySource(vertices: vertices),
+                    SCNGeometrySource(textureCoordinates: textureCoordinates)
+                ],
+                elements: [
+                    SCNGeometryElement(
+                        indices: indices,
+                        primitiveType: .triangles
+                    )
+                ]
+            )
+            geometry.materials = [material]
+            return geometry
+        }
+
+        private func wallOpeningRectangles(
+            for wall: WallSnapshot
+        ) -> [WallLocalRectangle] {
+            let inverse = simd_inverse(wall.matrix)
+            return parent.project.surfaces.compactMap { surface in
+                let local = simd_mul(inverse, surface.matrix.columns.3)
+                guard abs(local.z) <= 0.30,
+                      abs(local.x) <= wall.width / 2 + surface.width / 2 else {
+                    return nil
+                }
+                return WallLocalRectangle(
+                    minX: local.x - surface.width / 2,
+                    maxX: local.x + surface.width / 2,
+                    minY: local.y - surface.height / 2,
+                    maxY: local.y + surface.height / 2
+                )
+            }
+        }
+
+        private func uniqueSorted(_ values: [Float]) -> [Float] {
+            values.sorted().reduce(into: []) { result, value in
+                if let last = result.last, abs(last - value) < 0.001 {
+                    return
+                }
+                result.append(value)
+            }
+        }
+
+        private func focusOnRequestedWall(
+            in scene: SCNScene,
+            animated: Bool
+        ) {
+            guard let wallID = parent.focusedWallID,
+                  wallID != lastFocusedWallID,
+                  let wall = parent.project.walls.first(where: { $0.id == wallID }),
+                  let cameraNode = sceneView?.pointOfView else {
+                return
+            }
+            lastFocusedWallID = wallID
+
+            scene.rootNode.childNode(
+                withName: "3e-focused-wall",
+                recursively: false
+            )?.removeFromParentNode()
+
+            let highlight = SCNPlane(
+                width: CGFloat(wall.width),
+                height: CGFloat(wall.height)
+            )
+            let material = SCNMaterial()
+            material.diffuse.contents = UIColor.systemYellow.withAlphaComponent(0.13)
+            material.emission.contents = UIColor.systemYellow.withAlphaComponent(0.10)
+            material.isDoubleSided = true
+            material.lightingModel = .constant
+            material.writesToDepthBuffer = false
+            highlight.materials = [material]
+            let highlightNode = SCNNode(geometry: highlight)
+            highlightNode.name = "3e-focused-wall"
+            highlightNode.simdTransform = wall.matrix
+            highlightNode.simdPosition += SIMD3<Float>(
+                wall.matrix.columns.2.x,
+                wall.matrix.columns.2.y,
+                wall.matrix.columns.2.z
+            ) * 0.012
+            highlightNode.renderingOrder = 20
+            scene.rootNode.addChildNode(highlightNode)
+
+            let center = SIMD3<Float>(
+                wall.matrix.columns.3.x,
+                wall.matrix.columns.3.y,
+                wall.matrix.columns.3.z
+            )
+            var normal = SIMD3<Float>(
+                wall.matrix.columns.2.x,
+                wall.matrix.columns.2.y,
+                wall.matrix.columns.2.z
+            )
+            if simd_length(normal) < 0.001 {
+                normal = SIMD3<Float>(0, 0, 1)
+            } else {
+                normal = simd_normalize(normal)
+            }
+            let current = SIMD3<Float>(
+                cameraNode.position.x,
+                cameraNode.position.y,
+                cameraNode.position.z
+            )
+            let direction: Float = simd_dot(current - center, normal) >= 0 ? 1 : -1
+            let distance = max(max(wall.width, wall.height) * 1.35, 1.4)
+            let desired = center + normal * direction * distance
+
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = animated ? 0.45 : 0
+            cameraNode.position = SCNVector3(desired.x, desired.y, desired.z)
+            cameraNode.look(at: SCNVector3(center.x, center.y, center.z))
+            SCNTransaction.commit()
         }
 
         private func addElectricalMarkers(to scene: SCNScene) {
@@ -3911,6 +4207,10 @@ private struct USDZRoomView: UIViewRepresentable {
             scene.rootNode.childNode(withName: "3e-electrical-markers", recursively: false)?.isHidden = !parent.layers.electrical
             scene.rootNode.childNode(withName: "3e-ceiling-lights", recursively: false)?.isHidden = !parent.layers.ceilingLighting
             scene.rootNode.childNode(withName: "3e-manual-openings", recursively: false)?.isHidden = !parent.layers.openings
+            scene.rootNode.childNode(
+                withName: "3e-wall-appearance-overlays",
+                recursively: false
+            )?.isHidden = !parent.layers.wallPhotos || !parent.layers.walls
         }
 
         @objc func resetCamera() {
@@ -3921,6 +4221,18 @@ private struct USDZRoomView: UIViewRepresentable {
             cameraNode.look(at: cameraTarget)
             SCNTransaction.commit()
         }
+    }
+}
+
+private struct WallLocalRectangle {
+    let minX: Float
+    let maxX: Float
+    let minY: Float
+    let maxY: Float
+
+    func contains(_ point: SIMD2<Float>) -> Bool {
+        point.x > minX && point.x < maxX
+            && point.y > minY && point.y < maxY
     }
 }
 

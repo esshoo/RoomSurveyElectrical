@@ -505,6 +505,102 @@ struct CeilingLightLayout: Codable, Identifiable, Equatable {
     }
 }
 
+
+enum WallVisualMode: String, Codable, CaseIterable, Identifiable {
+    case defaultMaterial
+    case capturedPhotos
+    case solidColor
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .defaultMaterial: "افتراضي"
+        case .capturedPhotos: "صور الحائط"
+        case .solidColor: "لون ثابت"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .defaultMaterial: "square.fill"
+        case .capturedPhotos: "photo.fill"
+        case .solidColor: "paintpalette.fill"
+        }
+    }
+}
+
+enum WallPhotoSource: String, Codable, Equatable {
+    case manualImport
+    case photographicScan
+    case editedReplacement
+}
+
+struct WallPhotoAsset: Codable, Identifiable, Equatable {
+    let id: UUID
+    let wallID: UUID
+    var fileName: String
+    var thumbnailFileName: String?
+    let createdAt: Date
+    var pixelWidth: Int
+    var pixelHeight: Int
+    var source: WallPhotoSource
+    var segmentIDs: [UUID]?
+    var isEdited: Bool?
+
+    init(
+        id: UUID = UUID(),
+        wallID: UUID,
+        fileName: String,
+        thumbnailFileName: String? = nil,
+        createdAt: Date = Date(),
+        pixelWidth: Int,
+        pixelHeight: Int,
+        source: WallPhotoSource,
+        segmentIDs: [UUID]? = nil,
+        isEdited: Bool? = nil
+    ) {
+        self.id = id
+        self.wallID = wallID
+        self.fileName = fileName
+        self.thumbnailFileName = thumbnailFileName
+        self.createdAt = createdAt
+        self.pixelWidth = max(pixelWidth, 1)
+        self.pixelHeight = max(pixelHeight, 1)
+        self.source = source
+        self.segmentIDs = segmentIDs
+        self.isEdited = isEdited
+    }
+}
+
+struct WallAppearance: Codable, Identifiable, Equatable {
+    let id: UUID
+    let wallID: UUID
+    var displayName: String
+    var visualMode: WallVisualMode
+    var solidColorHex: String
+    var opacity: Float
+    var primaryPhotoID: UUID?
+
+    init(
+        id: UUID = UUID(),
+        wallID: UUID,
+        displayName: String,
+        visualMode: WallVisualMode = .defaultMaterial,
+        solidColorHex: String = "#D9D9DE",
+        opacity: Float = 1,
+        primaryPhotoID: UUID? = nil
+    ) {
+        self.id = id
+        self.wallID = wallID
+        self.displayName = displayName
+        self.visualMode = visualMode
+        self.solidColorHex = solidColorHex
+        self.opacity = min(max(opacity, 0.10), 1)
+        self.primaryPhotoID = primaryPhotoID
+    }
+}
+
 struct RoomProject: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
@@ -520,6 +616,8 @@ struct RoomProject: Codable, Identifiable, Equatable {
     var electricalSettings: ElectricalPlacementSettings?
     var ceilingLights: [CeilingLight]? = nil
     var ceilingLightLayouts: [CeilingLightLayout]? = nil
+    var wallAppearances: [WallAppearance]? = nil
+    var wallPhotos: [WallPhotoAsset]? = nil
 
     var wallCount: Int { walls.count }
     var doorCount: Int { surfaces.filter { $0.kind == .door }.count }
@@ -538,6 +636,58 @@ struct RoomProject: Codable, Identifiable, Equatable {
 }
 
 extension RoomProject {
+    mutating func normalizeWallPhotoMetadata() {
+        let validWallIDs = Set(walls.map(\.id))
+        let validPhotos = (wallPhotos ?? []).filter {
+            validWallIDs.contains($0.wallID)
+        }
+        wallPhotos = validPhotos
+
+        var existing: [UUID: WallAppearance] = [:]
+        for appearance in wallAppearances ?? []
+            where validWallIDs.contains(appearance.wallID) {
+            existing[appearance.wallID] = appearance
+        }
+        var normalized: [WallAppearance] = []
+        for (index, wall) in walls.enumerated() {
+            var appearance = existing.removeValue(forKey: wall.id)
+                ?? WallAppearance(
+                    wallID: wall.id,
+                    displayName: "الحائط \(index + 1)"
+                )
+            let photos = validPhotos.filter { $0.wallID == wall.id }
+            if appearance.primaryPhotoID.flatMap({ id in
+                photos.contains(where: { $0.id == id }) ? id : nil
+            }) == nil {
+                appearance.primaryPhotoID = photos.last?.id
+            }
+            if appearance.visualMode == .capturedPhotos,
+               appearance.primaryPhotoID == nil {
+                appearance.visualMode = .defaultMaterial
+            }
+            normalized.append(appearance)
+        }
+        wallAppearances = normalized
+    }
+
+    func wallAppearance(for wallID: UUID) -> WallAppearance? {
+        wallAppearances?.first { $0.wallID == wallID }
+    }
+
+    func photos(for wallID: UUID) -> [WallPhotoAsset] {
+        (wallPhotos ?? [])
+            .filter { $0.wallID == wallID }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func primaryPhoto(for wallID: UUID) -> WallPhotoAsset? {
+        let photos = photos(for: wallID)
+        guard let primaryID = wallAppearance(for: wallID)?.primaryPhotoID else {
+            return photos.first
+        }
+        return photos.first { $0.id == primaryID } ?? photos.first
+    }
+
     @discardableResult
     mutating func appendElectricalPointMergingNearby(
         _ point: ElectricalPoint,

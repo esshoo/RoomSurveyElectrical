@@ -138,7 +138,7 @@ enum ProjectRepository {
         let scanName = cleanName.flatMap { $0.isEmpty ? nil : $0 }
             ?? "غرفة \(formatter.string(from: Date()))"
 
-        let project = RoomProject(
+        var project = RoomProject(
             id: id,
             name: scanName,
             createdAt: Date(),
@@ -153,13 +153,16 @@ enum ProjectRepository {
             electricalSettings: nil
         )
 
+        project.normalizeWallPhotoMetadata()
         try save(project)
         return project
     }
 
     static func save(_ project: RoomProject) throws {
-        let projectDirectory = try directory(for: project.id, create: true)
-        let data = try encoder.encode(project)
+        var normalizedProject = project
+        normalizedProject.normalizeWallPhotoMetadata()
+        let projectDirectory = try directory(for: normalizedProject.id, create: true)
+        let data = try encoder.encode(normalizedProject)
         try data.write(
             to: projectDirectory.appendingPathComponent("project.json"),
             options: .atomic
@@ -191,6 +194,8 @@ enum ProjectRepository {
             return nil
         }
 
+        project.normalizeWallPhotoMetadata()
+
         if project.floors == nil || project.objects == nil,
            let roomData = try? Data(
             contentsOf: projectDirectory.appendingPathComponent(project.processedJSONFile)
@@ -201,6 +206,29 @@ enum ProjectRepository {
         }
 
         return project
+    }
+
+    static func assetURL(
+        projectID: UUID,
+        fileName: String,
+        createProjectDirectory: Bool = false
+    ) throws -> URL {
+        guard isSafeImportedFileName(fileName) else {
+            throw RepositoryError.invalidImportedFiles
+        }
+        return try directory(
+            for: projectID,
+            create: createProjectDirectory
+        ).appendingPathComponent(fileName)
+    }
+
+    static func removeAsset(projectID: UUID, fileName: String?) {
+        guard let fileName,
+              let url = try? assetURL(
+                projectID: projectID,
+                fileName: fileName
+              ) else { return }
+        try? fileManager.removeItem(at: url)
     }
 
     static func fileURL(projectID: UUID, fileName: String) throws -> URL {
@@ -249,7 +277,9 @@ enum ProjectRepository {
             usdzFile: source.usdzFile,
             electricalSettings: source.electricalSettings,
             ceilingLights: source.ceilingLights,
-            ceilingLightLayouts: source.ceilingLightLayouts
+            ceilingLightLayouts: source.ceilingLightLayouts,
+            wallAppearances: source.wallAppearances,
+            wallPhotos: source.wallPhotos
         )
         try save(copy)
         return copy
