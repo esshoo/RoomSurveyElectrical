@@ -38,7 +38,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.9.6.1 • CoreText Build Fix",
+                                    "الإصدار 1.9.7 • R12 Viewer + Compact Vector Text",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))

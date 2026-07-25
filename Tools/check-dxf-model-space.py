@@ -134,11 +134,11 @@ def main() -> int:
         errors.append("LAYOUT object exists")
 
     marker = any(
-        code == 999 and value == "3ERoomElectrical v1.9.6 PURE_MODEL_R12_VECTOR_TEXT"
+        code == 999 and value == "3ERoomElectrical v1.9.7 PURE_MODEL_R12_VECTOR_TEXT"
         for code, value in pairs
     )
     if not marker:
-        errors.append("v1.9.6 PURE_MODEL_R12_VECTOR_TEXT marker is missing")
+        errors.append("v1.9.7 PURE_MODEL_R12_VECTOR_TEXT marker is missing")
 
     acadver = None
     for i, (code, value) in enumerate(pairs[:-1]):

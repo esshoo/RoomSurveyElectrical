@@ -216,7 +216,7 @@ private struct DXFPlanBuilder {
             metadata: metadata
         )
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.6 PURE_MODEL_R12_VECTOR_TEXT")
+        dxf.pair(999, "3ERoomElectrical v1.9.7 PURE_MODEL_R12_VECTOR_TEXT")
         firstBuilder.addHeader(
             to: &dxf,
             bounds: Bounds(
@@ -983,7 +983,7 @@ private struct DXFPlanBuilder {
 
     func build() -> String {
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.6 PURE_MODEL_R12_VECTOR_TEXT")
+        dxf.pair(999, "3ERoomElectrical v1.9.7 PURE_MODEL_R12_VECTOR_TEXT")
         addHeader(to: &dxf)
         // Pure Model Space export: intentionally omit all layout machinery.
         addTables(to: &dxf)
@@ -1441,7 +1441,7 @@ private struct DXFPlanBuilder {
 }
 
 private enum DXFVectorTextRenderer {
-    private static let curveSteps = 10
+    private static let curveSteps = 5
 
     static func contours(
         for value: String,
@@ -1508,7 +1508,9 @@ private enum DXFVectorTextRenderer {
             }
         }
 
-        let validContours = rawContours.filter { $0.count >= 3 }
+        let validContours = rawContours
+            .map { simplifyContour($0, tolerance: 0.006) }
+            .filter { $0.count >= 3 }
         guard !validContours.isEmpty else { return [] }
 
         let allPoints = validContours.flatMap { $0 }
@@ -1565,6 +1567,104 @@ private enum DXFVectorTextRenderer {
                 false
             }
         }
+    }
+
+
+    private static func simplifyContour(
+        _ points: [CGPoint],
+        tolerance: CGFloat
+    ) -> [CGPoint] {
+        guard points.count > 4 else { return points }
+        let isClosed: Bool
+        if let first = points.first, let last = points.last {
+            isClosed = hypot(first.x - last.x, first.y - last.y) < 0.0001
+        } else {
+            isClosed = false
+        }
+
+        var source = isClosed ? Array(points.dropLast()) : points
+        guard source.count > 3 else { return points }
+
+        // First remove near-identical samples. CoreText paths often contain
+        // consecutive points that differ by less than the precision useful
+        // in a room plan but cost six DXF lines each.
+        var compact: [CGPoint] = []
+        compact.reserveCapacity(source.count)
+        for point in source {
+            if let previous = compact.last,
+               hypot(point.x - previous.x, point.y - previous.y) < tolerance / 2 {
+                continue
+            }
+            compact.append(point)
+        }
+        source = compact
+        guard source.count > 3 else {
+            return source
+        }
+
+        // Remove points that are effectively collinear with their neighbours.
+        // Repeating the pass produces a compact contour while preserving the
+        // corners and the general Arabic glyph shape.
+        var changed = true
+        while changed && source.count > 4 {
+            changed = false
+            var next: [CGPoint] = []
+            next.reserveCapacity(source.count)
+            for index in source.indices {
+                if !isClosed && (index == source.startIndex || index == source.index(before: source.endIndex)) {
+                    next.append(source[index])
+                    continue
+                }
+                let previousIndex = index == source.startIndex
+                    ? source.index(before: source.endIndex)
+                    : source.index(before: index)
+                let nextIndex = index == source.index(before: source.endIndex)
+                    ? source.startIndex
+                    : source.index(after: index)
+                let distance = perpendicularDistance(
+                    source[index],
+                    from: source[previousIndex],
+                    to: source[nextIndex]
+                )
+                if distance <= tolerance {
+                    changed = true
+                } else {
+                    next.append(source[index])
+                }
+            }
+            if next.count < 3 { break }
+            source = next
+        }
+
+        // The R12 POLYLINE closed flag joins the final vertex back to the
+        // first one, so repeating the first vertex only increases file size.
+        return source
+    }
+
+    private static func perpendicularDistance(
+        _ point: CGPoint,
+        from start: CGPoint,
+        to end: CGPoint
+    ) -> CGFloat {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let lengthSquared = dx * dx + dy * dy
+        guard lengthSquared > 0.0000001 else {
+            return hypot(point.x - start.x, point.y - start.y)
+        }
+        let projection = max(
+            0,
+            min(
+                1,
+                ((point.x - start.x) * dx + (point.y - start.y) * dy)
+                    / lengthSquared
+            )
+        )
+        let projected = CGPoint(
+            x: start.x + projection * dx,
+            y: start.y + projection * dy
+        )
+        return hypot(point.x - projected.x, point.y - projected.y)
     }
 
     private static func flatten(_ path: CGPath) -> [[CGPoint]] {
@@ -1960,6 +2060,6 @@ private struct DXFWriter {
         guard value.isFinite else {
             return "0"
         }
-        return String(format: "%.6f", value)
+        return String(format: "%.4f", value)
     }
 }

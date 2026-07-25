@@ -113,6 +113,44 @@ enum DXFViewerParser {
         var unsupportedCount = 0
         var nextEntityID = 0
 
+        // AutoCAD R12 stores a 2D polyline as one POLYLINE record followed by
+        // several VERTEX records and a terminating SEQEND. The previous
+        // viewer only understood LWPOLYLINE, so furniture outlines and the
+        // vector Arabic glyphs exported for strict R12 compatibility were
+        // silently ignored.
+        var legacyPolylineLayer: String?
+        var legacyPolylineClosed = false
+        var legacyPolylineIsPaperSpace = false
+        var legacyPolylinePoints: [DXFViewPoint] = []
+
+        func finishLegacyPolyline() {
+            defer {
+                legacyPolylineLayer = nil
+                legacyPolylineClosed = false
+                legacyPolylineIsPaperSpace = false
+                legacyPolylinePoints.removeAll(keepingCapacity: true)
+            }
+            guard let layer = legacyPolylineLayer,
+                  !legacyPolylineIsPaperSpace,
+                  legacyPolylinePoints.count >= 2 else {
+                return
+            }
+            entities.append(
+                DXFRenderableEntity(
+                    id: nextEntityID,
+                    kind: .polyline(closed: legacyPolylineClosed),
+                    layer: layer,
+                    points: legacyPolylinePoints,
+                    radius: 0,
+                    text: "",
+                    textHeight: 0,
+                    rotation: 0
+                )
+            )
+            layerNames.insert(layer)
+            nextEntityID += 1
+        }
+
         func finishRecord() {
             guard let currentType else { return }
             let type = currentType.uppercased()
@@ -125,6 +163,47 @@ enum DXFViewerParser {
             let isPaperSpace = currentPairs.first {
                 $0.code == 67
             }.flatMap { Int($0.value) } == 1
+
+            switch type {
+            case "POLYLINE":
+                // Be tolerant of a malformed file that forgot the previous
+                // SEQEND instead of losing all geometry after it.
+                finishLegacyPolyline()
+                legacyPolylineLayer = currentPairs.first {
+                    $0.code == 8
+                }?.value ?? "0"
+                legacyPolylineClosed = (
+                    intValue(code: 70, pairs: currentPairs) ?? 0
+                ) & 1 == 1
+                legacyPolylineIsPaperSpace = isPaperSpace
+                return
+
+            case "VERTEX":
+                guard legacyPolylineLayer != nil,
+                      !legacyPolylineIsPaperSpace,
+                      let vertex = point(
+                        xCode: 10,
+                        yCode: 20,
+                        pairs: currentPairs
+                      ) else {
+                    return
+                }
+                legacyPolylinePoints.append(vertex)
+                return
+
+            case "SEQEND":
+                finishLegacyPolyline()
+                return
+
+            default:
+                // POLYLINE sequences normally end with SEQEND. Finalising
+                // here also lets the viewer recover useful geometry from
+                // partially generated third-party files.
+                if legacyPolylineLayer != nil {
+                    finishLegacyPolyline()
+                }
+            }
+
             guard !isPaperSpace else { return }
             if let entity = parseEntity(
                 id: nextEntityID,
@@ -134,7 +213,7 @@ enum DXFViewerParser {
                 entities.append(entity)
                 layerNames.insert(entity.layer)
                 nextEntityID += 1
-            } else if !["SEQEND", "VERTEX"].contains(type) {
+            } else {
                 unsupportedCount += 1
             }
         }
@@ -170,6 +249,7 @@ enum DXFViewerParser {
             index += 1
         }
         finishRecord()
+        finishLegacyPolyline()
 
         guard !entities.isEmpty else {
             throw DXFViewerError.noSupportedEntities
