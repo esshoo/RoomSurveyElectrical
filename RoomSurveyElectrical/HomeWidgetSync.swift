@@ -1,17 +1,155 @@
 import Foundation
+import WidgetKit
+
+enum HomeWidgetSharedConfiguration {
+    static let appGroupIdentifier = "group.com.essam.threeroomelectrical"
+    static let widgetKind = "3ERoomElectricalRecentProjects"
+    static let dataFolderName = "3ERoomElectricalWidgetData"
+    static let snapshotFileName = "recent-projects.json"
+    static let maximumProjects = 6
+}
+
+private struct HomeWidgetProjectSnapshot: Codable {
+    let projectID: UUID
+    let name: String
+    let kindTitle: String
+    let systemImage: String
+    let scanCount: Int
+    let roomCount: Int
+    let updatedAt: Date
+    let previewFileName: String
+}
 
 enum HomeWidgetSnapshotStore {
-    // Sideloadly compatibility build: the Home Screen widget is intentionally
-    // static and does not request App Group entitlements. These methods remain
-    // so existing project and preview code keeps compiling without changing
-    // the saved project format.
+    private static let fileManager = FileManager.default
+
     static func update(projects: [SurveyProject]) {
-        _ = projects
+        guard let directory = sharedDirectory(create: true) else { return }
+
+        let activeProjects = projects
+            .filter { !$0.archived }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .prefix(HomeWidgetSharedConfiguration.maximumProjects)
+
+        let snapshots = activeProjects.map { project in
+            let previewName = previewFileName(projectID: project.id)
+            copyCachedPreviewIfAvailable(
+                projectID: project.id,
+                destination: directory.appendingPathComponent(previewName)
+            )
+            return HomeWidgetProjectSnapshot(
+                projectID: project.id,
+                name: project.name,
+                kindTitle: project.kind.title,
+                systemImage: project.kind.systemImage,
+                scanCount: project.scanCount,
+                roomCount: project.roomCount,
+                updatedAt: project.updatedAt,
+                previewFileName: previewName
+            )
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(snapshots) else { return }
+
+        let snapshotURL = directory.appendingPathComponent(
+            HomeWidgetSharedConfiguration.snapshotFileName
+        )
+        do {
+            try data.write(to: snapshotURL, options: .atomic)
+            removeUnusedPreviews(
+                in: directory,
+                keeping: Set(snapshots.map(\.previewFileName))
+            )
+            WidgetCenter.shared.reloadTimelines(
+                ofKind: HomeWidgetSharedConfiguration.widgetKind
+            )
+        } catch {
+            return
+        }
     }
 
     static func publishPreview(projectID: UUID, data: Data) {
-        _ = projectID
-        _ = data
+        guard let directory = sharedDirectory(create: true) else { return }
+        let destination = directory.appendingPathComponent(
+            previewFileName(projectID: projectID)
+        )
+        do {
+            try data.write(to: destination, options: .atomic)
+            WidgetCenter.shared.reloadTimelines(
+                ofKind: HomeWidgetSharedConfiguration.widgetKind
+            )
+        } catch {
+            return
+        }
+    }
+
+    static var isSharedContainerAvailable: Bool {
+        sharedDirectory(create: false) != nil
+    }
+
+    private static func sharedDirectory(create: Bool) -> URL? {
+        guard let root = fileManager.containerURL(
+            forSecurityApplicationGroupIdentifier:
+                HomeWidgetSharedConfiguration.appGroupIdentifier
+        ) else {
+            return nil
+        }
+        let directory = root.appendingPathComponent(
+            HomeWidgetSharedConfiguration.dataFolderName,
+            isDirectory: true
+        )
+        if create {
+            do {
+                try fileManager.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                return nil
+            }
+        }
+        return directory
+    }
+
+    private static func previewFileName(projectID: UUID) -> String {
+        "project-\(projectID.uuidString.lowercased()).png"
+    }
+
+    private static func copyCachedPreviewIfAvailable(
+        projectID: UUID,
+        destination: URL
+    ) {
+        guard !fileManager.fileExists(atPath: destination.path),
+              let previewsDirectory = try? ApplicationFileLayout.previewsDirectory
+        else {
+            return
+        }
+        let source = previewsDirectory.appendingPathComponent(
+            "\(projectID.uuidString).png"
+        )
+        guard let data = try? Data(contentsOf: source) else { return }
+        try? data.write(to: destination, options: .atomic)
+    }
+
+    private static func removeUnusedPreviews(
+        in directory: URL,
+        keeping names: Set<String>
+    ) {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for file in files where file.pathExtension.lowercased() == "png" {
+            if !names.contains(file.lastPathComponent) {
+                try? fileManager.removeItem(at: file)
+            }
+        }
     }
 }
 
@@ -101,7 +239,7 @@ struct HomeWidgetDiagnosticReport: Equatable {
         if hostProfile.teamIdentifier != widgetProfile.teamIdentifier {
             return "التطبيق والويدجت موقّعان بفريقين مختلفين."
         }
-        return "Provisioning Profile التطبيق والويدجت متطابقان. إذا لم تظهر في المعرض فالمشكلة في تسجيل الامتداد أثناء التثبيت الجانبي."
+        return "Provisioning Profile التطبيق والويدجت متطابقان."
     }
 }
 
@@ -143,9 +281,7 @@ enum HomeWidgetDiagnostics {
         )
     }
 
-    static var status: HomeWidgetInstallationStatus {
-        report.status
-    }
+    static var status: HomeWidgetInstallationStatus { report.status }
 
     private static var embeddedWidgetBundle: Bundle? {
         guard let plugInsURL = Bundle.main.builtInPlugInsURL,

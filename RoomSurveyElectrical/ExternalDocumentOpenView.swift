@@ -188,9 +188,8 @@ struct ExternalDocumentOpenView: View {
                     Button("تم") { dismiss() }
                 }
             }
-            .sheet(isPresented: $showPreview) {
-                QuickLookFilePreview(url: inspection.localURL)
-                    .ignoresSafeArea()
+            .fullScreenCover(isPresented: $showPreview) {
+                PDFViewerScreen(url: inspection.localURL)
             }
             .fullScreenCover(isPresented: $showDXFViewer) {
                 DXFViewerScreen(url: inspection.localURL)
@@ -253,6 +252,35 @@ private struct CountRow: View {
             Text("\(value)")
                 .monospacedDigit()
                 .fontWeight(.semibold)
+        }
+    }
+}
+
+private struct PDFViewerScreen: View {
+    @Environment(\.dismiss) private var dismiss
+    let url: URL
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            QuickLookFilePreview(url: url)
+                .ignoresSafeArea()
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 52, height: 52)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(.white.opacity(0.14), lineWidth: 1)
+                    }
+            }
+            .accessibilityLabel("إغلاق عارض PDF")
+            .padding(.leading, 18)
+            .padding(.top, 12)
         }
     }
 }

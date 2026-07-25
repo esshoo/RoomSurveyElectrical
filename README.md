@@ -1,4 +1,4 @@
-# 3ERoomElectrical v1.9.7 Build 25
+# 3ERoomElectrical v1.9.8 Build 25
 
 ## Important upgrade cleanup
 
@@ -123,5 +123,8 @@ A full Xcode/iOS build must still be run by GitHub Actions or Xcode because this
 - DXF export is now an ASCII AutoCAD R12 (`AC1009`) file.
 - Every graphical entity is written directly in `ENTITIES`; no `LAYOUT`, `VIEWPORT`, `OBJECTS`, `CLASSES`, group `67`, or group `410` is emitted.
 - Classic `POLYLINE` / `VERTEX` / `SEQEND` records replace `LWPOLYLINE`.
-- Exported names include `PureModel-R12-VectorText`, and the file includes the marker `3ERoomElectrical v1.9.7 PURE_MODEL_R12_VECTOR_TEXT`.
+- Exported names include `PureModel-R12-VectorText`, and the file includes the marker `3ERoomElectrical v1.9.8 PURE_MODEL_R12_VECTOR_TEXT`.
 - The Home Screen widget is intentionally static and has no App Group or custom entitlements, to isolate Sideloadly extension signing.
+
+
+See `README-v1.9.8.md` for the dynamic Home Screen widget and PDF viewer close-button changes.

@@ -23,12 +23,16 @@ jobs:
           bash ./Tools/clean-obsolete-files.sh
           test ! -e RoomSurveyElectrical/SmartProjectEmbedding.swift
 
-      - name: Verify pure-model and static-widget source
+      - name: Verify DXF, dynamic widget, and PDF source
         shell: bash
         run: |
-          ! grep -q 'CODE_SIGN_ENTITLEMENTS' RoomSurveyElectrical.xcodeproj/project.pbxproj
           grep -q 'PURE_MODEL_R12_VECTOR_TEXT' RoomSurveyElectrical/DXFExporter.swift
-          grep -q 'WidgetKit Provision Test • Build 23' 3ERoomElectricalWidget/3ERoomElectricalWidget.swift
+          grep -q 'CODE_SIGN_ENTITLEMENTS = Support/RoomSurveyElectrical.entitlements' RoomSurveyElectrical.xcodeproj/project.pbxproj
+          grep -q 'CODE_SIGN_ENTITLEMENTS = Support/3ERoomElectricalWidget.entitlements' RoomSurveyElectrical.xcodeproj/project.pbxproj
+          grep -q '3ERoomElectricalRecentProjects' 3ERoomElectricalWidget/3ERoomElectricalWidget.swift
+          grep -q 'PDFViewerScreen' RoomSurveyElectrical/ExternalDocumentOpenView.swift
+          plutil -lint Support/RoomSurveyElectrical.entitlements
+          plutil -lint Support/3ERoomElectricalWidget.entitlements
 
       - name: Build for a physical iPhone
         id: xcodebuild

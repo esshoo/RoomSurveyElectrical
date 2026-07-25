@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var pendingImport: PreparedProjectPackage?
     @State private var pendingExternalDocument: ExternalDocumentInspection?
     @State private var packageNotice: ProjectPackageNotice?
+    @State private var pendingWidgetProject: SurveyProject?
 
     var body: some View {
         NavigationStack {
@@ -38,7 +39,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.9.7 • R12 Viewer + Compact Vector Text",
+                                    "الإصدار 1.9.8 • Dynamic Widget + PDF Exit",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
@@ -302,6 +303,10 @@ struct ContentView: View {
             ExternalDocumentOpenView(inspection: inspection)
                 .environmentObject(store)
         }
+        .sheet(item: $pendingWidgetProject) { project in
+            WidgetProjectDestinationView(project: project)
+                .environmentObject(store)
+        }
         .fileImporter(
             isPresented: $showDocumentImporter,
             allowedContentTypes: [UTType.pdf, UTType.threeEDXF],
@@ -350,6 +355,15 @@ struct ContentView: View {
     private func handleOpenedURL(_ url: URL) {
         if url.scheme?.lowercased() == "3eroomelectrical" {
             store.reload()
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let projectValue = components?.queryItems?.first(
+                where: { $0.name == "project" }
+            )?.value
+            if let projectValue,
+               let projectID = UUID(uuidString: projectValue),
+               let project = store.project(id: projectID) {
+                pendingWidgetProject = project
+            }
             return
         }
         switch url.pathExtension.lowercased() {
@@ -396,6 +410,31 @@ struct ContentView: View {
                 title: "تعذر استيراد المشروع",
                 message: error.localizedDescription
             )
+        }
+    }
+}
+
+private struct WidgetProjectDestinationView: View {
+    @Environment(\.dismiss) private var dismiss
+    let project: SurveyProject
+
+    var body: some View {
+        NavigationStack {
+            ProjectBrowserView(
+                projectID: project.id,
+                parentItemID: nil,
+                title: project.name
+            )
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("إغلاق المشروع")
+                }
+            }
         }
     }
 }
