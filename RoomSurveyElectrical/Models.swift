@@ -573,6 +573,90 @@ struct WallPhotoAsset: Codable, Identifiable, Equatable {
     }
 }
 
+
+
+enum WallPhotoSegmentState: String, Codable, Equatable {
+    case pending
+    case captured
+    case skipped
+}
+
+struct WallPhotoSegment: Codable, Identifiable, Equatable {
+    let id: UUID
+    let wallID: UUID
+    var row: Int
+    var column: Int
+    var rowCount: Int
+    var columnCount: Int
+    var localMinX: Float
+    var localMaxX: Float
+    var localMinY: Float
+    var localMaxY: Float
+    var state: WallPhotoSegmentState
+    var photoID: UUID?
+    var qualityScore: Float?
+    var capturedAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        wallID: UUID,
+        row: Int,
+        column: Int,
+        rowCount: Int,
+        columnCount: Int,
+        localMinX: Float,
+        localMaxX: Float,
+        localMinY: Float,
+        localMaxY: Float,
+        state: WallPhotoSegmentState = .pending,
+        photoID: UUID? = nil,
+        qualityScore: Float? = nil,
+        capturedAt: Date? = nil
+    ) {
+        self.id = id
+        self.wallID = wallID
+        self.row = max(row, 0)
+        self.column = max(column, 0)
+        self.rowCount = max(rowCount, 1)
+        self.columnCount = max(columnCount, 1)
+        self.localMinX = min(localMinX, localMaxX)
+        self.localMaxX = max(localMinX, localMaxX)
+        self.localMinY = min(localMinY, localMaxY)
+        self.localMaxY = max(localMinY, localMaxY)
+        self.state = state
+        self.photoID = photoID
+        self.qualityScore = qualityScore.map { min(max($0, 0), 1) }
+        self.capturedAt = capturedAt
+    }
+
+    var centerX: Float { (localMinX + localMaxX) / 2 }
+    var centerY: Float { (localMinY + localMaxY) / 2 }
+    var width: Float { max(localMaxX - localMinX, 0.01) }
+    var height: Float { max(localMaxY - localMinY, 0.01) }
+}
+
+struct WallPhotographicScanProgress: Codable, Equatable {
+    var targetSegmentWidthMeters: Float
+    var targetSegmentHeightMeters: Float
+    var promptedAfterRoomScan: Bool
+    var startedAt: Date?
+    var completedAt: Date?
+
+    init(
+        targetSegmentWidthMeters: Float = 1.35,
+        targetSegmentHeightMeters: Float = 1.20,
+        promptedAfterRoomScan: Bool = false,
+        startedAt: Date? = nil,
+        completedAt: Date? = nil
+    ) {
+        self.targetSegmentWidthMeters = min(max(targetSegmentWidthMeters, 0.55), 2.50)
+        self.targetSegmentHeightMeters = min(max(targetSegmentHeightMeters, 0.55), 2.50)
+        self.promptedAfterRoomScan = promptedAfterRoomScan
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+    }
+}
+
 struct WallAppearance: Codable, Identifiable, Equatable {
     let id: UUID
     let wallID: UUID
@@ -618,6 +702,8 @@ struct RoomProject: Codable, Identifiable, Equatable {
     var ceilingLightLayouts: [CeilingLightLayout]? = nil
     var wallAppearances: [WallAppearance]? = nil
     var wallPhotos: [WallPhotoAsset]? = nil
+    var wallPhotoSegments: [WallPhotoSegment]? = nil
+    var photographicScanProgress: WallPhotographicScanProgress? = nil
 
     var wallCount: Int { walls.count }
     var doorCount: Int { surfaces.filter { $0.kind == .door }.count }
@@ -668,6 +754,95 @@ extension RoomProject {
             normalized.append(appearance)
         }
         wallAppearances = normalized
+
+        let validPhotoIDs = Set(validPhotos.map(\.id))
+        wallPhotoSegments = (wallPhotoSegments ?? []).filter { segment in
+            validWallIDs.contains(segment.wallID)
+        }.map { segment in
+            var normalizedSegment = segment
+            if let photoID = normalizedSegment.photoID,
+               !validPhotoIDs.contains(photoID) {
+                normalizedSegment.photoID = nil
+                normalizedSegment.qualityScore = nil
+                normalizedSegment.capturedAt = nil
+                if normalizedSegment.state == .captured {
+                    normalizedSegment.state = .pending
+                }
+            }
+            return normalizedSegment
+        }
+    }
+
+    mutating func ensurePhotographicWallSegments(
+        targetWidth: Float = 1.35,
+        targetHeight: Float = 1.20
+    ) {
+        normalizeWallPhotoMetadata()
+        let clampedWidth = min(max(targetWidth, 0.55), 2.50)
+        let clampedHeight = min(max(targetHeight, 0.55), 2.50)
+        let existingByKey = Dictionary(
+            uniqueKeysWithValues: (wallPhotoSegments ?? []).map {
+                ("\($0.wallID.uuidString)-\($0.row)-\($0.column)-\($0.rowCount)-\($0.columnCount)", $0)
+            }
+        )
+        var generated: [WallPhotoSegment] = []
+        for wall in walls {
+            let columns = min(max(Int(ceil(wall.width / clampedWidth)), 1), 16)
+            let rows = min(max(Int(ceil(wall.height / clampedHeight)), 1), 12)
+            let cellWidth = wall.width / Float(columns)
+            let cellHeight = wall.height / Float(rows)
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    let minX = -wall.width / 2 + Float(column) * cellWidth
+                    let maxX = minX + cellWidth
+                    let minY = -wall.height / 2 + Float(row) * cellHeight
+                    let maxY = minY + cellHeight
+                    let key = "\(wall.id.uuidString)-\(row)-\(column)-\(rows)-\(columns)"
+                    if var existing = existingByKey[key] {
+                        existing.localMinX = minX
+                        existing.localMaxX = maxX
+                        existing.localMinY = minY
+                        existing.localMaxY = maxY
+                        generated.append(existing)
+                    } else {
+                        generated.append(
+                            WallPhotoSegment(
+                                wallID: wall.id,
+                                row: row,
+                                column: column,
+                                rowCount: rows,
+                                columnCount: columns,
+                                localMinX: minX,
+                                localMaxX: maxX,
+                                localMinY: minY,
+                                localMaxY: maxY
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        wallPhotoSegments = generated
+        var progress = photographicScanProgress ?? WallPhotographicScanProgress()
+        progress.targetSegmentWidthMeters = clampedWidth
+        progress.targetSegmentHeightMeters = clampedHeight
+        photographicScanProgress = progress
+    }
+
+    func photographicSegments(for wallID: UUID) -> [WallPhotoSegment] {
+        (wallPhotoSegments ?? [])
+            .filter { $0.wallID == wallID }
+            .sorted {
+                if $0.row == $1.row { return $0.column < $1.column }
+                return $0.row > $1.row
+            }
+    }
+
+    var photographicCoverage: Float {
+        let segments = wallPhotoSegments ?? []
+        guard !segments.isEmpty else { return 0 }
+        let covered = segments.filter { $0.state == .captured }.count
+        return Float(covered) / Float(segments.count)
     }
 
     func wallAppearance(for wallID: UUID) -> WallAppearance? {

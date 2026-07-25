@@ -13,6 +13,8 @@ struct ElectricalEditorView: View {
     @State private var placementMessage: String?
     @State private var placementDraft: PlacementDraft?
     @State private var smartPrompt: SmartPlacementPrompt?
+    @State private var showPhotographicScanOffer = false
+    @State private var showPhotographicScan = false
 
     let arSession: ARSession
     let settings: ElectricalPlacementSettings
@@ -34,21 +36,30 @@ struct ElectricalEditorView: View {
 
     var body: some View {
         ZStack {
-            ElectricalARView(
-                project: project,
-                arSession: arSession,
-                onWallTapped: { pendingTap = $0 },
-                onCeilingTapped: { pendingCeilingTap = $0 }
-            )
-            .ignoresSafeArea()
+            if showPhotographicScan {
+                PhotographicWallScanView(
+                    project: $project,
+                    arSession: arSession,
+                    onProjectChanged: persistProject,
+                    onClose: { showPhotographicScan = false }
+                )
+            } else {
+                ElectricalARView(
+                    project: project,
+                    arSession: arSession,
+                    onWallTapped: { pendingTap = $0 },
+                    onCeilingTapped: { pendingCeilingTap = $0 }
+                )
+                .ignoresSafeArea()
 
-            VStack(spacing: 12) {
-                topBar
-                Spacer()
-                instructionCard
-                actionBar
+                VStack(spacing: 12) {
+                    topBar
+                    Spacer()
+                    instructionCard
+                    actionBar
+                }
+                .padding()
             }
-            .padding()
         }
         .sheet(item: $pendingTap) { tap in
             DevicePickerSheet(settings: settings) { type, status in
@@ -66,6 +77,12 @@ struct ElectricalEditorView: View {
         }
         .sheet(isPresented: $showBOQ) {
             BOQSheet(project: project, settings: settings)
+        }
+        .sheet(isPresented: $showPhotographicScanOffer) {
+            PhotographicScanOfferSheet {
+                showPhotographicScan = true
+            }
+            .presentationDetents([.medium, .large])
         }
         .alert("تعذر تنفيذ العملية", isPresented: Binding(
             get: { errorMessage != nil },
@@ -93,6 +110,7 @@ struct ElectricalEditorView: View {
             Text(smartPromptMessage)
         }
         .onAppear {
+            preparePhotographicScanOffer()
             persistProject()
         }
     }
@@ -105,6 +123,15 @@ struct ElectricalEditorView: View {
                     .background(.ultraThinMaterial, in: Circle())
             }
 
+            Button {
+                showPhotographicScan = true
+            } label: {
+                Image(systemName: "camera.viewfinder")
+                    .frame(width: 42, height: 42)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .accessibilityLabel("المسح الفوتوغرافي للجدران")
+
             Spacer()
 
             VStack(alignment: .trailing, spacing: 3) {
@@ -113,6 +140,7 @@ struct ElectricalEditorView: View {
                 Text(
                     "\(project.points.count) نقطة • "
                         + "\(existingCeilingLightCount) إضاءة سقف موجودة • "
+                        + "صور \(Int((project.photographicCoverage * 100).rounded()))% • "
                         + settings.designMode.title
                 )
                 .font(.caption)
@@ -463,6 +491,18 @@ struct ElectricalEditorView: View {
         project.normalizeElectricalGroups()
         placementMessage = "تم التراجع عن \(removedPoint.type.title)."
         persistProject()
+    }
+
+    private func preparePhotographicScanOffer() {
+        project.normalizeWallPhotoMetadata()
+        var progress = project.photographicScanProgress ?? WallPhotographicScanProgress()
+        guard !progress.promptedAfterRoomScan else { return }
+        progress.promptedAfterRoomScan = true
+        project.photographicScanProgress = progress
+        persistProject()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            showPhotographicScanOffer = true
+        }
     }
 
     private func persistProject() {

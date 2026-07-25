@@ -26,6 +26,7 @@ struct WallPhotosTabView: View {
                             wall: wall,
                             appearance: appearance,
                             photo: project.primaryPhoto(for: wall.id),
+                            segments: project.photographicSegments(for: wall.id),
                             surfaces: projectedSurfaces(on: wall),
                             points: project.points.filter { $0.wallID == wall.id }
                         )
@@ -47,6 +48,7 @@ struct WallPhotosTabView: View {
                     wall: wall,
                     appearance: resolvedAppearance(for: wall, index: wallIndex),
                     photos: project.photos(for: wall.id),
+                    segments: project.photographicSegments(for: wall.id),
                     points: project.points.filter { $0.wallID == wall.id },
                     surfaces: projectedSurfaces(on: wall),
                     onSaveAppearance: { updated in
@@ -87,8 +89,8 @@ struct WallPhotosTabView: View {
             Label("صور الجدران", systemImage: "photo.on.rectangle.angled")
                 .font(.headline)
             Text(
-                "هذه المرحلة تجهز أسماء الجدران وصورها وألوانها. "
-                    + "المسح الفوتوغرافي التلقائي وتقسيم الأسطح سيضافان في المرحلة التالية."
+                "تظهر هنا صور الحوائط وألوانها وتغطية المسح الفوتوغرافي. "
+                    + "الأجزاء الخضراء مصورة، والرمادية متخطاة، والزرقاء ما زالت مطلوبة."
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -210,6 +212,7 @@ private struct WallPhotoCard: View {
     let wall: WallSnapshot
     let appearance: WallAppearance
     let photo: WallPhotoAsset?
+    let segments: [WallPhotoSegment]
     let surfaces: [WallPhotoSurfaceProjection]
     let points: [ElectricalPoint]
 
@@ -220,6 +223,7 @@ private struct WallPhotoCard: View {
                 wall: wall,
                 appearance: appearance,
                 photo: photo,
+                segments: segments,
                 surfaces: surfaces,
                 points: points
             )
@@ -232,10 +236,11 @@ private struct WallPhotoCard: View {
                         .foregroundStyle(.primary)
                     Text(
                         String(
-                            format: "%.2f × %.2f م • %@",
+                            format: "%.2f × %.2f م • %@ • صور %d%%",
                             wall.width,
                             wall.height,
-                            appearance.visualMode.title
+                            appearance.visualMode.title,
+                            Int((segmentCoverage * 100).rounded())
                         )
                     )
                     .font(.caption)
@@ -255,6 +260,11 @@ private struct WallPhotoCard: View {
         }
     }
 
+    private var segmentCoverage: Double {
+        guard !segments.isEmpty else { return 0 }
+        return Double(segments.filter { $0.state == .captured }.count) / Double(segments.count)
+    }
+
     private var previewHeight: CGFloat {
         let ratio = CGFloat(wall.width / max(wall.height, 0.1))
         return min(max(250 / max(ratio, 0.75), 130), 230)
@@ -268,6 +278,7 @@ private struct WallPhotoDetailView: View {
     let wall: WallSnapshot
     let appearance: WallAppearance
     let photos: [WallPhotoAsset]
+    let segments: [WallPhotoSegment]
     let points: [ElectricalPoint]
     let surfaces: [WallPhotoSurfaceProjection]
     let onSaveAppearance: (WallAppearance) -> Void
@@ -290,6 +301,7 @@ private struct WallPhotoDetailView: View {
         wall: WallSnapshot,
         appearance: WallAppearance,
         photos: [WallPhotoAsset],
+        segments: [WallPhotoSegment],
         points: [ElectricalPoint],
         surfaces: [WallPhotoSurfaceProjection],
         onSaveAppearance: @escaping (WallAppearance) -> Void,
@@ -302,6 +314,7 @@ private struct WallPhotoDetailView: View {
         self.wall = wall
         self.appearance = appearance
         self.photos = photos
+        self.segments = segments
         self.points = points
         self.surfaces = surfaces
         self.onSaveAppearance = onSaveAppearance
@@ -327,6 +340,7 @@ private struct WallPhotoDetailView: View {
                         wall: wall,
                         appearance: draftAppearance,
                         photo: primaryPhoto,
+                        segments: segments,
                         surfaces: surfaces,
                         points: points
                     )
@@ -345,6 +359,17 @@ private struct WallPhotoDetailView: View {
                         onOpenWall3D()
                     } label: {
                         Label("الذهاب إلى الحائط في 3D", systemImage: "view.3d")
+                    }
+                }
+
+                if !segments.isEmpty {
+                    Section("تغطية المسح الفوتوغرافي") {
+                        LabeledContent("الأجزاء", value: "\(capturedSegmentCount) / \(segments.count)")
+                        ProgressView(value: segmentCoverage)
+                            .tint(.green)
+                        Text("كل صورة ملتقطة مرتبطة بجزء محدد، ويمكن استكمال الأجزاء الناقصة لاحقًا من وضع الكاميرا.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -473,6 +498,15 @@ private struct WallPhotoDetailView: View {
         .environment(\.layoutDirection, .rightToLeft)
     }
 
+    private var capturedSegmentCount: Int {
+        segments.filter { $0.state == .captured }.count
+    }
+
+    private var segmentCoverage: Double {
+        guard !segments.isEmpty else { return 0 }
+        return Double(capturedSegmentCount) / Double(segments.count)
+    }
+
     private var primaryPhoto: WallPhotoAsset? {
         if let primaryID = selectedPhotoID,
            let selected = photos.first(where: { $0.id == primaryID }) {
@@ -589,6 +623,7 @@ struct WallElevationPreview: View {
     let wall: WallSnapshot
     let appearance: WallAppearance
     let photo: WallPhotoAsset?
+    let segments: [WallPhotoSegment]
     let surfaces: [WallPhotoSurfaceProjection]
     let points: [ElectricalPoint]
 
@@ -601,6 +636,7 @@ struct WallElevationPreview: View {
                     .clipped()
 
                 gridOverlay
+                segmentCoverageOverlay
 
                 ForEach(Array(surfaces.enumerated()), id: \.offset) { _, surface in
                     openingView(surface, size: size)
@@ -673,6 +709,36 @@ struct WallElevationPreview: View {
                 with: .color(.white.opacity(0.16)),
                 lineWidth: 0.7
             )
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var segmentCoverageOverlay: some View {
+        Canvas { context, size in
+            for segment in segments {
+                let rect = previewRect(
+                    centerX: segment.centerX,
+                    centerY: segment.centerY,
+                    width: segment.width,
+                    height: segment.height,
+                    size: size
+                ).insetBy(dx: 1.5, dy: 1.5)
+                let color: Color
+                switch segment.state {
+                case .captured: color = .green
+                case .skipped: color = .gray
+                case .pending: color = .blue
+                }
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: 3),
+                    with: .color(color.opacity(0.10))
+                )
+                context.stroke(
+                    Path(roundedRect: rect, cornerRadius: 3),
+                    with: .color(color.opacity(0.65)),
+                    lineWidth: 0.8
+                )
+            }
         }
         .allowsHitTesting(false)
     }

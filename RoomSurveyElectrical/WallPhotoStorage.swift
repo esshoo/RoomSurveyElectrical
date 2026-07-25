@@ -21,7 +21,8 @@ enum WallPhotoStorage {
         data: Data,
         projectID: UUID,
         wallID: UUID,
-        source: WallPhotoSource = .manualImport
+        source: WallPhotoSource = .manualImport,
+        segmentIDs: [UUID]? = nil
     ) throws -> WallPhotoAsset {
         guard let sourceImage = downsampledImage(
             data: data,
@@ -68,7 +69,8 @@ enum WallPhotoStorage {
             thumbnailFileName: thumbnailFileName,
             pixelWidth: dimensions.width,
             pixelHeight: dimensions.height,
-            source: source
+            source: source,
+            segmentIDs: segmentIDs
         )
     }
 

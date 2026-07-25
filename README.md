@@ -1,24 +1,25 @@
-# 3ERoomElectrical v1.9.14 — Build 32
+# 3ERoomElectrical v1.9.15 — Build 33
 
-## Wall photos foundation — Step 1 of 3
+## Guided photographic wall scan — Step 2 of 3
 
-- The scan viewer now has a third bottom tab named **الصور** beside 2D and 3D.
-- Every RoomPlan wall receives backward-compatible visual metadata and a user-editable display name.
-- Each wall card shows a true elevation preview using the wall width/height ratio.
-- Doors, windows, openings and electrical devices are drawn above the photo or colour preview so visual media never hides project additions.
-- A wall can use the default material, an imported wall photo or a fixed user-selected colour.
-- Multiple photos may be stored for one wall and one can be selected as the active photo.
-- The active image can be shared/saved for external editing, then returned through the photo picker as a replacement version.
-- The 3D viewer can focus the selected wall and renders imported photos or fixed colours as a separate visual overlay.
-- The 3D wall overlay is cut around rectangular RoomPlan openings instead of covering doors and windows.
-- A **صور وألوان الجدران** visibility toggle was added to the viewer layers.
-- Full-size and thumbnail JPEG files are kept inside the scan directory and included in `.3eroom` project packages.
+- After a RoomPlan scan reaches the electrical camera editor, the app offers to start **المسح الفوتوغرافي**.
+- The feature can be reopened at any time from the camera/viewfinder button without changing electrical placement modes.
+- Every planar wall detected by RoomPlan is divided into an adaptive rectangular grid based on its measured width and height.
+- Angled returns, column faces, protrusions or recess faces that RoomPlan reports as separate wall planes receive their own independent grid.
+- The app targets one highlighted segment at a time and does not save a continuous random stream of camera images.
+- Automatic capture requires normal AR tracking, complete framing, adequate projected size, a sufficiently frontal view and a stable phone.
+- The guide grid is hidden before capture; Core Image perspective correction crops the saved image to the four projected corners of the active segment.
+- Each saved JPEG is linked to its wall and segment, while the segment records capture state, quality score and capture time.
+- Skipped segments advance the workflow but become available again the next time the photographic scan is opened.
+- The **الصور** tab now shows per-wall coverage and a coloured captured/pending/skipped segment grid.
+- Captured segment photos remain separate in this build so their quality and geometric mapping can be tested safely on iPhone.
 
-## Planned remaining steps
+## Remaining final step
 
-1. **Photographic scan:** guided automatic capture, adaptive wall/surface segmentation, quality scoring, cropping and coverage completion.
-2. **Final visual pipeline:** photo layer rendering in 2D, stitched textures and textured GLB export.
+- Stitch or compose neighbouring segment photos into final wall textures.
+- Render the dedicated image layer in 2D and the completed textures in 3D without covering electrical/lighting overlays.
+- Export textured GLB assets with the wall images included.
 
 ## Safety scope
 
-This build does not change electrical placement rules, ceiling-light placement, takeoff calculations, DXF, layered PDF, PNG, existing GLB geometry, widget code or signing configuration.
+This build does not modify As-Built, Shop Drawing or new-installation rules; electrical merging; ceiling-light placement; takeoff calculations; DXF; layered PDF; PNG; current GLB geometry; widget code; or signing configuration.
