@@ -222,8 +222,8 @@ struct ExportCenterView: View {
             Section("DXF – مخطط CAD متجه") {
                 if planRooms.count > 1 {
                     exportButton(
-                        "DXF Unicode – Model Space",
-                        subtitle: "UTF‑8 للنص العربي • كل المخططات داخل Model Space",
+                        "DXF 2007 – Model Space",
+                        subtitle: "نص عربي حقيقي • UTF‑8 • كل المخططات داخل Model Space",
                         systemImage: "rectangle.3.group.fill",
                         kind: .combinedDXF,
                         roomIDs: planRooms.map(\.id),
@@ -237,7 +237,7 @@ struct ExportCenterView: View {
                     }
 
                     Label(
-                        "تم إيقاف Paper Space مؤقتًا لضمان أن كل الرسم يظهر داخل Model Space في AutoCAD وباقي البرامج.",
+                        "لا يحتوي الملف على Layouts أو Viewports؛ كل الرسم والنصوص موجودة داخل Model Space.",
                         systemImage: "checkmark.shield.fill"
                     )
                     .font(.caption)
@@ -249,7 +249,7 @@ struct ExportCenterView: View {
                         ? "تصدير المخطط DXF"
                         : "DXF منفصل لكل مساحة",
                     subtitle: planRooms.count == 1
-                        ? "Unicode UTF‑8 • طبقات CAD مستقلة • بالمتر"
+                        ? "DXF 2007 • نص عربي قابل للتعديل • طبقات مستقلة"
                         : "ملف ZIP يحتوي DXF مستقل لكل مسح",
                     systemImage: "ruler.fill",
                     kind: planRooms.count == 1 ? .singleDXF : .dxfPackage,
@@ -267,7 +267,7 @@ struct ExportCenterView: View {
                     ForEach(planRooms) { room in
                         exportButton(
                             room.scan.name,
-                            subtitle: "DXF منفرد • طبقات كاملة",
+                            subtitle: "DXF 2007 • UTF-8 • Model Space",
                             systemImage: "doc.badge.gearshape",
                             kind: .singleDXF,
                             roomIDs: [room.id]

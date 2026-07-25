@@ -1,7 +1,4 @@
-import CoreGraphics
-import CoreText
 import Foundation
-import UIKit
 import simd
 
 extension ProjectExportService {
@@ -24,7 +21,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-PureModel-R12-VectorText",
+            name: "\(sanitized(title))-ModelSpace-UTF8-2007",
             extension: "dxf"
         )
     }
@@ -46,7 +43,7 @@ extension ProjectExportService {
         var archive = StoredZIPArchive()
         for (index, room) in rooms.enumerated() {
             let name = String(
-                format: "%02d-%@-PureModel-R12-VectorText.dxf",
+                format: "%02d-%@-ModelSpace-UTF8-2007.dxf",
                 index + 1,
                 sanitized(room.scan.name)
             )
@@ -90,14 +87,13 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-Combined-PureModel-R12-VectorText",
+            name: "\(sanitized(title))-Combined-ModelSpace-UTF8-2007",
             extension: "dxf"
         )
     }
 
-    /// Compatibility alias retained for old callers and saved export records.
-    /// Paper-space layouts are intentionally no longer emitted. Every drawing
-    /// is written as real geometry in Model Space only.
+    /// Compatibility alias retained for older callers. Paper Space is not
+    /// generated; every room is written as real geometry in Model Space.
     static func makeLayoutDXF(
         title: String,
         rooms: [ExportRoomRecord],
@@ -113,7 +109,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-PureModel-R12-VectorText",
+            name: "\(sanitized(title))-ModelSpace-UTF8-2007",
             extension: "dxf"
         )
     }
@@ -146,20 +142,6 @@ private struct DXFPlanBuilder {
         let translation: (x: Double, y: Double)
     }
 
-    private struct LayoutDescriptor {
-        let placement: Placement
-        let name: String
-        let blockName: String
-        let blockRecordHandle: String
-        let layoutHandle: String
-        let blockBeginHandle: String
-        let blockEndHandle: String
-        let defaultViewportHandle: String
-        let mainViewportHandle: String
-        let viewCenter: (x: Double, y: Double)
-        let viewHeight: Double
-    }
-
     private let layers: [(name: String, color: Int, lineWeight: Int)] = [
         ("FLOOR", 8, 15),
         ("WALLS", 5, 50),
@@ -180,9 +162,8 @@ private struct DXFPlanBuilder {
         rooms: [ExportRoomRecord],
         metadata: ExportDocumentMetadata
     ) -> String {
-        guard let firstRoom = rooms.first else {
-            return ""
-        }
+        guard let firstRoom = rooms.first else { return "" }
+
         let spacing = 2.0
         var cursorX = 0.0
         var maximumHeight = 0.0
@@ -202,10 +183,7 @@ private struct DXFPlanBuilder {
                 )
             )
             cursorX += roomBounds.width + spacing
-            maximumHeight = max(
-                maximumHeight,
-                roomBounds.height
-            )
+            maximumHeight = max(maximumHeight, roomBounds.height)
         }
 
         let drawingMaximumX = max(cursorX - spacing, 0.5)
@@ -215,8 +193,9 @@ private struct DXFPlanBuilder {
             record: firstRoom,
             metadata: metadata
         )
+
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.7 PURE_MODEL_R12_VECTOR_TEXT")
+        dxf.pair(999, "3ERoomElectrical v1.9.9 MODEL_SPACE_UTF8_2007")
         firstBuilder.addHeader(
             to: &dxf,
             bounds: Bounds(
@@ -226,13 +205,10 @@ private struct DXFPlanBuilder {
                 maximumY: drawingMaximumY + 2
             )
         )
-        // Pure Model Space export: no CLASSES, LAYOUT, VIEWPORT,
-        // OBJECTS or Paper Space records are written at all.
+        firstBuilder.addClasses(to: &dxf)
         firstBuilder.addTables(to: &dxf)
-        firstBuilder.addEmptyBlocks(to: &dxf)
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "ENTITIES")
-        dxf.setEntityContext(ownerHandle: nil)
+        firstBuilder.addBlocks(to: &dxf)
+        dxf.beginEntities()
 
         for placement in placements {
             let builder = DXFPlanBuilder(
@@ -242,8 +218,8 @@ private struct DXFPlanBuilder {
                 translation: placement.translation
             )
             builder.addEntities(to: &dxf)
-            let labelX = placement.bounds.minimumX
-                + placement.translation.x
+
+            let labelX = placement.bounds.minimumX + placement.translation.x
             let labelY = placement.bounds.maximumY
                 + placement.translation.y
                 + 0.32
@@ -293,9 +269,8 @@ private struct DXFPlanBuilder {
             layer: "ANNOTATIONS",
             horizontalAlignment: 2
         )
-        dxf.setEntityContext(ownerHandle: nil)
-        dxf.pair(0, "ENDSEC")
-        dxf.pair(0, "EOF")
+
+        dxf.endEntitiesAndFile()
         return dxf.output
     }
 
@@ -304,698 +279,20 @@ private struct DXFPlanBuilder {
         rooms: [ExportRoomRecord],
         metadata: ExportDocumentMetadata
     ) -> String {
-        // Kept only for binary/source compatibility with older callers.
-        // It deliberately produces the same pure Model Space file.
         combined(title: title, rooms: rooms, metadata: metadata)
-    }
-
-    private static func layoutDescriptors(
-        for rooms: [ExportRoomRecord]
-    ) -> [LayoutDescriptor] {
-        let names = uniqueLayoutNames(for: rooms)
-        let spacing = 2.0
-        let viewportAspect = 390.0 / 235.0
-        var cursorX = 0.0
-        return rooms.enumerated().map { index, room in
-            let roomBounds = bounds(for: room.project)
-            let roomTranslation = (
-                x: cursorX - roomBounds.minimumX,
-                y: -roomBounds.minimumY
-            )
-            let placement = Placement(
-                room: room,
-                bounds: roomBounds,
-                translation: roomTranslation
-            )
-            cursorX += roomBounds.width + spacing
-
-            let displayedMinimumX = roomBounds.minimumX
-                + roomTranslation.x
-            let displayedMaximumX = roomBounds.maximumX
-                + roomTranslation.x
-            let displayedMinimumY = roomBounds.minimumY
-                + roomTranslation.y
-            let displayedMaximumY = roomBounds.maximumY
-                + roomTranslation.y
-            let paddedWidth = max(
-                displayedMaximumX - displayedMinimumX + 0.8,
-                0.8
-            )
-            let paddedHeight = max(
-                displayedMaximumY - displayedMinimumY + 0.8,
-                0.8
-            )
-            let requiredViewHeight = max(
-                paddedHeight,
-                paddedWidth / viewportAspect
-            ) * 1.08
-            let handleBase = 0x20 + index * 6
-            return LayoutDescriptor(
-                placement: placement,
-                name: names[index],
-                blockName: index == 0
-                    ? "*Paper_Space"
-                    : "*Paper_Space\(index - 1)",
-                blockRecordHandle: hexHandle(handleBase),
-                layoutHandle: hexHandle(handleBase + 1),
-                blockBeginHandle: hexHandle(handleBase + 2),
-                blockEndHandle: hexHandle(handleBase + 3),
-                defaultViewportHandle: hexHandle(handleBase + 4),
-                mainViewportHandle: hexHandle(handleBase + 5),
-                viewCenter: (
-                    (displayedMinimumX + displayedMaximumX) / 2,
-                    (displayedMinimumY + displayedMaximumY) / 2
-                ),
-                viewHeight: requiredViewHeight
-            )
-        }
-    }
-
-    private static func uniqueLayoutNames(
-        for rooms: [ExportRoomRecord]
-    ) -> [String] {
-        var used: Set<String> = ["model"]
-        return rooms.enumerated().map { index, room in
-            var base = room.scan.name
-                .components(
-                    separatedBy: CharacterSet(
-                        charactersIn: "<>/\\\":;?*|,="
-                    )
-                )
-                .joined(separator: "-")
-                .trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                )
-            if base.isEmpty {
-                base = "Layout \(index + 1)"
-            }
-            base = String(base.prefix(80))
-            var candidate = base
-            var suffix = 2
-            while used.contains(candidate.lowercased()) {
-                let suffixText = " (\(suffix))"
-                candidate = String(
-                    base.prefix(max(1, 80 - suffixText.count))
-                ) + suffixText
-                suffix += 1
-            }
-            used.insert(candidate.lowercased())
-            return candidate
-        }
-    }
-
-    private static func hexHandle(_ value: Int) -> String {
-        String(value, radix: 16).uppercased()
-    }
-
-    private func addLayoutHeader(
-        to dxf: inout DXFWriter,
-        maximumX: Double,
-        maximumY: Double
-    ) {
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "HEADER")
-        dxf.pair(9, "$ACADVER")
-        dxf.pair(1, "AC1009")
-        dxf.pair(9, "$DWGCODEPAGE")
-        dxf.pair(3, "ANSI_1252")
-        dxf.pair(9, "$INSUNITS")
-        dxf.pair(70, 6)
-        dxf.pair(9, "$MEASUREMENT")
-        dxf.pair(70, 1)
-        dxf.pair(9, "$LUNITS")
-        dxf.pair(70, 2)
-        dxf.pair(9, "$LUPREC")
-        dxf.pair(70, 3)
-        dxf.pair(9, "$TILEMODE")
-        dxf.pair(70, 1)
-        dxf.pair(9, "$CTAB")
-        dxf.pair(1, "Model")
-        dxf.pair(9, "$EXTMIN")
-        dxf.pair(10, -1.0)
-        dxf.pair(20, -1.0)
-        dxf.pair(30, 0.0)
-        dxf.pair(9, "$EXTMAX")
-        dxf.pair(10, maximumX + 1)
-        dxf.pair(20, maximumY + 2)
-        dxf.pair(30, 0.0)
-        dxf.pair(0, "ENDSEC")
-    }
-
-    private func addLayoutClasses(to dxf: inout DXFWriter) {
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "CLASSES")
-        dxf.pair(0, "CLASS")
-        dxf.pair(1, "LAYOUT")
-        dxf.pair(2, "AcDbLayout")
-        dxf.pair(3, "ObjectDBX Classes")
-        dxf.pair(90, 0)
-        dxf.pair(91, 0)
-        dxf.pair(280, 0)
-        dxf.pair(281, 0)
-        dxf.pair(0, "ENDSEC")
-    }
-
-    private func addLayoutTables(
-        to dxf: inout DXFWriter,
-        descriptors: [LayoutDescriptor]
-    ) {
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "TABLES")
-
-        dxf.pair(0, "TABLE")
-        dxf.pair(2, "LTYPE")
-        dxf.pair(5, "8")
-        dxf.pair(330, "0")
-        dxf.pair(100, "AcDbSymbolTable")
-        dxf.pair(70, 1)
-        dxf.pair(0, "LTYPE")
-        dxf.pair(5, "9")
-        dxf.pair(330, "8")
-        dxf.pair(100, "AcDbSymbolTableRecord")
-        dxf.pair(100, "AcDbLinetypeTableRecord")
-        dxf.pair(2, "CONTINUOUS")
-        dxf.pair(70, 0)
-        dxf.pair(3, "Solid line")
-        dxf.pair(72, 65)
-        dxf.pair(73, 0)
-        dxf.pair(40, 0.0)
-        dxf.pair(0, "ENDTAB")
-
-        let layoutLayers = [
-            (name: "0", color: 7, lineWeight: 15)
-        ] + layers
-        dxf.pair(0, "TABLE")
-        dxf.pair(2, "LAYER")
-        dxf.pair(5, "A")
-        dxf.pair(330, "0")
-        dxf.pair(100, "AcDbSymbolTable")
-        dxf.pair(70, layoutLayers.count)
-        for (index, layer) in layoutLayers.enumerated() {
-            dxf.pair(0, "LAYER")
-            dxf.pair(5, Self.hexHandle(0xB + index))
-            dxf.pair(330, "A")
-            dxf.pair(100, "AcDbSymbolTableRecord")
-            dxf.pair(100, "AcDbLayerTableRecord")
-            dxf.pair(2, layer.name)
-            dxf.pair(70, 0)
-            dxf.pair(62, layer.color)
-            dxf.pair(6, "CONTINUOUS")
-        }
-        dxf.pair(0, "ENDTAB")
-
-        dxf.pair(0, "TABLE")
-        dxf.pair(2, "STYLE")
-        dxf.pair(5, "18")
-        dxf.pair(330, "0")
-        dxf.pair(100, "AcDbSymbolTable")
-        dxf.pair(70, 1)
-        dxf.pair(0, "STYLE")
-        dxf.pair(5, "19")
-        dxf.pair(330, "18")
-        dxf.pair(100, "AcDbSymbolTableRecord")
-        dxf.pair(100, "AcDbTextStyleTableRecord")
-        dxf.pair(2, "STANDARD")
-        dxf.pair(70, 0)
-        dxf.pair(40, 0.0)
-        dxf.pair(41, 1.0)
-        dxf.pair(50, 0.0)
-        dxf.pair(71, 0)
-        dxf.pair(42, 0.2)
-        dxf.pair(3, "Arial.ttf")
-        dxf.pair(4, "")
-        dxf.pair(0, "ENDTAB")
-
-        dxf.pair(0, "TABLE")
-        dxf.pair(2, "BLOCK_RECORD")
-        dxf.pair(5, "3")
-        dxf.pair(330, "0")
-        dxf.pair(100, "AcDbSymbolTable")
-        dxf.pair(70, descriptors.count + 1)
-        addLayoutBlockRecord(
-            to: &dxf,
-            handle: "4",
-            name: "*Model_Space",
-            layoutHandle: "5"
-        )
-        for descriptor in descriptors {
-            addLayoutBlockRecord(
-                to: &dxf,
-                handle: descriptor.blockRecordHandle,
-                name: descriptor.blockName,
-                layoutHandle: descriptor.layoutHandle
-            )
-        }
-        dxf.pair(0, "ENDTAB")
-        dxf.pair(0, "ENDSEC")
-    }
-
-    private func addLayoutBlockRecord(
-        to dxf: inout DXFWriter,
-        handle: String,
-        name: String,
-        layoutHandle: String
-    ) {
-        dxf.pair(0, "BLOCK_RECORD")
-        dxf.pair(5, handle)
-        dxf.pair(330, "3")
-        dxf.pair(100, "AcDbSymbolTableRecord")
-        dxf.pair(100, "AcDbBlockTableRecord")
-        dxf.pair(2, name)
-        dxf.pair(340, layoutHandle)
-        dxf.pair(70, 6)
-        dxf.pair(280, 1)
-        dxf.pair(281, 0)
-    }
-
-    private func addLayoutBlocks(
-        to dxf: inout DXFWriter,
-        descriptors: [LayoutDescriptor]
-    ) {
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "BLOCKS")
-
-        // Model-space and paper-space BLOCK definitions are containers only.
-        // Their graphical entities belong in the ENTITIES section.
-        addLayoutBlockBegin(
-            to: &dxf,
-            handle: "6",
-            owner: "4",
-            name: "*Model_Space"
-        )
-        addLayoutBlockEnd(
-            to: &dxf,
-            handle: "7",
-            owner: "4"
-        )
-
-        for descriptor in descriptors {
-            addLayoutBlockBegin(
-                to: &dxf,
-                handle: descriptor.blockBeginHandle,
-                owner: descriptor.blockRecordHandle,
-                name: descriptor.blockName
-            )
-            addLayoutBlockEnd(
-                to: &dxf,
-                handle: descriptor.blockEndHandle,
-                owner: descriptor.blockRecordHandle
-            )
-        }
-        dxf.pair(0, "ENDSEC")
-    }
-
-    private func addLayoutBlockBegin(
-        to dxf: inout DXFWriter,
-        handle: String,
-        owner: String,
-        name: String
-    ) {
-        dxf.pair(0, "BLOCK")
-        dxf.pair(5, handle)
-        dxf.pair(330, owner)
-        dxf.pair(100, "AcDbEntity")
-        dxf.pair(8, "0")
-        dxf.pair(100, "AcDbBlockBegin")
-        dxf.pair(2, name)
-        dxf.pair(70, 0)
-        dxf.pair(10, 0.0)
-        dxf.pair(20, 0.0)
-        dxf.pair(30, 0.0)
-        dxf.pair(3, name)
-        dxf.pair(1, "")
-    }
-
-    private func addLayoutBlockEnd(
-        to dxf: inout DXFWriter,
-        handle: String,
-        owner: String
-    ) {
-        dxf.pair(0, "ENDBLK")
-        dxf.pair(5, handle)
-        dxf.pair(330, owner)
-        dxf.pair(100, "AcDbEntity")
-        dxf.pair(8, "0")
-        dxf.pair(100, "AcDbBlockEnd")
-    }
-
-    private func addLayoutViewport(
-        to dxf: inout DXFWriter,
-        handle: String,
-        owner: String,
-        identifier: Int,
-        center: (x: Double, y: Double),
-        size: (width: Double, height: Double),
-        viewCenter: (x: Double, y: Double),
-        viewHeight: Double,
-        isDefault: Bool,
-        layoutName: String
-    ) {
-        dxf.pair(0, "VIEWPORT")
-        dxf.pair(5, handle)
-        dxf.pair(330, owner)
-        dxf.pair(100, "AcDbEntity")
-        dxf.pair(67, 1)
-        dxf.pair(410, layoutName)
-        dxf.pair(8, "ANNOTATIONS")
-        dxf.pair(100, "AcDbViewport")
-        dxf.pair(10, center.x)
-        dxf.pair(20, center.y)
-        dxf.pair(30, 0.0)
-        dxf.pair(40, size.width)
-        dxf.pair(41, size.height)
-        dxf.pair(68, isDefault ? 1 : 2)
-        dxf.pair(69, identifier)
-        dxf.pair(12, viewCenter.x)
-        dxf.pair(22, viewCenter.y)
-        dxf.pair(13, 0.0)
-        dxf.pair(23, 0.0)
-        dxf.pair(14, 10.0)
-        dxf.pair(24, 10.0)
-        dxf.pair(15, 10.0)
-        dxf.pair(25, 10.0)
-        dxf.pair(16, 0.0)
-        dxf.pair(26, 0.0)
-        dxf.pair(36, 1.0)
-        dxf.pair(17, 0.0)
-        dxf.pair(27, 0.0)
-        dxf.pair(37, 0.0)
-        dxf.pair(42, 50.0)
-        dxf.pair(43, 0.0)
-        dxf.pair(44, 0.0)
-        dxf.pair(45, viewHeight)
-        dxf.pair(50, 0.0)
-        dxf.pair(51, 0.0)
-        dxf.pair(72, 100)
-        dxf.pair(90, isDefault ? 557088 : 0)
-        dxf.pair(1, "")
-        dxf.pair(281, 0)
-        dxf.pair(71, 0)
-        dxf.pair(74, 0)
-        dxf.pair(110, 0.0)
-        dxf.pair(120, 0.0)
-        dxf.pair(130, 0.0)
-        dxf.pair(111, 1.0)
-        dxf.pair(121, 0.0)
-        dxf.pair(131, 0.0)
-        dxf.pair(112, 0.0)
-        dxf.pair(122, 1.0)
-        dxf.pair(132, 0.0)
-        dxf.pair(79, 0)
-        dxf.pair(146, 0.0)
-        dxf.pair(282, 0)
-    }
-
-    private func addLayoutModelEntities(
-        to dxf: inout DXFWriter,
-        descriptors: [LayoutDescriptor],
-        maximumX: Double,
-        maximumY: Double
-    ) {
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "ENTITIES")
-
-        // AutoCAD writes paper-space entities first, followed by model-space
-        // entities. Group code 67 and layout name 410 keep both spaces
-        // unambiguous for strict DXF readers.
-        for descriptor in descriptors {
-            addLayoutViewport(
-                to: &dxf,
-                handle: descriptor.defaultViewportHandle,
-                owner: descriptor.blockRecordHandle,
-                identifier: 1,
-                center: (210, 148.5),
-                size: (462, 326.7),
-                viewCenter: (210, 148.5),
-                viewHeight: 326.7,
-                isDefault: true,
-                layoutName: descriptor.name
-            )
-            addLayoutViewport(
-                to: &dxf,
-                handle: descriptor.mainViewportHandle,
-                owner: descriptor.blockRecordHandle,
-                identifier: 2,
-                center: (210, 135),
-                size: (390, 235),
-                viewCenter: descriptor.viewCenter,
-                viewHeight: descriptor.viewHeight,
-                isDefault: false,
-                layoutName: descriptor.name
-            )
-
-            dxf.setEntityContext(
-                ownerHandle: descriptor.blockRecordHandle,
-                paperSpace: true,
-                layoutName: descriptor.name
-            )
-            dxf.text(
-                metadata.brandName,
-                at: (15, 285),
-                height: 5,
-                layer: "ANNOTATIONS",
-                horizontalAlignment: 0
-            )
-            dxf.text(
-                descriptor.name,
-                at: (15, 275),
-                height: 4,
-                layer: "ANNOTATIONS",
-                horizontalAlignment: 0
-            )
-            if !descriptor.placement.room.location.isEmpty {
-                dxf.text(
-                    descriptor.placement.room.location,
-                    at: (15, 267),
-                    height: 2.5,
-                    layer: "ANNOTATIONS",
-                    horizontalAlignment: 0
-                )
-            }
-            dxf.text(
-                metadata.exportLine,
-                at: (405, 8),
-                height: 2.5,
-                layer: "ANNOTATIONS",
-                horizontalAlignment: 2
-            )
-        }
-
-        dxf.setEntityContext(
-            ownerHandle: "4",
-            layoutName: "Model"
-        )
-
-        for descriptor in descriptors {
-            let placement = descriptor.placement
-            let builder = DXFPlanBuilder(
-                title: placement.room.scan.name,
-                record: placement.room,
-                metadata: metadata,
-                translation: placement.translation
-            )
-            builder.addEntities(to: &dxf)
-            let labelX = placement.bounds.minimumX
-                + placement.translation.x
-            let labelY = placement.bounds.maximumY
-                + placement.translation.y
-                + 0.32
-            dxf.text(
-                placement.room.scan.name,
-                at: (labelX, labelY),
-                height: 0.16,
-                layer: "ANNOTATIONS",
-                horizontalAlignment: 0
-            )
-            if !placement.room.location.isEmpty {
-                dxf.text(
-                    placement.room.location,
-                    at: (labelX, labelY - 0.18),
-                    height: 0.08,
-                    layer: "ANNOTATIONS",
-                    horizontalAlignment: 0
-                )
-            }
-        }
-
-        dxf.text(
-            metadata.brandName,
-            at: (0, maximumY + 1.42),
-            height: 0.22,
-            layer: "ANNOTATIONS",
-            horizontalAlignment: 0
-        )
-        dxf.text(
-            metadata.projectLine,
-            at: (0, maximumY + 1.15),
-            height: 0.09,
-            layer: "ANNOTATIONS",
-            horizontalAlignment: 0
-        )
-        dxf.text(
-            title,
-            at: (0, maximumY + 0.92),
-            height: 0.14,
-            layer: "ANNOTATIONS",
-            horizontalAlignment: 0
-        )
-        dxf.text(
-            metadata.exportLine,
-            at: (maximumX, -0.55),
-            height: 0.08,
-            layer: "ANNOTATIONS",
-            horizontalAlignment: 2
-        )
-        dxf.setEntityContext(ownerHandle: nil)
-        dxf.pair(0, "ENDSEC")
-    }
-
-    private func addLayoutObjects(
-        to dxf: inout DXFWriter,
-        descriptors: [LayoutDescriptor]
-    ) {
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "OBJECTS")
-        dxf.pair(0, "DICTIONARY")
-        dxf.pair(5, "1")
-        dxf.pair(330, "0")
-        dxf.pair(100, "AcDbDictionary")
-        dxf.pair(281, 1)
-        dxf.pair(3, "ACAD_LAYOUT")
-        dxf.pair(350, "2")
-
-        dxf.pair(0, "DICTIONARY")
-        dxf.pair(5, "2")
-        dxf.pair(330, "1")
-        dxf.pair(100, "AcDbDictionary")
-        dxf.pair(281, 1)
-        dxf.pair(3, "Model")
-        dxf.pair(350, "5")
-        for descriptor in descriptors {
-            dxf.pair(3, descriptor.name)
-            dxf.pair(350, descriptor.layoutHandle)
-        }
-
-        addLayoutObject(
-            to: &dxf,
-            handle: "5",
-            blockRecordHandle: "4",
-            name: "Model",
-            tabOrder: 0,
-            defaultViewportHandle: nil,
-            isModel: true
-        )
-        for (index, descriptor) in descriptors.enumerated() {
-            addLayoutObject(
-                to: &dxf,
-                handle: descriptor.layoutHandle,
-                blockRecordHandle: descriptor.blockRecordHandle,
-                name: descriptor.name,
-                tabOrder: index + 1,
-                defaultViewportHandle:
-                    descriptor.defaultViewportHandle,
-                isModel: false
-            )
-        }
-        dxf.pair(0, "ENDSEC")
-    }
-
-    private func addLayoutObject(
-        to dxf: inout DXFWriter,
-        handle: String,
-        blockRecordHandle: String,
-        name: String,
-        tabOrder: Int,
-        defaultViewportHandle: String?,
-        isModel: Bool
-    ) {
-        dxf.pair(0, "LAYOUT")
-        dxf.pair(5, handle)
-        dxf.pair(102, "{ACAD_REACTORS")
-        dxf.pair(330, "2")
-        dxf.pair(102, "}")
-        dxf.pair(330, "2")
-        dxf.pair(100, "AcDbPlotSettings")
-        dxf.pair(1, "")
-        dxf.pair(2, "")
-        dxf.pair(4, "A3")
-        dxf.pair(6, "")
-        dxf.pair(40, 7.5)
-        dxf.pair(41, 20.0)
-        dxf.pair(42, 7.5)
-        dxf.pair(43, 20.0)
-        dxf.pair(44, 420.0)
-        dxf.pair(45, 297.0)
-        dxf.pair(46, 0.0)
-        dxf.pair(47, 0.0)
-        dxf.pair(48, 0.0)
-        dxf.pair(49, 0.0)
-        dxf.pair(140, 0.0)
-        dxf.pair(141, 0.0)
-        dxf.pair(142, 1.0)
-        dxf.pair(143, 1.0)
-        dxf.pair(70, isModel ? 1024 : 0)
-        dxf.pair(72, 1)
-        dxf.pair(73, 0)
-        dxf.pair(74, 5)
-        dxf.pair(7, "")
-        dxf.pair(75, 16)
-        dxf.pair(76, 0)
-        dxf.pair(77, 2)
-        dxf.pair(78, 300)
-        dxf.pair(147, 1.0)
-        dxf.pair(148, 0.0)
-        dxf.pair(149, 0.0)
-
-        dxf.pair(100, "AcDbLayout")
-        dxf.pair(1, name)
-        dxf.pair(70, 1)
-        dxf.pair(71, tabOrder)
-        dxf.pair(10, 0.0)
-        dxf.pair(20, 0.0)
-        dxf.pair(11, 420.0)
-        dxf.pair(21, 297.0)
-        dxf.pair(12, 0.0)
-        dxf.pair(22, 0.0)
-        dxf.pair(32, 0.0)
-        dxf.pair(14, 1e20)
-        dxf.pair(24, 1e20)
-        dxf.pair(34, 1e20)
-        dxf.pair(15, -1e20)
-        dxf.pair(25, -1e20)
-        dxf.pair(35, -1e20)
-        dxf.pair(146, 0.0)
-        dxf.pair(13, 0.0)
-        dxf.pair(23, 0.0)
-        dxf.pair(33, 0.0)
-        dxf.pair(16, 1.0)
-        dxf.pair(26, 0.0)
-        dxf.pair(36, 0.0)
-        dxf.pair(17, 0.0)
-        dxf.pair(27, 1.0)
-        dxf.pair(37, 0.0)
-        dxf.pair(76, 1)
-        dxf.pair(330, blockRecordHandle)
-        if let defaultViewportHandle {
-            dxf.pair(331, defaultViewportHandle)
-        }
     }
 
     func build() -> String {
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.7 PURE_MODEL_R12_VECTOR_TEXT")
+        dxf.pair(999, "3ERoomElectrical v1.9.9 MODEL_SPACE_UTF8_2007")
         addHeader(to: &dxf)
-        // Pure Model Space export: intentionally omit all layout machinery.
+        addClasses(to: &dxf)
         addTables(to: &dxf)
-        addEmptyBlocks(to: &dxf)
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "ENTITIES")
-        dxf.setEntityContext(ownerHandle: nil)
+        addBlocks(to: &dxf)
+        dxf.beginEntities()
         addEntities(to: &dxf)
         addDrawingInformation(to: &dxf)
-        dxf.setEntityContext(ownerHandle: nil)
-        dxf.pair(0, "ENDSEC")
-        dxf.pair(0, "EOF")
+        dxf.endEntitiesAndFile()
         return dxf.output
     }
 
@@ -1013,14 +310,10 @@ private struct DXFPlanBuilder {
         addHeader(
             to: &dxf,
             bounds: Bounds(
-                minimumX: drawingBounds.minimumX
-                    + translation.x,
-                maximumX: drawingBounds.maximumX
-                    + translation.x,
-                minimumY: drawingBounds.minimumY
-                    + translation.y,
-                maximumY: drawingBounds.maximumY
-                    + translation.y
+                minimumX: drawingBounds.minimumX + translation.x,
+                maximumX: drawingBounds.maximumX + translation.x,
+                minimumY: drawingBounds.minimumY + translation.y,
+                maximumY: drawingBounds.maximumY + translation.y
             )
         )
     }
@@ -1032,9 +325,23 @@ private struct DXFPlanBuilder {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "HEADER")
         dxf.pair(9, "$ACADVER")
-        dxf.pair(1, "AC1009")
+        dxf.pair(1, "AC1021")
+        dxf.pair(9, "$HANDSEED")
+        dxf.pair(5, "200000")
         dxf.pair(9, "$DWGCODEPAGE")
-        dxf.pair(3, "ANSI_1252")
+        dxf.pair(3, "UTF-8")
+        dxf.pair(9, "$INSUNITS")
+        dxf.pair(70, 6)
+        dxf.pair(9, "$MEASUREMENT")
+        dxf.pair(70, 1)
+        dxf.pair(9, "$LUNITS")
+        dxf.pair(70, 2)
+        dxf.pair(9, "$LUPREC")
+        dxf.pair(70, 3)
+        dxf.pair(9, "$TILEMODE")
+        dxf.pair(70, 1)
+        dxf.pair(9, "$CTAB")
+        dxf.pair(1, "Model")
         dxf.pair(9, "$EXTMIN")
         dxf.pair(10, bounds.minimumX - 1)
         dxf.pair(20, bounds.minimumY - 1)
@@ -1046,14 +353,182 @@ private struct DXFPlanBuilder {
         dxf.pair(0, "ENDSEC")
     }
 
+    private func addClasses(to dxf: inout DXFWriter) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "CLASSES")
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addTables(to dxf: inout DXFWriter) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "TABLES")
+
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "LTYPE")
+        dxf.pair(5, "1")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbSymbolTable")
+        dxf.pair(70, 1)
+        dxf.pair(0, "LTYPE")
+        dxf.pair(5, "2")
+        dxf.pair(330, "1")
+        dxf.pair(100, "AcDbSymbolTableRecord")
+        dxf.pair(100, "AcDbLinetypeTableRecord")
+        dxf.pair(2, "CONTINUOUS")
+        dxf.pair(70, 0)
+        dxf.pair(3, "Solid line")
+        dxf.pair(72, 65)
+        dxf.pair(73, 0)
+        dxf.pair(40, 0.0)
+        dxf.pair(0, "ENDTAB")
+
+        let allLayers = [(name: "0", color: 7, lineWeight: 15)] + layers
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "LAYER")
+        dxf.pair(5, "10")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbSymbolTable")
+        dxf.pair(70, allLayers.count)
+        for (index, layer) in allLayers.enumerated() {
+            dxf.pair(0, "LAYER")
+            dxf.pair(5, Self.hexHandle(0x11 + index))
+            dxf.pair(330, "10")
+            dxf.pair(100, "AcDbSymbolTableRecord")
+            dxf.pair(100, "AcDbLayerTableRecord")
+            dxf.pair(2, layer.name)
+            dxf.pair(70, 0)
+            dxf.pair(62, layer.color)
+            dxf.pair(6, "CONTINUOUS")
+            dxf.pair(370, layer.lineWeight)
+        }
+        dxf.pair(0, "ENDTAB")
+
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "STYLE")
+        dxf.pair(5, "20")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbSymbolTable")
+        dxf.pair(70, 2)
+        addTextStyle(
+            to: &dxf,
+            handle: "21",
+            name: "STANDARD",
+            fontFile: "Arial.ttf"
+        )
+        addTextStyle(
+            to: &dxf,
+            handle: "22",
+            name: "3E_ARABIC",
+            fontFile: "Arial.ttf"
+        )
+        dxf.pair(0, "ENDTAB")
+
+        dxf.pair(0, "TABLE")
+        dxf.pair(2, "BLOCK_RECORD")
+        dxf.pair(5, "30")
+        dxf.pair(330, "0")
+        dxf.pair(100, "AcDbSymbolTable")
+        dxf.pair(70, 2)
+        addBlockRecord(to: &dxf, handle: "31", name: "*Model_Space")
+        addBlockRecord(to: &dxf, handle: "32", name: "*Paper_Space")
+        dxf.pair(0, "ENDTAB")
+
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addTextStyle(
+        to dxf: inout DXFWriter,
+        handle: String,
+        name: String,
+        fontFile: String
+    ) {
+        dxf.pair(0, "STYLE")
+        dxf.pair(5, handle)
+        dxf.pair(330, "20")
+        dxf.pair(100, "AcDbSymbolTableRecord")
+        dxf.pair(100, "AcDbTextStyleTableRecord")
+        dxf.pair(2, name)
+        dxf.pair(70, 0)
+        dxf.pair(40, 0.0)
+        dxf.pair(41, 1.0)
+        dxf.pair(50, 0.0)
+        dxf.pair(71, 0)
+        dxf.pair(42, 0.2)
+        dxf.pair(3, fontFile)
+        dxf.pair(4, "")
+    }
+
+    private func addBlockRecord(
+        to dxf: inout DXFWriter,
+        handle: String,
+        name: String
+    ) {
+        dxf.pair(0, "BLOCK_RECORD")
+        dxf.pair(5, handle)
+        dxf.pair(330, "30")
+        dxf.pair(100, "AcDbSymbolTableRecord")
+        dxf.pair(100, "AcDbBlockTableRecord")
+        dxf.pair(2, name)
+        dxf.pair(70, 0)
+        dxf.pair(280, 1)
+        dxf.pair(281, 0)
+    }
+
+    private func addBlocks(to dxf: inout DXFWriter) {
+        dxf.pair(0, "SECTION")
+        dxf.pair(2, "BLOCKS")
+        addBlockDefinition(
+            to: &dxf,
+            name: "*Model_Space",
+            owner: "31",
+            beginHandle: "33",
+            endHandle: "34"
+        )
+        addBlockDefinition(
+            to: &dxf,
+            name: "*Paper_Space",
+            owner: "32",
+            beginHandle: "35",
+            endHandle: "36"
+        )
+        dxf.pair(0, "ENDSEC")
+    }
+
+    private func addBlockDefinition(
+        to dxf: inout DXFWriter,
+        name: String,
+        owner: String,
+        beginHandle: String,
+        endHandle: String
+    ) {
+        dxf.pair(0, "BLOCK")
+        dxf.pair(5, beginHandle)
+        dxf.pair(330, owner)
+        dxf.pair(100, "AcDbEntity")
+        dxf.pair(8, "0")
+        dxf.pair(100, "AcDbBlockBegin")
+        dxf.pair(2, name)
+        dxf.pair(70, 0)
+        dxf.pair(10, 0.0)
+        dxf.pair(20, 0.0)
+        dxf.pair(30, 0.0)
+        dxf.pair(3, name)
+        dxf.pair(1, "")
+
+        dxf.pair(0, "ENDBLK")
+        dxf.pair(5, endHandle)
+        dxf.pair(330, owner)
+        dxf.pair(100, "AcDbEntity")
+        dxf.pair(8, "0")
+        dxf.pair(100, "AcDbBlockEnd")
+    }
+
     private static func bounds(for project: RoomProject) -> Bounds {
         let points = ExportGeometry.allPlanPoints(in: project)
             .compactMap { point -> (x: Double, y: Double)? in
                 let x = Double(point.x)
                 let y = Double(-point.y)
-                guard x.isFinite, y.isFinite else {
-                    return nil
-                }
+                guard x.isFinite, y.isFinite else { return nil }
                 return (x, y)
             }
         guard let first = points.first else {
@@ -1065,76 +540,15 @@ private struct DXFPlanBuilder {
             )
         }
         return Bounds(
-            minimumX: points.dropFirst().reduce(first.x) {
-                min($0, $1.x)
-            },
-            maximumX: points.dropFirst().reduce(first.x) {
-                max($0, $1.x)
-            },
-            minimumY: points.dropFirst().reduce(first.y) {
-                min($0, $1.y)
-            },
-            maximumY: points.dropFirst().reduce(first.y) {
-                max($0, $1.y)
-            }
+            minimumX: points.dropFirst().reduce(first.x) { min($0, $1.x) },
+            maximumX: points.dropFirst().reduce(first.x) { max($0, $1.x) },
+            minimumY: points.dropFirst().reduce(first.y) { min($0, $1.y) },
+            maximumY: points.dropFirst().reduce(first.y) { max($0, $1.y) }
         )
     }
 
-    private func addTables(to dxf: inout DXFWriter) {
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "TABLES")
-
-        dxf.pair(0, "TABLE")
-        dxf.pair(2, "LTYPE")
-        dxf.pair(70, 1)
-        dxf.pair(0, "LTYPE")
-        dxf.pair(2, "CONTINUOUS")
-        dxf.pair(70, 0)
-        dxf.pair(3, "Solid line")
-        dxf.pair(72, 65)
-        dxf.pair(73, 0)
-        dxf.pair(40, 0.0)
-        dxf.pair(0, "ENDTAB")
-
-        dxf.pair(0, "TABLE")
-        dxf.pair(2, "LAYER")
-        dxf.pair(70, layers.count + 1)
-        dxf.pair(0, "LAYER")
-        dxf.pair(2, "0")
-        dxf.pair(70, 0)
-        dxf.pair(62, 7)
-        dxf.pair(6, "CONTINUOUS")
-        for layer in layers {
-            dxf.pair(0, "LAYER")
-            dxf.pair(2, layer.name)
-            dxf.pair(70, 0)
-            dxf.pair(62, layer.color)
-            dxf.pair(6, "CONTINUOUS")
-        }
-        dxf.pair(0, "ENDTAB")
-
-        dxf.pair(0, "TABLE")
-        dxf.pair(2, "STYLE")
-        dxf.pair(70, 1)
-        dxf.pair(0, "STYLE")
-        dxf.pair(2, "STANDARD")
-        dxf.pair(70, 0)
-        dxf.pair(40, 0.0)
-        dxf.pair(41, 1.0)
-        dxf.pair(50, 0.0)
-        dxf.pair(71, 0)
-        dxf.pair(42, 0.2)
-        dxf.pair(3, "Arial.ttf")
-        dxf.pair(4, "")
-        dxf.pair(0, "ENDTAB")
-
-        dxf.pair(0, "ENDSEC")
-    }
-
-    private func addEmptyBlocks(to dxf: inout DXFWriter) {
-        dxf.pair(0, "SECTION")
-        dxf.pair(2, "BLOCKS")
-        dxf.pair(0, "ENDSEC")
+    private static func hexHandle(_ value: Int) -> String {
+        String(value, radix: 16).uppercased()
     }
 
     private func addFloorEntities(to dxf: inout DXFWriter) {
@@ -1440,344 +854,18 @@ private struct DXFPlanBuilder {
     }
 }
 
-private enum DXFVectorTextRenderer {
-    private static let curveSteps = 5
-
-    static func contours(
-        for value: String,
-        at insertionPoint: (x: Double, y: Double),
-        height: Double,
-        rotation: Double,
-        horizontalAlignment: Int
-    ) -> [[(x: Double, y: Double)]] {
-        guard !value.isEmpty, height > 0 else { return [] }
-
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.baseWritingDirection = containsRightToLeftText(value)
-            ? .rightToLeft
-            : .leftToRight
-        paragraph.alignment = .natural
-
-        let font = UIFont.systemFont(ofSize: 1.0)
-        let attributed = NSAttributedString(
-            string: value,
-            attributes: [
-                .font: font,
-                .paragraphStyle: paragraph,
-                .ligature: 1
-            ]
-        )
-        let line = CTLineCreateWithAttributedString(attributed)
-        let runs = CTLineGetGlyphRuns(line) as! [CTRun]
-        var rawContours: [[CGPoint]] = []
-
-        for run in runs {
-            let count = CTRunGetGlyphCount(run)
-            guard count > 0 else { continue }
-
-            var glyphs = Array(repeating: CGGlyph(), count: count)
-            var positions = Array(repeating: CGPoint.zero, count: count)
-            CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &glyphs)
-            CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
-
-            let attributes = CTRunGetAttributes(run) as NSDictionary
-            // Every Core Text glyph run has a CTFont attribute. Xcode 26
-            // rejects a conditional cast to the Core Foundation CTFont type
-            // because that bridge is guaranteed once the attribute exists.
-            guard let fontAttribute = attributes[kCTFontAttributeName] else {
-                continue
-            }
-            let runFont = fontAttribute as! CTFont
-
-            for index in 0..<count {
-                guard let glyphPath = CTFontCreatePathForGlyph(
-                    runFont,
-                    glyphs[index],
-                    nil
-                ) else {
-                    continue
-                }
-                var transform = CGAffineTransform(
-                    translationX: positions[index].x,
-                    y: positions[index].y
-                )
-                guard let positionedPath = glyphPath.copy(using: &transform) else {
-                    continue
-                }
-                rawContours.append(contentsOf: flatten(positionedPath))
-            }
-        }
-
-        let validContours = rawContours
-            .map { simplifyContour($0, tolerance: 0.006) }
-            .filter { $0.count >= 3 }
-        guard !validContours.isEmpty else { return [] }
-
-        let allPoints = validContours.flatMap { $0 }
-        guard let first = allPoints.first else { return [] }
-        var minimumX = first.x
-        var maximumX = first.x
-        var minimumY = first.y
-        var maximumY = first.y
-        for point in allPoints.dropFirst() {
-            minimumX = min(minimumX, point.x)
-            maximumX = max(maximumX, point.x)
-            minimumY = min(minimumY, point.y)
-            maximumY = max(maximumY, point.y)
-        }
-
-        let rawHeight = max(maximumY - minimumY, 0.001)
-        let scale = CGFloat(height) / rawHeight
-        let horizontalOffset: CGFloat
-        switch horizontalAlignment {
-        case 0:
-            horizontalOffset = -minimumX
-        case 2:
-            horizontalOffset = -maximumX
-        default:
-            horizontalOffset = -(minimumX + maximumX) / 2
-        }
-        let verticalOffset = -(minimumY + maximumY) / 2
-        let angle = CGFloat(rotation * .pi / 180)
-        let cosine = cos(angle)
-        let sine = sin(angle)
-
-        return validContours.map { contour in
-            contour.map { rawPoint in
-                let localX = (rawPoint.x + horizontalOffset) * scale
-                let localY = (rawPoint.y + verticalOffset) * scale
-                let rotatedX = localX * cosine - localY * sine
-                let rotatedY = localX * sine + localY * cosine
-                return (
-                    x: insertionPoint.x + Double(rotatedX),
-                    y: insertionPoint.y + Double(rotatedY)
-                )
-            }
-        }
-    }
-
-    private static func containsRightToLeftText(_ value: String) -> Bool {
-        value.unicodeScalars.contains { scalar in
-            switch scalar.value {
-            case 0x0590...0x08FF,
-                 0xFB1D...0xFDFF,
-                 0xFE70...0xFEFF:
-                true
-            default:
-                false
-            }
-        }
-    }
-
-
-    private static func simplifyContour(
-        _ points: [CGPoint],
-        tolerance: CGFloat
-    ) -> [CGPoint] {
-        guard points.count > 4 else { return points }
-        let isClosed: Bool
-        if let first = points.first, let last = points.last {
-            isClosed = hypot(first.x - last.x, first.y - last.y) < 0.0001
-        } else {
-            isClosed = false
-        }
-
-        var source = isClosed ? Array(points.dropLast()) : points
-        guard source.count > 3 else { return points }
-
-        // First remove near-identical samples. CoreText paths often contain
-        // consecutive points that differ by less than the precision useful
-        // in a room plan but cost six DXF lines each.
-        var compact: [CGPoint] = []
-        compact.reserveCapacity(source.count)
-        for point in source {
-            if let previous = compact.last,
-               hypot(point.x - previous.x, point.y - previous.y) < tolerance / 2 {
-                continue
-            }
-            compact.append(point)
-        }
-        source = compact
-        guard source.count > 3 else {
-            return source
-        }
-
-        // Remove points that are effectively collinear with their neighbours.
-        // Repeating the pass produces a compact contour while preserving the
-        // corners and the general Arabic glyph shape.
-        var changed = true
-        while changed && source.count > 4 {
-            changed = false
-            var next: [CGPoint] = []
-            next.reserveCapacity(source.count)
-            for index in source.indices {
-                if !isClosed && (index == source.startIndex || index == source.index(before: source.endIndex)) {
-                    next.append(source[index])
-                    continue
-                }
-                let previousIndex = index == source.startIndex
-                    ? source.index(before: source.endIndex)
-                    : source.index(before: index)
-                let nextIndex = index == source.index(before: source.endIndex)
-                    ? source.startIndex
-                    : source.index(after: index)
-                let distance = perpendicularDistance(
-                    source[index],
-                    from: source[previousIndex],
-                    to: source[nextIndex]
-                )
-                if distance <= tolerance {
-                    changed = true
-                } else {
-                    next.append(source[index])
-                }
-            }
-            if next.count < 3 { break }
-            source = next
-        }
-
-        // The R12 POLYLINE closed flag joins the final vertex back to the
-        // first one, so repeating the first vertex only increases file size.
-        return source
-    }
-
-    private static func perpendicularDistance(
-        _ point: CGPoint,
-        from start: CGPoint,
-        to end: CGPoint
-    ) -> CGFloat {
-        let dx = end.x - start.x
-        let dy = end.y - start.y
-        let lengthSquared = dx * dx + dy * dy
-        guard lengthSquared > 0.0000001 else {
-            return hypot(point.x - start.x, point.y - start.y)
-        }
-        let projection = max(
-            0,
-            min(
-                1,
-                ((point.x - start.x) * dx + (point.y - start.y) * dy)
-                    / lengthSquared
-            )
-        )
-        let projected = CGPoint(
-            x: start.x + projection * dx,
-            y: start.y + projection * dy
-        )
-        return hypot(point.x - projected.x, point.y - projected.y)
-    }
-
-    private static func flatten(_ path: CGPath) -> [[CGPoint]] {
-        var contours: [[CGPoint]] = []
-        var currentContour: [CGPoint] = []
-        var currentPoint = CGPoint.zero
-        var startPoint = CGPoint.zero
-        var hasCurrentPoint = false
-
-        func finishContour(close: Bool) {
-            guard currentContour.count >= 2 else {
-                currentContour.removeAll(keepingCapacity: true)
-                return
-            }
-            if close,
-               let first = currentContour.first,
-               let last = currentContour.last,
-               hypot(first.x - last.x, first.y - last.y) > 0.0001 {
-                currentContour.append(first)
-            }
-            contours.append(currentContour)
-            currentContour.removeAll(keepingCapacity: true)
-        }
-
-        path.applyWithBlock { elementPointer in
-            let element = elementPointer.pointee
-            switch element.type {
-            case .moveToPoint:
-                finishContour(close: false)
-                currentPoint = element.points[0]
-                startPoint = currentPoint
-                currentContour = [currentPoint]
-                hasCurrentPoint = true
-
-            case .addLineToPoint:
-                guard hasCurrentPoint else { return }
-                currentPoint = element.points[0]
-                currentContour.append(currentPoint)
-
-            case .addQuadCurveToPoint:
-                guard hasCurrentPoint else { return }
-                let start = currentPoint
-                let control = element.points[0]
-                let end = element.points[1]
-                for step in 1...curveSteps {
-                    let t = CGFloat(step) / CGFloat(curveSteps)
-                    let inverse = 1 - t
-                    let point = CGPoint(
-                        x: inverse * inverse * start.x
-                            + 2 * inverse * t * control.x
-                            + t * t * end.x,
-                        y: inverse * inverse * start.y
-                            + 2 * inverse * t * control.y
-                            + t * t * end.y
-                    )
-                    currentContour.append(point)
-                }
-                currentPoint = end
-
-            case .addCurveToPoint:
-                guard hasCurrentPoint else { return }
-                let start = currentPoint
-                let control1 = element.points[0]
-                let control2 = element.points[1]
-                let end = element.points[2]
-                for step in 1...curveSteps {
-                    let t = CGFloat(step) / CGFloat(curveSteps)
-                    let inverse = 1 - t
-                    let point = CGPoint(
-                        x: inverse * inverse * inverse * start.x
-                            + 3 * inverse * inverse * t * control1.x
-                            + 3 * inverse * t * t * control2.x
-                            + t * t * t * end.x,
-                        y: inverse * inverse * inverse * start.y
-                            + 3 * inverse * inverse * t * control1.y
-                            + 3 * inverse * t * t * control2.y
-                            + t * t * t * end.y
-                    )
-                    currentContour.append(point)
-                }
-                currentPoint = end
-
-            case .closeSubpath:
-                if hasCurrentPoint {
-                    currentPoint = startPoint
-                    finishContour(close: true)
-                }
-                hasCurrentPoint = false
-
-            @unknown default:
-                break
-            }
-        }
-        finishContour(close: false)
-        return contours
-    }
-}
-
 private struct DXFWriter {
     private(set) var output = ""
-    private var entityOwnerHandle: String?
-    private var paperSpaceEntity = false
-    private var entityLayoutName: String?
     private var nextEntityHandleValue = 0x100000
 
-    mutating func setEntityContext(
-        ownerHandle: String?,
-        paperSpace: Bool = false,
-        layoutName: String? = nil
-    ) {
-        entityOwnerHandle = ownerHandle
-        paperSpaceEntity = ownerHandle == nil ? false : paperSpace
-        entityLayoutName = ownerHandle == nil ? nil : layoutName
+    mutating func beginEntities() {
+        pair(0, "SECTION")
+        pair(2, "ENTITIES")
+    }
+
+    mutating func endEntitiesAndFile() {
+        pair(0, "ENDSEC")
+        pair(0, "EOF")
     }
 
     mutating func pair(_ code: Int, _ value: String) {
@@ -1798,14 +886,7 @@ private struct DXFWriter {
         layer: String
     ) {
         pair(0, "LINE")
-        if entityOwnerHandle == nil {
-            pair(8, layer)
-        } else {
-            addContextualEntityHeader(
-                layer: layer,
-                subclass: "AcDbLine"
-            )
-        }
+        addEntityHeader(layer: layer, subclass: "AcDbLine")
         pair(10, from.x)
         pair(20, from.y)
         pair(30, 0.0)
@@ -1820,33 +901,8 @@ private struct DXFWriter {
         closed: Bool
     ) {
         guard points.count >= 2 else { return }
-        if entityOwnerHandle == nil {
-            // Classic R12 POLYLINE/VERTEX records are understood by strict
-            // AutoCAD readers and do not depend on layout ownership.
-            pair(0, "POLYLINE")
-            pair(8, layer)
-            pair(66, 1)
-            pair(10, 0.0)
-            pair(20, 0.0)
-            pair(30, 0.0)
-            pair(70, closed ? 1 : 0)
-            for point in points {
-                pair(0, "VERTEX")
-                pair(8, layer)
-                pair(10, point.x)
-                pair(20, point.y)
-                pair(30, 0.0)
-            }
-            pair(0, "SEQEND")
-            pair(8, layer)
-            return
-        }
-
         pair(0, "LWPOLYLINE")
-        addContextualEntityHeader(
-            layer: layer,
-            subclass: "AcDbPolyline"
-        )
+        addEntityHeader(layer: layer, subclass: "AcDbPolyline")
         pair(90, points.count)
         pair(70, closed ? 1 : 0)
         for point in points {
@@ -1861,14 +917,7 @@ private struct DXFWriter {
         layer: String
     ) {
         pair(0, "CIRCLE")
-        if entityOwnerHandle == nil {
-            pair(8, layer)
-        } else {
-            addContextualEntityHeader(
-                layer: layer,
-                subclass: "AcDbCircle"
-            )
-        }
+        addEntityHeader(layer: layer, subclass: "AcDbCircle")
         pair(10, center.x)
         pair(20, center.y)
         pair(30, 0.0)
@@ -1883,46 +932,78 @@ private struct DXFWriter {
         rotation: Double = 0,
         horizontalAlignment: Int = 1
     ) {
-        // AutoCAD R12 is deliberately kept for maximum DXF compatibility.
-        // R12 cannot store Unicode text reliably, so every non-ASCII string
-        // is shaped with CoreText and exported as closed POLYLINE outlines.
+        guard !value.isEmpty else { return }
         if value.unicodeScalars.contains(where: { !$0.isASCII }) {
-            let contours = DXFVectorTextRenderer.contours(
-                for: value,
+            mtext(
+                value,
                 at: point,
                 height: height,
+                layer: layer,
                 rotation: rotation,
                 horizontalAlignment: horizontalAlignment
             )
-            if !contours.isEmpty {
-                for contour in contours {
-                    polyline(contour, layer: layer, closed: true)
-                }
-                return
-            }
+            return
         }
 
         pair(0, "TEXT")
-        if entityOwnerHandle == nil {
-            pair(8, layer)
-        } else {
-            addContextualEntityHeader(
-                layer: layer,
-                subclass: "AcDbText"
-            )
-        }
+        addEntityHeader(layer: layer, subclass: "AcDbText")
         pair(10, point.x)
         pair(20, point.y)
         pair(30, 0.0)
         pair(40, height)
-        pair(1, asciiFallback(value))
+        pair(1, value)
         pair(50, rotation)
+        pair(41, 1.0)
         pair(7, "STANDARD")
+        pair(71, 0)
         pair(72, horizontalAlignment)
-        pair(73, 2)
         pair(11, point.x)
         pair(21, point.y)
         pair(31, 0.0)
+        pair(100, "AcDbText")
+        pair(73, 2)
+    }
+
+    private mutating func mtext(
+        _ value: String,
+        at point: (x: Double, y: Double),
+        height: Double,
+        layer: String,
+        rotation: Double,
+        horizontalAlignment: Int
+    ) {
+        pair(0, "MTEXT")
+        addEntityHeader(layer: layer, subclass: "AcDbMText")
+        pair(10, point.x)
+        pair(20, point.y)
+        pair(30, 0.0)
+        pair(40, height)
+        pair(41, max(height * Double(max(value.count, 2)), height * 2))
+        switch horizontalAlignment {
+        case 0: pair(71, 4)
+        case 2: pair(71, 6)
+        default: pair(71, 5)
+        }
+        pair(72, 1)
+        addMTextContent(value)
+        pair(7, "3E_ARABIC")
+        pair(50, rotation)
+        pair(73, 1)
+        pair(44, 1.0)
+    }
+
+    private mutating func addMTextContent(_ value: String) {
+        let normalized = value
+            .replacingOccurrences(of: "\r\n", with: "\\P")
+            .replacingOccurrences(of: "\r", with: "\\P")
+            .replacingOccurrences(of: "\n", with: "\\P")
+        let chunks = stringChunks(normalized, maximumUTF8Bytes: 240)
+        if chunks.count > 1 {
+            for chunk in chunks.dropLast() {
+                pair(3, chunk)
+            }
+        }
+        pair(1, chunks.last ?? "")
     }
 
     mutating func linearDimensionGraphics(
@@ -1949,19 +1030,14 @@ private struct DXFWriter {
         )
         line(from: first, to: dimensionStart, layer: layer)
         line(from: second, to: dimensionEnd, layer: layer)
-        line(
-            from: dimensionStart,
-            to: dimensionEnd,
-            layer: layer
-        )
+        line(from: dimensionStart, to: dimensionEnd, layer: layer)
 
         let tickLength = 0.045
         let tangent = (x: dx / length, y: dy / length)
+        let normalScale = max(abs(offset), 0.001)
         let tick = (
-            x: (tangent.x + perpendicular.x / max(offset, 0.001))
-                * tickLength,
-            y: (tangent.y + perpendicular.y / max(offset, 0.001))
-                * tickLength
+            x: (tangent.x + perpendicular.x / normalScale) * tickLength,
+            y: (tangent.y + perpendicular.y / normalScale) * tickLength
         )
         line(
             from: (
@@ -2002,64 +1078,58 @@ private struct DXFWriter {
         )
     }
 
-    private mutating func addContextualEntityHeader(
+    private mutating func addEntityHeader(
         layer: String,
         subclass: String
     ) {
-        guard let entityOwnerHandle else { return }
         pair(5, nextEntityHandle())
-        pair(330, entityOwnerHandle)
+        pair(330, "31")
         pair(100, "AcDbEntity")
-        // Group 67 is optional. Omitting it is the canonical default for
-        // Model Space and avoids readers that incorrectly classify an
-        // explicit zero as Paper Space. Layout name 410 is only written for
-        // genuine Paper Space entities.
-        if paperSpaceEntity {
-            pair(67, 1)
-            if let entityLayoutName {
-                pair(410, entityLayoutName)
-            }
-        }
         pair(8, layer)
         pair(100, subclass)
     }
 
     private mutating func nextEntityHandle() -> String {
         defer { nextEntityHandleValue += 1 }
-        return String(
-            nextEntityHandleValue,
-            radix: 16
-        ).uppercased()
+        return String(nextEntityHandleValue, radix: 16).uppercased()
     }
 
-    private func asciiFallback(_ value: String) -> String {
-        String(
-            value.unicodeScalars.map { scalar in
-                scalar.isASCII ? Character(scalar) : " "
+    private func stringChunks(
+        _ value: String,
+        maximumUTF8Bytes: Int
+    ) -> [String] {
+        guard !value.isEmpty else { return [""] }
+        var result: [String] = []
+        var current = ""
+        var currentBytes = 0
+
+        for character in value {
+            let text = String(character)
+            let byteCount = text.utf8.count
+            if !current.isEmpty,
+               currentBytes + byteCount > maximumUTF8Bytes {
+                result.append(current)
+                current = text
+                currentBytes = byteCount
+            } else {
+                current += text
+                currentBytes += byteCount
             }
-        )
-    }
-
-    private func clean(_ value: String) -> String {
-        // AutoCAD 2007+ DXF stores string values as UTF-8. Keep Arabic text
-        // as real Unicode instead of exposing legacy \U+XXXX escape sequences.
-        let singleLine = value
-            .replacingOccurrences(of: "\r", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\0", with: "")
-        var result = ""
-        for scalar in singleLine.unicodeScalars {
-            guard scalar.value >= 32 || scalar.value == 9 else { continue }
-            result.unicodeScalars.append(scalar)
-            if result.utf8.count >= 1000 { break }
+        }
+        if !current.isEmpty {
+            result.append(current)
         }
         return result
     }
 
+    private func clean(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+    }
+
     private func number(_ value: Double) -> String {
-        guard value.isFinite else {
-            return "0"
-        }
-        return String(format: "%.4f", value)
+        guard value.isFinite else { return "0" }
+        return String(format: "%.6f", value)
     }
 }

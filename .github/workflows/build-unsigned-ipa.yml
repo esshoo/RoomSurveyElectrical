@@ -26,7 +26,7 @@ jobs:
       - name: Verify DXF, dynamic widget, and PDF source
         shell: bash
         run: |
-          grep -q 'PURE_MODEL_R12_VECTOR_TEXT' RoomSurveyElectrical/DXFExporter.swift
+          grep -q 'MODEL_SPACE_UTF8_2007' RoomSurveyElectrical/DXFExporter.swift
           grep -q 'CODE_SIGN_ENTITLEMENTS = Support/RoomSurveyElectrical.entitlements' RoomSurveyElectrical.xcodeproj/project.pbxproj
           grep -q 'CODE_SIGN_ENTITLEMENTS = Support/3ERoomElectricalWidget.entitlements' RoomSurveyElectrical.xcodeproj/project.pbxproj
           grep -q '3ERoomElectricalRecentProjects' 3ERoomElectricalWidget/3ERoomElectricalWidget.swift

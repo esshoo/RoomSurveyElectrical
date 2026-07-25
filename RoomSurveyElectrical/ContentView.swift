@@ -16,53 +16,6 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "viewfinder.rectangular")
-                                .font(.title2.bold())
-                                .foregroundStyle(.white)
-                                .frame(width: 48, height: 48)
-                                .background(
-                                    LinearGradient(
-                                        colors: [.cyan, .blue],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    in: RoundedRectangle(cornerRadius: 13)
-                                )
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("3E Room Electrical")
-                                    .font(.title2.bold())
-                                Text("المسح والحصر الكهربائي للمشروع")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                Label(
-                                    "الإصدار 1.9.8 • Dynamic Widget + PDF Exit",
-                                    systemImage: "checkmark.seal.fill"
-                                )
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.blue)
-                            }
-                        }
-
-                        Text("أنشئ مشروعًا، ثم نظّم المباني والأدوار والشقق والغرف قبل بدء مسح LiDAR.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        if !RoomCaptureSession.isSupported {
-                            Label(
-                                "المسح يتطلب iPhone أو iPad مزودًا بحساس LiDAR.",
-                                systemImage: "exclamationmark.triangle.fill"
-                            )
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                }
-
                 if !store.activeProjects.isEmpty {
                     Section("آخر المشروعات") {
                         RecentProjectsWidget(
@@ -81,82 +34,6 @@ struct ContentView: View {
                         .listRowBackground(Color.clear)
 
                     }
-                }
-
-                Section("تشخيص ويدجت الشاشة الرئيسية") {
-                    let widgetReport = HomeWidgetDiagnostics.report
-                    Label(
-                        widgetReport.status.message,
-                        systemImage: widgetReport.status.systemImage
-                    )
-                    .font(.caption)
-                    .foregroundStyle(
-                        widgetReport.status == .ready ? Color.green : Color.red
-                    )
-
-                    LabeledContent(
-                        "Bundle ID التطبيق",
-                        value: widgetReport.hostBundleIdentifier
-                    )
-                    .font(.caption2)
-
-                    LabeledContent(
-                        "Bundle ID الويدجت",
-                        value: widgetReport.widgetBundleIdentifier
-                    )
-                    .font(.caption2)
-
-                    LabeledContent(
-                        "المتوقع",
-                        value: widgetReport.expectedWidgetBundleIdentifier
-                    )
-                    .font(.caption2)
-
-                    LabeledContent(
-                        "Extension Point",
-                        value: widgetReport.extensionPointIdentifier
-                    )
-                    .font(.caption2)
-
-
-                    Divider()
-
-                    Label(
-                        widgetReport.provisioningMessage,
-                        systemImage: widgetReport.provisioningIsValid
-                            ? "checkmark.shield.fill"
-                            : "xmark.shield.fill"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(
-                        widgetReport.provisioningIsValid
-                            ? Color.green
-                            : Color.orange
-                    )
-
-                    LabeledContent(
-                        "App Profile ID",
-                        value: widgetReport.hostProfile.applicationIdentifier
-                    )
-                    .font(.caption2)
-
-                    LabeledContent(
-                        "Widget Profile ID",
-                        value: widgetReport.widgetProfile.applicationIdentifier
-                    )
-                    .font(.caption2)
-
-                    LabeledContent(
-                        "فريق التطبيق",
-                        value: widgetReport.hostProfile.teamIdentifier
-                    )
-                    .font(.caption2)
-
-                    LabeledContent(
-                        "فريق الويدجت",
-                        value: widgetReport.widgetProfile.teamIdentifier
-                    )
-                    .font(.caption2)
                 }
 
                 Section("المشروعات") {
@@ -208,7 +85,7 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: "gearshape.fill")
                     }
-                    .accessibilityLabel("الإعدادات العامة")
+                    .accessibilityLabel("الإعدادات")
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -271,7 +148,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showGlobalSettings) {
             ElectricalSettingsView(
-                title: "الإعدادات العامة",
+                title: "الإعدادات",
                 initialSettings: GlobalSettingsRepository.load()
             ) { settings in
                 GlobalSettingsRepository.save(settings)
@@ -2301,6 +2178,7 @@ private struct NewScanSheet: View {
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {
     case general
+    case app
     case electrical
     case furniture
     case plumbing
@@ -2311,6 +2189,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: "عام"
+        case .app: "التطبيق"
         case .electrical: "الكهرباء"
         case .furniture: "الفرش"
         case .plumbing: "السباكة"
@@ -2321,6 +2200,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .general: "gearshape.fill"
+        case .app: "info.circle.fill"
         case .electrical: "bolt.fill"
         case .furniture: "chair.lounge.fill"
         case .plumbing: "drop.fill"
@@ -2429,10 +2309,13 @@ private struct ElectricalSettingsView: View {
 
             Section("أقسام الإعدادات") {
                 Label("اختر الكهرباء لضبط الارتفاعات وقواعد التثبيت.", systemImage: "bolt.fill")
-                Label("تبويبات الفرش والسباكة والدهانات جاهزة للتوسعة القادمة.", systemImage: "square.grid.2x2.fill")
+                Label("معلومات الإصدار وتوافق الجهاز والويدجت داخل تبويب التطبيق.", systemImage: "info.circle.fill")
             }
 
-            case .electrical:
+        case .app:
+            appInformationSections
+
+        case .electrical:
                 if settings.designMode == .existing {
                     AsBuiltPlacementNotice()
                 } else {
@@ -2502,6 +2385,124 @@ private struct ElectricalSettingsView: View {
                     description: "مجهز لإضافة أنواع الدهانات، المحارة، طبقات التشطيب ونسب الهالك."
                 )
         }
+    }
+
+    @ViewBuilder
+    private var appInformationSections: some View {
+        Section("حول التطبيق") {
+            LabeledContent("الاسم", value: "3E Room Electrical")
+            LabeledContent("الإصدار", value: appVersion)
+            LabeledContent("رقم البناء", value: appBuild)
+            LabeledContent("Bundle ID", value: appBundleIdentifier)
+        }
+
+        Section("توافق الجهاز") {
+            Label(
+                RoomCaptureSession.isSupported
+                    ? "المسح ثلاثي الأبعاد وLiDAR متاحان على هذا الجهاز."
+                    : "المسح يتطلب iPhone أو iPad مزودًا بحساس LiDAR.",
+                systemImage: RoomCaptureSession.isSupported
+                    ? "checkmark.circle.fill"
+                    : "exclamationmark.triangle.fill"
+            )
+            .foregroundStyle(
+                RoomCaptureSession.isSupported ? Color.green : Color.orange
+            )
+
+            LabeledContent("ملفات المشروع", value: ".3eroom")
+            LabeledContent("المعاينة", value: "PDF وDXF")
+            LabeledContent("تصدير CAD", value: "DXF 2007 • UTF-8 • Model Space")
+        }
+
+        Section("ويدجت الشاشة الرئيسية") {
+            let widgetReport = HomeWidgetDiagnostics.report
+
+            Label(
+                widgetReport.status.message,
+                systemImage: widgetReport.status.systemImage
+            )
+            .font(.caption)
+            .foregroundStyle(
+                widgetReport.status == .ready ? Color.green : Color.red
+            )
+
+            LabeledContent(
+                "Bundle ID التطبيق",
+                value: widgetReport.hostBundleIdentifier
+            )
+            .font(.caption2)
+
+            LabeledContent(
+                "Bundle ID الويدجت",
+                value: widgetReport.widgetBundleIdentifier
+            )
+            .font(.caption2)
+
+            LabeledContent(
+                "المتوقع",
+                value: widgetReport.expectedWidgetBundleIdentifier
+            )
+            .font(.caption2)
+
+            LabeledContent(
+                "Extension Point",
+                value: widgetReport.extensionPointIdentifier
+            )
+            .font(.caption2)
+
+            Divider()
+
+            Label(
+                widgetReport.provisioningMessage,
+                systemImage: widgetReport.provisioningIsValid
+                    ? "checkmark.shield.fill"
+                    : "xmark.shield.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(
+                widgetReport.provisioningIsValid ? Color.green : Color.orange
+            )
+
+            LabeledContent(
+                "App Profile ID",
+                value: widgetReport.hostProfile.applicationIdentifier
+            )
+            .font(.caption2)
+
+            LabeledContent(
+                "Widget Profile ID",
+                value: widgetReport.widgetProfile.applicationIdentifier
+            )
+            .font(.caption2)
+
+            LabeledContent(
+                "فريق التطبيق",
+                value: widgetReport.hostProfile.teamIdentifier
+            )
+            .font(.caption2)
+
+            LabeledContent(
+                "فريق الويدجت",
+                value: widgetReport.widgetProfile.teamIdentifier
+            )
+            .font(.caption2)
+        }
+    }
+
+    private var appVersion: String {
+        Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "غير معروف"
+    }
+
+    private var appBuild: String {
+        Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? "غير معروف"
+    }
+
+    private var appBundleIdentifier: String {
+        Bundle.main.bundleIdentifier ?? "غير معروف"
     }
 }
 
