@@ -21,7 +21,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-PureModel-R12",
+            name: "\(sanitized(title))-PureModel-UTF8",
             extension: "dxf"
         )
     }
@@ -43,7 +43,7 @@ extension ProjectExportService {
         var archive = StoredZIPArchive()
         for (index, room) in rooms.enumerated() {
             let name = String(
-                format: "%02d-%@-PureModel-R12.dxf",
+                format: "%02d-%@-PureModel-UTF8.dxf",
                 index + 1,
                 sanitized(room.scan.name)
             )
@@ -87,7 +87,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-Combined-PureModel-R12",
+            name: "\(sanitized(title))-Combined-PureModel-UTF8",
             extension: "dxf"
         )
     }
@@ -110,7 +110,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-PureModel-R12",
+            name: "\(sanitized(title))-PureModel-UTF8",
             extension: "dxf"
         )
     }
@@ -213,7 +213,7 @@ private struct DXFPlanBuilder {
             metadata: metadata
         )
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.4 PURE_MODEL_R12")
+        dxf.pair(999, "3ERoomElectrical v1.9.5 PURE_MODEL_UTF8")
         firstBuilder.addHeader(
             to: &dxf,
             bounds: Bounds(
@@ -413,9 +413,9 @@ private struct DXFPlanBuilder {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "HEADER")
         dxf.pair(9, "$ACADVER")
-        dxf.pair(1, "AC1009")
+        dxf.pair(1, "AC1021")
         dxf.pair(9, "$DWGCODEPAGE")
-        dxf.pair(3, "ANSI_1252")
+        dxf.pair(3, "UTF-8")
         dxf.pair(9, "$INSUNITS")
         dxf.pair(70, 6)
         dxf.pair(9, "$MEASUREMENT")
@@ -519,7 +519,7 @@ private struct DXFPlanBuilder {
         dxf.pair(50, 0.0)
         dxf.pair(71, 0)
         dxf.pair(42, 0.2)
-        dxf.pair(3, "txt")
+        dxf.pair(3, "Arial.ttf")
         dxf.pair(4, "")
         dxf.pair(0, "ENDTAB")
 
@@ -980,7 +980,7 @@ private struct DXFPlanBuilder {
 
     func build() -> String {
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.4 PURE_MODEL_R12")
+        dxf.pair(999, "3ERoomElectrical v1.9.5 PURE_MODEL_UTF8")
         addHeader(to: &dxf)
         // Pure Model Space export: intentionally omit all layout machinery.
         addTables(to: &dxf)
@@ -1029,9 +1029,9 @@ private struct DXFPlanBuilder {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "HEADER")
         dxf.pair(9, "$ACADVER")
-        dxf.pair(1, "AC1009")
+        dxf.pair(1, "AC1021")
         dxf.pair(9, "$DWGCODEPAGE")
-        dxf.pair(3, "ANSI_1252")
+        dxf.pair(3, "UTF-8")
         dxf.pair(9, "$EXTMIN")
         dxf.pair(10, bounds.minimumX - 1)
         dxf.pair(20, bounds.minimumY - 1)
@@ -1121,7 +1121,7 @@ private struct DXFPlanBuilder {
         dxf.pair(50, 0.0)
         dxf.pair(71, 0)
         dxf.pair(42, 0.2)
-        dxf.pair(3, "txt")
+        dxf.pair(3, "Arial.ttf")
         dxf.pair(4, "")
         dxf.pair(0, "ENDTAB")
 
@@ -1688,24 +1688,19 @@ private struct DXFWriter {
     }
 
     private func clean(_ value: String) -> String {
+        // AutoCAD 2007+ DXF stores string values as UTF-8. Keep Arabic text
+        // as real Unicode instead of exposing legacy \U+XXXX escape sequences.
         let singleLine = value
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\0", with: "")
         var result = ""
         for scalar in singleLine.unicodeScalars {
-            if scalar.value >= 32, scalar.value <= 126 {
-                result.append(String(scalar))
-            } else if scalar.value <= 0xFFFF {
-                result += String(format: "\\U+%04X", scalar.value)
-            } else {
-                let value = scalar.value - 0x10000
-                let high = 0xD800 + (value >> 10)
-                let low = 0xDC00 + (value & 0x3FF)
-                result += String(format: "\\U+%04X\\U+%04X", high, low)
-            }
-            if result.count >= 255 { break }
+            guard scalar.value >= 32 || scalar.value == 9 else { continue }
+            result.unicodeScalars.append(scalar)
+            if result.utf8.count >= 1000 { break }
         }
-        return String(result.prefix(255))
+        return result
     }
 
     private func number(_ value: Double) -> String {

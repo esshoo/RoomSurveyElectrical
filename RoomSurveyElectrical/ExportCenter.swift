@@ -222,8 +222,8 @@ struct ExportCenterView: View {
             Section("DXF – مخطط CAD متجه") {
                 if planRooms.count > 1 {
                     exportButton(
-                        "DXF موحد – Model Space",
-                        subtitle: "الخيار الأكثر توافقًا • كل المخططات داخل Model Space",
+                        "DXF Unicode – Model Space",
+                        subtitle: "UTF‑8 للنص العربي • كل المخططات داخل Model Space",
                         systemImage: "rectangle.3.group.fill",
                         kind: .combinedDXF,
                         roomIDs: planRooms.map(\.id),
@@ -249,7 +249,7 @@ struct ExportCenterView: View {
                         ? "تصدير المخطط DXF"
                         : "DXF منفصل لكل مساحة",
                     subtitle: planRooms.count == 1
-                        ? "طبقات CAD مستقلة ووحدة الرسم بالمتر"
+                        ? "Unicode UTF‑8 • طبقات CAD مستقلة • بالمتر"
                         : "ملف ZIP يحتوي DXF مستقل لكل مسح",
                     systemImage: "ruler.fill",
                     kind: planRooms.count == 1 ? .singleDXF : .dxfPackage,

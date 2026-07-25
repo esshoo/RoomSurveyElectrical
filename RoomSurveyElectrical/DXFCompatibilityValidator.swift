@@ -63,7 +63,7 @@ enum DXFCompatibilityValidator {
             }
             let value = lines[lineIndex + 1]
                 .trimmingCharacters(in: .newlines)
-            if isStringCode(code), value.count > 255 {
+            if isStringCode(code), value.utf8.count > 2049 {
                 throw DXFCompatibilityError.stringTooLong(code: code)
             }
             pairs.append(Pair(code: code, value: value))
@@ -166,6 +166,16 @@ enum DXFCompatibilityValidator {
         }
         guard zip(positions, positions.dropFirst()).allSatisfy(<) else {
             throw DXFCompatibilityError.invalidSectionOrder
+        }
+        guard pairs.contains(where: {
+            $0.code == 1 && $0.value.uppercased() == "AC1021"
+        }) else {
+            throw DXFCompatibilityError.malformedPairs
+        }
+        guard pairs.contains(where: {
+            $0.code == 3 && $0.value.uppercased() == "UTF-8"
+        }) else {
+            throw DXFCompatibilityError.malformedPairs
         }
         guard entityCount > 0 else {
             throw DXFCompatibilityError.missingModelEntities

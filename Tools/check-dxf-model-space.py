@@ -31,7 +31,7 @@ class Record:
 
 
 def read_pairs(path: Path) -> list[tuple[int, str]]:
-    text = path.read_text(encoding="ascii", errors="strict")
+    text = path.read_text(encoding="utf-8", errors="strict")
     lines = text.splitlines()
     if len(lines) % 2:
         raise ValueError("Odd line count: incomplete DXF group-code pair")
@@ -131,19 +131,19 @@ def main() -> int:
         errors.append("LAYOUT object exists")
 
     marker = any(
-        code == 999 and value == "3ERoomElectrical v1.9.4 PURE_MODEL_R12"
+        code == 999 and value == "3ERoomElectrical v1.9.5 PURE_MODEL_UTF8"
         for code, value in pairs
     )
     if not marker:
-        errors.append("v1.9.4 PURE_MODEL_R12 marker is missing")
+        errors.append("v1.9.5 PURE_MODEL_UTF8 marker is missing")
 
     acadver = None
     for i, (code, value) in enumerate(pairs[:-1]):
         if code == 9 and value == "$ACADVER" and pairs[i + 1][0] == 1:
             acadver = pairs[i + 1][1]
             break
-    if acadver != "AC1009":
-        errors.append(f"Expected AC1009, got {acadver!r}")
+    if acadver != "AC1021":
+        errors.append(f"Expected AC1021, got {acadver!r}")
 
     print(f"File: {args.dxf}")
     print(f"Sections: {', '.join(sections)}")
@@ -155,7 +155,7 @@ def main() -> int:
             print(f"ERROR: {error}")
         return 1
 
-    print("Pure Model R12 DXF: PASS")
+    print("Pure Model UTF-8 DXF: PASS")
     return 0
 
 

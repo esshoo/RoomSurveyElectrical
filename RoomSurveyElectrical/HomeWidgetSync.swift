@@ -18,13 +18,19 @@ enum HomeWidgetSnapshotStore {
 enum HomeWidgetInstallationStatus: Equatable {
     case ready
     case extensionMissing
+    case invalidExtensionPoint
+    case identityMismatch
 
-    var message: String? {
+    var message: String {
         switch self {
         case .ready:
-            nil
+            "امتداد WidgetKit موجود وهويته متطابقة داخل التطبيق."
         case .extensionMissing:
-            "نسخة التثبيت لا تحتوي امتداد الويدجت داخل PlugIns. يجب أن يحتفظ برنامج التوقيع بالـWidget Extension."
+            "نسخة التثبيت لا تحتوي Widget Extension داخل PlugIns."
+        case .invalidExtensionPoint:
+            "الامتداد موجود، لكن NSExtensionPointIdentifier ليس WidgetKit."
+        case .identityMismatch:
+            "الامتداد موجود، لكن Bundle ID الخاص به لا يتبع Bundle ID التطبيق بعد توقيع Sideloadly."
         }
     }
 
@@ -32,32 +38,75 @@ enum HomeWidgetInstallationStatus: Equatable {
         switch self {
         case .ready: "checkmark.circle.fill"
         case .extensionMissing: "puzzlepiece.extension.fill"
+        case .invalidExtensionPoint: "exclamationmark.triangle.fill"
+        case .identityMismatch: "link.badge.plus"
         }
+    }
+}
+
+struct HomeWidgetDiagnosticReport: Equatable {
+    let status: HomeWidgetInstallationStatus
+    let hostBundleIdentifier: String
+    let widgetBundleIdentifier: String
+    let extensionPointIdentifier: String
+
+    var expectedWidgetBundleIdentifier: String {
+        hostBundleIdentifier + ".widget"
     }
 }
 
 enum HomeWidgetDiagnostics {
     private static let fileManager = FileManager.default
 
-    static var status: HomeWidgetInstallationStatus {
-        extensionIsEmbedded ? .ready : .extensionMissing
+    static var report: HomeWidgetDiagnosticReport {
+        let hostID = Bundle.main.bundleIdentifier ?? "غير معروف"
+        guard let bundle = embeddedWidgetBundle else {
+            return HomeWidgetDiagnosticReport(
+                status: .extensionMissing,
+                hostBundleIdentifier: hostID,
+                widgetBundleIdentifier: "غير موجود",
+                extensionPointIdentifier: "غير موجود"
+            )
+        }
+
+        let widgetID = bundle.bundleIdentifier ?? "غير معروف"
+        let extensionPoint = ((bundle.infoDictionary?["NSExtension"] as? [String: Any])?["NSExtensionPointIdentifier"] as? String) ?? "غير معروف"
+        let expectedID = hostID + ".widget"
+        let status: HomeWidgetInstallationStatus
+        if extensionPoint != "com.apple.widgetkit-extension" {
+            status = .invalidExtensionPoint
+        } else if widgetID != expectedID {
+            status = .identityMismatch
+        } else {
+            status = .ready
+        }
+        return HomeWidgetDiagnosticReport(
+            status: status,
+            hostBundleIdentifier: hostID,
+            widgetBundleIdentifier: widgetID,
+            extensionPointIdentifier: extensionPoint
+        )
     }
 
-    private static var extensionIsEmbedded: Bool {
+    static var status: HomeWidgetInstallationStatus {
+        report.status
+    }
+
+    private static var embeddedWidgetBundle: Bundle? {
         guard let plugInsURL = Bundle.main.builtInPlugInsURL,
               let children = try? fileManager.contentsOfDirectory(
                   at: plugInsURL,
                   includingPropertiesForKeys: nil,
                   options: [.skipsHiddenFiles]
-              ) else {
-            return false
+              ),
+              let widgetURL = children.first(where: {
+                  $0.pathExtension.caseInsensitiveCompare("appex") == .orderedSame
+                      && $0.lastPathComponent.caseInsensitiveCompare(
+                          "3ERoomElectricalWidgetExtension.appex"
+                      ) == .orderedSame
+              }) else {
+            return nil
         }
-        return children.contains {
-            $0.pathExtension.caseInsensitiveCompare("appex") == .orderedSame
-                && $0.lastPathComponent
-                    .caseInsensitiveCompare(
-                        "3ERoomElectricalWidgetExtension.appex"
-                    ) == .orderedSame
-        }
+        return Bundle(url: widgetURL)
     }
 }

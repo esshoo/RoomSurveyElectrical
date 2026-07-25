@@ -38,7 +38,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.9.4 • Pure Model DXF • Static Widget Test",
+                                    "الإصدار 1.9.5 • Unicode DXF • Widget ID Test",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
@@ -79,20 +79,43 @@ struct ContentView: View {
                         )
                         .listRowBackground(Color.clear)
 
-                        Label(
-                            HomeWidgetDiagnostics.status == .ready
-                                ? "Widget Extension موجودة داخل التطبيق • Static Build 21"
-                                : HomeWidgetDiagnostics.status.message ?? "",
-                            systemImage:
-                                HomeWidgetDiagnostics.status.systemImage
-                        )
-                        .font(.caption)
-                        .foregroundStyle(
-                            HomeWidgetDiagnostics.status == .ready
-                                ? Color.green
-                                : Color.red
-                        )
                     }
+                }
+
+                Section("تشخيص ويدجت الشاشة الرئيسية") {
+                    let widgetReport = HomeWidgetDiagnostics.report
+                    Label(
+                        widgetReport.status.message,
+                        systemImage: widgetReport.status.systemImage
+                    )
+                    .font(.caption)
+                    .foregroundStyle(
+                        widgetReport.status == .ready ? Color.green : Color.red
+                    )
+
+                    LabeledContent(
+                        "Bundle ID التطبيق",
+                        value: widgetReport.hostBundleIdentifier
+                    )
+                    .font(.caption2)
+
+                    LabeledContent(
+                        "Bundle ID الويدجت",
+                        value: widgetReport.widgetBundleIdentifier
+                    )
+                    .font(.caption2)
+
+                    LabeledContent(
+                        "المتوقع",
+                        value: widgetReport.expectedWidgetBundleIdentifier
+                    )
+                    .font(.caption2)
+
+                    LabeledContent(
+                        "Extension Point",
+                        value: widgetReport.extensionPointIdentifier
+                    )
+                    .font(.caption2)
                 }
 
                 Section("المشروعات") {

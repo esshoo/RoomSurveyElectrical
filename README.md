@@ -1,4 +1,4 @@
-# 3ERoomElectrical v1.9.4 Build 21
+# 3ERoomElectrical v1.9.5 Build 22
 
 ## Important upgrade cleanup
 
@@ -118,10 +118,21 @@ A full Xcode/iOS build must still be run by GitHub Actions or Xcode because this
 - `Tools/inspect-signed-ipa.py` diagnoses widget loss during signing.
 
 
-## v1.9.4 pure compatibility test
+## v1.9.5 pure compatibility test
 
 - DXF export is now an ASCII AutoCAD R12 (`AC1009`) file.
 - Every graphical entity is written directly in `ENTITIES`; no `LAYOUT`, `VIEWPORT`, `OBJECTS`, `CLASSES`, group `67`, or group `410` is emitted.
 - Classic `POLYLINE` / `VERTEX` / `SEQEND` records replace `LWPOLYLINE`.
-- Exported names include `PureModel-R12`, and the file includes the marker `3ERoomElectrical v1.9.4 PURE_MODEL_R12`.
+- Exported names include `PureModel-UTF8`, and the file includes the marker `3ERoomElectrical v1.9.5 PURE_MODEL_UTF8`.
 - The Home Screen widget is intentionally static and has no App Group or custom entitlements, to isolate Sideloadly extension signing.
+
+
+## Sideloadly widget identity test (Build 22)
+
+For this build, turn off **Use automatic bundle ID** and enter exactly:
+
+```text
+com.essam.threeroomelectrical
+```
+
+The embedded extension is `com.essam.threeroomelectrical.widget`. Open the app once after installation and read the always-visible **تشخيص ويدجت الشاشة الرئيسية** section. It reports the host ID, extension ID, extension point, and any mismatch created during signing.

@@ -27,8 +27,8 @@ jobs:
         shell: bash
         run: |
           ! grep -q 'CODE_SIGN_ENTITLEMENTS' RoomSurveyElectrical.xcodeproj/project.pbxproj
-          grep -q 'PURE_MODEL_R12' RoomSurveyElectrical/DXFExporter.swift
-          grep -q 'WidgetKit Test • Build 21' 3ERoomElectricalWidget/3ERoomElectricalWidget.swift
+          grep -q 'PURE_MODEL_UTF8' RoomSurveyElectrical/DXFExporter.swift
+          grep -q 'WidgetKit Test • Build 22' 3ERoomElectricalWidget/3ERoomElectricalWidget.swift
 
       - name: Build for a physical iPhone
         id: xcodebuild

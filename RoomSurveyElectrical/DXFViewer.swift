@@ -255,10 +255,12 @@ enum DXFViewerParser {
             ) else {
                 return nil
             }
-            let content = pairs
-                .filter { $0.code == 1 || $0.code == 3 }
-                .map(\.value)
-                .joined()
+            let content = decodeDXFText(
+                pairs
+                    .filter { $0.code == 1 || $0.code == 3 }
+                    .map(\.value)
+                    .joined()
+            )
             guard !content.isEmpty else { return nil }
             return DXFRenderableEntity(
                 id: id,
@@ -273,6 +275,81 @@ enum DXFViewerParser {
         default:
             return nil
         }
+    }
+
+    private static func decodeDXFText(_ raw: String) -> String {
+        var output = ""
+        var index = raw.startIndex
+        var pendingHighSurrogate: UInt32?
+
+        func appendCodeUnit(_ codeUnit: UInt32) {
+            if (0xD800...0xDBFF).contains(codeUnit) {
+                pendingHighSurrogate = codeUnit
+                return
+            }
+            if let high = pendingHighSurrogate,
+               (0xDC00...0xDFFF).contains(codeUnit) {
+                let scalarValue = 0x10000
+                    + ((high - 0xD800) << 10)
+                    + (codeUnit - 0xDC00)
+                if let scalar = UnicodeScalar(scalarValue) {
+                    output.unicodeScalars.append(scalar)
+                }
+                pendingHighSurrogate = nil
+                return
+            }
+            if let high = pendingHighSurrogate,
+               let scalar = UnicodeScalar(high) {
+                output.unicodeScalars.append(scalar)
+            }
+            pendingHighSurrogate = nil
+            if let scalar = UnicodeScalar(codeUnit) {
+                output.unicodeScalars.append(scalar)
+            }
+        }
+
+        while index < raw.endIndex {
+            if raw[index] == "\\" {
+                let uIndex = raw.index(after: index)
+                if uIndex < raw.endIndex,
+                   raw[uIndex].uppercased() == "U" {
+                    let plusIndex = raw.index(after: uIndex)
+                    if plusIndex < raw.endIndex, raw[plusIndex] == "+" {
+                        let hexStart = raw.index(after: plusIndex)
+                        var hexEnd = hexStart
+                        for _ in 0..<4 where hexEnd < raw.endIndex {
+                            hexEnd = raw.index(after: hexEnd)
+                        }
+                        if raw.distance(from: hexStart, to: hexEnd) == 4,
+                           let value = UInt32(raw[hexStart..<hexEnd], radix: 16) {
+                            appendCodeUnit(value)
+                            index = hexEnd
+                            continue
+                        }
+                    }
+                }
+                if uIndex < raw.endIndex, raw[uIndex] == "P" {
+                    output.append("\n")
+                    index = raw.index(after: uIndex)
+                    continue
+                }
+            }
+            if let high = pendingHighSurrogate,
+               let scalar = UnicodeScalar(high) {
+                output.unicodeScalars.append(scalar)
+                pendingHighSurrogate = nil
+            }
+            output.append(raw[index])
+            index = raw.index(after: index)
+        }
+        if let high = pendingHighSurrogate,
+           let scalar = UnicodeScalar(high) {
+            output.unicodeScalars.append(scalar)
+        }
+        return output
+            .replacingOccurrences(of: "%%d", with: "°", options: .caseInsensitive)
+            .replacingOccurrences(of: "%%p", with: "±", options: .caseInsensitive)
+            .replacingOccurrences(of: "%%c", with: "⌀", options: .caseInsensitive)
     }
 
     private static func point(
