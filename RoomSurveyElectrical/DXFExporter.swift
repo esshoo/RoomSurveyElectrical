@@ -1481,9 +1481,13 @@ private enum DXFVectorTextRenderer {
             CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
 
             let attributes = CTRunGetAttributes(run) as NSDictionary
-            guard let runFont = attributes[kCTFontAttributeName] as? CTFont else {
+            // Every Core Text glyph run has a CTFont attribute. Xcode 26
+            // rejects a conditional cast to the Core Foundation CTFont type
+            // because that bridge is guaranteed once the attribute exists.
+            guard let fontAttribute = attributes[kCTFontAttributeName] else {
                 continue
             }
+            let runFont = fontAttribute as! CTFont
 
             for index in 0..<count {
                 guard let glyphPath = CTFontCreatePathForGlyph(
