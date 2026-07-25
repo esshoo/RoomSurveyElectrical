@@ -1,4 +1,7 @@
+import CoreGraphics
+import CoreText
 import Foundation
+import UIKit
 import simd
 
 extension ProjectExportService {
@@ -21,7 +24,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-PureModel-UTF8",
+            name: "\(sanitized(title))-PureModel-R12-VectorText",
             extension: "dxf"
         )
     }
@@ -43,7 +46,7 @@ extension ProjectExportService {
         var archive = StoredZIPArchive()
         for (index, room) in rooms.enumerated() {
             let name = String(
-                format: "%02d-%@-PureModel-UTF8.dxf",
+                format: "%02d-%@-PureModel-R12-VectorText.dxf",
                 index + 1,
                 sanitized(room.scan.name)
             )
@@ -87,7 +90,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-Combined-PureModel-UTF8",
+            name: "\(sanitized(title))-Combined-PureModel-R12-VectorText",
             extension: "dxf"
         )
     }
@@ -110,7 +113,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-PureModel-UTF8",
+            name: "\(sanitized(title))-PureModel-R12-VectorText",
             extension: "dxf"
         )
     }
@@ -213,7 +216,7 @@ private struct DXFPlanBuilder {
             metadata: metadata
         )
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.5 PURE_MODEL_UTF8")
+        dxf.pair(999, "3ERoomElectrical v1.9.6 PURE_MODEL_R12_VECTOR_TEXT")
         firstBuilder.addHeader(
             to: &dxf,
             bounds: Bounds(
@@ -413,9 +416,9 @@ private struct DXFPlanBuilder {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "HEADER")
         dxf.pair(9, "$ACADVER")
-        dxf.pair(1, "AC1021")
+        dxf.pair(1, "AC1009")
         dxf.pair(9, "$DWGCODEPAGE")
-        dxf.pair(3, "UTF-8")
+        dxf.pair(3, "ANSI_1252")
         dxf.pair(9, "$INSUNITS")
         dxf.pair(70, 6)
         dxf.pair(9, "$MEASUREMENT")
@@ -980,7 +983,7 @@ private struct DXFPlanBuilder {
 
     func build() -> String {
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.5 PURE_MODEL_UTF8")
+        dxf.pair(999, "3ERoomElectrical v1.9.6 PURE_MODEL_R12_VECTOR_TEXT")
         addHeader(to: &dxf)
         // Pure Model Space export: intentionally omit all layout machinery.
         addTables(to: &dxf)
@@ -1029,9 +1032,9 @@ private struct DXFPlanBuilder {
         dxf.pair(0, "SECTION")
         dxf.pair(2, "HEADER")
         dxf.pair(9, "$ACADVER")
-        dxf.pair(1, "AC1021")
+        dxf.pair(1, "AC1009")
         dxf.pair(9, "$DWGCODEPAGE")
-        dxf.pair(3, "UTF-8")
+        dxf.pair(3, "ANSI_1252")
         dxf.pair(9, "$EXTMIN")
         dxf.pair(10, bounds.minimumX - 1)
         dxf.pair(20, bounds.minimumY - 1)
@@ -1437,6 +1440,225 @@ private struct DXFPlanBuilder {
     }
 }
 
+private enum DXFVectorTextRenderer {
+    private static let curveSteps = 10
+
+    static func contours(
+        for value: String,
+        at insertionPoint: (x: Double, y: Double),
+        height: Double,
+        rotation: Double,
+        horizontalAlignment: Int
+    ) -> [[(x: Double, y: Double)]] {
+        guard !value.isEmpty, height > 0 else { return [] }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.baseWritingDirection = containsRightToLeftText(value)
+            ? .rightToLeft
+            : .leftToRight
+        paragraph.alignment = .natural
+
+        let font = UIFont.systemFont(ofSize: 1.0)
+        let attributed = NSAttributedString(
+            string: value,
+            attributes: [
+                .font: font,
+                .paragraphStyle: paragraph,
+                .ligature: 1
+            ]
+        )
+        let line = CTLineCreateWithAttributedString(attributed)
+        let runs = CTLineGetGlyphRuns(line) as! [CTRun]
+        var rawContours: [[CGPoint]] = []
+
+        for run in runs {
+            let count = CTRunGetGlyphCount(run)
+            guard count > 0 else { continue }
+
+            var glyphs = Array(repeating: CGGlyph(), count: count)
+            var positions = Array(repeating: CGPoint.zero, count: count)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &glyphs)
+            CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
+
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            guard let runFont = attributes[kCTFontAttributeName] as? CTFont else {
+                continue
+            }
+
+            for index in 0..<count {
+                guard let glyphPath = CTFontCreatePathForGlyph(
+                    runFont,
+                    glyphs[index],
+                    nil
+                ) else {
+                    continue
+                }
+                var transform = CGAffineTransform(
+                    translationX: positions[index].x,
+                    y: positions[index].y
+                )
+                guard let positionedPath = glyphPath.copy(using: &transform) else {
+                    continue
+                }
+                rawContours.append(contentsOf: flatten(positionedPath))
+            }
+        }
+
+        let validContours = rawContours.filter { $0.count >= 3 }
+        guard !validContours.isEmpty else { return [] }
+
+        let allPoints = validContours.flatMap { $0 }
+        guard let first = allPoints.first else { return [] }
+        var minimumX = first.x
+        var maximumX = first.x
+        var minimumY = first.y
+        var maximumY = first.y
+        for point in allPoints.dropFirst() {
+            minimumX = min(minimumX, point.x)
+            maximumX = max(maximumX, point.x)
+            minimumY = min(minimumY, point.y)
+            maximumY = max(maximumY, point.y)
+        }
+
+        let rawHeight = max(maximumY - minimumY, 0.001)
+        let scale = CGFloat(height) / rawHeight
+        let horizontalOffset: CGFloat
+        switch horizontalAlignment {
+        case 0:
+            horizontalOffset = -minimumX
+        case 2:
+            horizontalOffset = -maximumX
+        default:
+            horizontalOffset = -(minimumX + maximumX) / 2
+        }
+        let verticalOffset = -(minimumY + maximumY) / 2
+        let angle = CGFloat(rotation * .pi / 180)
+        let cosine = cos(angle)
+        let sine = sin(angle)
+
+        return validContours.map { contour in
+            contour.map { rawPoint in
+                let localX = (rawPoint.x + horizontalOffset) * scale
+                let localY = (rawPoint.y + verticalOffset) * scale
+                let rotatedX = localX * cosine - localY * sine
+                let rotatedY = localX * sine + localY * cosine
+                return (
+                    x: insertionPoint.x + Double(rotatedX),
+                    y: insertionPoint.y + Double(rotatedY)
+                )
+            }
+        }
+    }
+
+    private static func containsRightToLeftText(_ value: String) -> Bool {
+        value.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x0590...0x08FF,
+                 0xFB1D...0xFDFF,
+                 0xFE70...0xFEFF:
+                true
+            default:
+                false
+            }
+        }
+    }
+
+    private static func flatten(_ path: CGPath) -> [[CGPoint]] {
+        var contours: [[CGPoint]] = []
+        var currentContour: [CGPoint] = []
+        var currentPoint = CGPoint.zero
+        var startPoint = CGPoint.zero
+        var hasCurrentPoint = false
+
+        func finishContour(close: Bool) {
+            guard currentContour.count >= 2 else {
+                currentContour.removeAll(keepingCapacity: true)
+                return
+            }
+            if close,
+               let first = currentContour.first,
+               let last = currentContour.last,
+               hypot(first.x - last.x, first.y - last.y) > 0.0001 {
+                currentContour.append(first)
+            }
+            contours.append(currentContour)
+            currentContour.removeAll(keepingCapacity: true)
+        }
+
+        path.applyWithBlock { elementPointer in
+            let element = elementPointer.pointee
+            switch element.type {
+            case .moveToPoint:
+                finishContour(close: false)
+                currentPoint = element.points[0]
+                startPoint = currentPoint
+                currentContour = [currentPoint]
+                hasCurrentPoint = true
+
+            case .addLineToPoint:
+                guard hasCurrentPoint else { return }
+                currentPoint = element.points[0]
+                currentContour.append(currentPoint)
+
+            case .addQuadCurveToPoint:
+                guard hasCurrentPoint else { return }
+                let start = currentPoint
+                let control = element.points[0]
+                let end = element.points[1]
+                for step in 1...curveSteps {
+                    let t = CGFloat(step) / CGFloat(curveSteps)
+                    let inverse = 1 - t
+                    let point = CGPoint(
+                        x: inverse * inverse * start.x
+                            + 2 * inverse * t * control.x
+                            + t * t * end.x,
+                        y: inverse * inverse * start.y
+                            + 2 * inverse * t * control.y
+                            + t * t * end.y
+                    )
+                    currentContour.append(point)
+                }
+                currentPoint = end
+
+            case .addCurveToPoint:
+                guard hasCurrentPoint else { return }
+                let start = currentPoint
+                let control1 = element.points[0]
+                let control2 = element.points[1]
+                let end = element.points[2]
+                for step in 1...curveSteps {
+                    let t = CGFloat(step) / CGFloat(curveSteps)
+                    let inverse = 1 - t
+                    let point = CGPoint(
+                        x: inverse * inverse * inverse * start.x
+                            + 3 * inverse * inverse * t * control1.x
+                            + 3 * inverse * t * t * control2.x
+                            + t * t * t * end.x,
+                        y: inverse * inverse * inverse * start.y
+                            + 3 * inverse * inverse * t * control1.y
+                            + 3 * inverse * t * t * control2.y
+                            + t * t * t * end.y
+                    )
+                    currentContour.append(point)
+                }
+                currentPoint = end
+
+            case .closeSubpath:
+                if hasCurrentPoint {
+                    currentPoint = startPoint
+                    finishContour(close: true)
+                }
+                hasCurrentPoint = false
+
+            @unknown default:
+                break
+            }
+        }
+        finishContour(close: false)
+        return contours
+    }
+}
+
 private struct DXFWriter {
     private(set) var output = ""
     private var entityOwnerHandle: String?
@@ -1557,6 +1779,25 @@ private struct DXFWriter {
         rotation: Double = 0,
         horizontalAlignment: Int = 1
     ) {
+        // AutoCAD R12 is deliberately kept for maximum DXF compatibility.
+        // R12 cannot store Unicode text reliably, so every non-ASCII string
+        // is shaped with CoreText and exported as closed POLYLINE outlines.
+        if value.unicodeScalars.contains(where: { !$0.isASCII }) {
+            let contours = DXFVectorTextRenderer.contours(
+                for: value,
+                at: point,
+                height: height,
+                rotation: rotation,
+                horizontalAlignment: horizontalAlignment
+            )
+            if !contours.isEmpty {
+                for contour in contours {
+                    polyline(contour, layer: layer, closed: true)
+                }
+                return
+            }
+        }
+
         pair(0, "TEXT")
         if entityOwnerHandle == nil {
             pair(8, layer)
@@ -1570,7 +1811,7 @@ private struct DXFWriter {
         pair(20, point.y)
         pair(30, 0.0)
         pair(40, height)
-        pair(1, value)
+        pair(1, asciiFallback(value))
         pair(50, rotation)
         pair(7, "STANDARD")
         pair(72, horizontalAlignment)
@@ -1685,6 +1926,14 @@ private struct DXFWriter {
             nextEntityHandleValue,
             radix: 16
         ).uppercased()
+    }
+
+    private func asciiFallback(_ value: String) -> String {
+        String(
+            value.unicodeScalars.map { scalar in
+                scalar.isASCII ? Character(scalar) : " "
+            }
+        )
     }
 
     private func clean(_ value: String) -> String {

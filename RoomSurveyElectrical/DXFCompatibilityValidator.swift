@@ -9,6 +9,7 @@ enum DXFCompatibilityError: LocalizedError {
     case forbiddenLayoutRecord(String)
     case malformedPolyline
     case stringTooLong(code: Int)
+    case nonASCIIData
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +29,8 @@ enum DXFCompatibilityError: LocalizedError {
             "تعذر إنشاء DXF لأن POLYLINE لا تحتوي VERTEX وSEQEND بصورة صحيحة."
         case .stringTooLong(let code):
             "تعذر إنشاء DXF لأن قيمة نصية في group code \(code) تتجاوز الحد الآمن."
+        case .nonASCIIData:
+            "تعذر إنشاء DXF لأن ملف R12 يحتوي نص Unicode مباشرًا بدل تحويله إلى خطوط هندسية."
         }
     }
 }
@@ -39,6 +42,9 @@ enum DXFCompatibilityValidator {
     }
 
     static func validate(_ text: String) throws {
+        guard text.unicodeScalars.allSatisfy(\.isASCII) else {
+            throw DXFCompatibilityError.nonASCIIData
+        }
         var lines = text.split(
             omittingEmptySubsequences: false,
             whereSeparator: \Character.isNewline
@@ -168,12 +174,12 @@ enum DXFCompatibilityValidator {
             throw DXFCompatibilityError.invalidSectionOrder
         }
         guard pairs.contains(where: {
-            $0.code == 1 && $0.value.uppercased() == "AC1021"
+            $0.code == 1 && $0.value.uppercased() == "AC1009"
         }) else {
             throw DXFCompatibilityError.malformedPairs
         }
         guard pairs.contains(where: {
-            $0.code == 3 && $0.value.uppercased() == "UTF-8"
+            $0.code == 3 && $0.value.uppercased() == "ANSI_1252"
         }) else {
             throw DXFCompatibilityError.malformedPairs
         }

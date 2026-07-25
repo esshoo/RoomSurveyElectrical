@@ -30,7 +30,7 @@ enum HomeWidgetInstallationStatus: Equatable {
         case .invalidExtensionPoint:
             "الامتداد موجود، لكن NSExtensionPointIdentifier ليس WidgetKit."
         case .identityMismatch:
-            "الامتداد موجود، لكن Bundle ID الخاص به لا يتبع Bundle ID التطبيق بعد توقيع Sideloadly."
+            "الامتداد موجود، لكن Bundle ID الخاص به لا يتبع Bundle ID التطبيق بعد التوقيع."
         }
     }
 
@@ -44,14 +44,64 @@ enum HomeWidgetInstallationStatus: Equatable {
     }
 }
 
+struct ProvisioningProfileSummary: Equatable {
+    let exists: Bool
+    let applicationIdentifier: String
+    let teamIdentifier: String
+    let expirationDate: Date?
+
+    static let missing = ProvisioningProfileSummary(
+        exists: false,
+        applicationIdentifier: "غير موجود",
+        teamIdentifier: "غير موجود",
+        expirationDate: nil
+    )
+}
+
 struct HomeWidgetDiagnosticReport: Equatable {
     let status: HomeWidgetInstallationStatus
     let hostBundleIdentifier: String
     let widgetBundleIdentifier: String
     let extensionPointIdentifier: String
+    let hostProfile: ProvisioningProfileSummary
+    let widgetProfile: ProvisioningProfileSummary
 
     var expectedWidgetBundleIdentifier: String {
         hostBundleIdentifier + ".widget"
+    }
+
+    var provisioningIsValid: Bool {
+        guard hostProfile.exists, widgetProfile.exists else { return false }
+        guard hostProfile.applicationIdentifier.hasSuffix(hostBundleIdentifier),
+              widgetProfile.applicationIdentifier.hasSuffix(widgetBundleIdentifier)
+        else {
+            return false
+        }
+        guard !hostProfile.teamIdentifier.isEmpty,
+              hostProfile.teamIdentifier == widgetProfile.teamIdentifier
+        else {
+            return false
+        }
+        return true
+    }
+
+    var provisioningMessage: String {
+        if !hostProfile.exists {
+            return "التطبيق الرئيسي لا يحتوي embedded.mobileprovision بعد التوقيع."
+        }
+        if !widgetProfile.exists {
+            return "الويدجت موجودة داخل PlugIns لكنها لا تحتوي Provisioning Profile مستقلًا؛ لن يسجلها iOS كويدجت."
+        }
+        if !hostProfile.applicationIdentifier.hasSuffix(hostBundleIdentifier) {
+            return "Provisioning Profile التطبيق لا يطابق Bundle ID المثبت."
+        }
+        if !widgetProfile.applicationIdentifier.hasSuffix(widgetBundleIdentifier) {
+            return "Provisioning Profile الويدجت لا يطابق Bundle ID الويدجت."
+        }
+        if hostProfile.teamIdentifier != widgetProfile.teamIdentifier {
+            return "التطبيق والويدجت موقّعان بفريقين مختلفين."
+        }
+        return "Provisioning Profile التطبيق والويدجت متطابقان. إذا لم تظهر في المعرض فالمشكلة في تسجيل الامتداد أثناء التثبيت الجانبي."
     }
 }
 
@@ -60,12 +110,15 @@ enum HomeWidgetDiagnostics {
 
     static var report: HomeWidgetDiagnosticReport {
         let hostID = Bundle.main.bundleIdentifier ?? "غير معروف"
+        let hostProfile = provisioningProfile(in: Bundle.main)
         guard let bundle = embeddedWidgetBundle else {
             return HomeWidgetDiagnosticReport(
                 status: .extensionMissing,
                 hostBundleIdentifier: hostID,
                 widgetBundleIdentifier: "غير موجود",
-                extensionPointIdentifier: "غير موجود"
+                extensionPointIdentifier: "غير موجود",
+                hostProfile: hostProfile,
+                widgetProfile: .missing
             )
         }
 
@@ -84,7 +137,9 @@ enum HomeWidgetDiagnostics {
             status: status,
             hostBundleIdentifier: hostID,
             widgetBundleIdentifier: widgetID,
-            extensionPointIdentifier: extensionPoint
+            extensionPointIdentifier: extensionPoint,
+            hostProfile: hostProfile,
+            widgetProfile: provisioningProfile(in: bundle)
         )
     }
 
@@ -108,5 +163,61 @@ enum HomeWidgetDiagnostics {
             return nil
         }
         return Bundle(url: widgetURL)
+    }
+
+    private static func provisioningProfile(
+        in bundle: Bundle
+    ) -> ProvisioningProfileSummary {
+        guard let profileURL = bundle.url(
+            forResource: "embedded",
+            withExtension: "mobileprovision"
+        ), let data = try? Data(contentsOf: profileURL),
+           let containerText = String(data: data, encoding: .isoLatin1),
+           let plistStart = containerText.range(of: "<plist"),
+           let plistEnd = containerText.range(
+               of: "</plist>",
+               range: plistStart.lowerBound..<containerText.endIndex
+           ) else {
+            return .missing
+        }
+
+        let plistText = String(
+            containerText[plistStart.lowerBound..<plistEnd.upperBound]
+        )
+        guard let plistData = plistText.data(using: .utf8),
+              let object = try? PropertyListSerialization.propertyList(
+                  from: plistData,
+                  options: [],
+                  format: nil
+              ),
+              let dictionary = object as? [String: Any],
+              let entitlements = dictionary["Entitlements"] as? [String: Any]
+        else {
+            return ProvisioningProfileSummary(
+                exists: true,
+                applicationIdentifier: "غير قابل للقراءة",
+                teamIdentifier: "غير قابل للقراءة",
+                expirationDate: nil
+            )
+        }
+
+        let appIdentifier = entitlements["application-identifier"] as? String
+            ?? entitlements["com.apple.application-identifier"] as? String
+            ?? "غير موجود"
+        let entitlementTeam = entitlements[
+            "com.apple.developer.team-identifier"
+        ] as? String
+        let profileTeams = dictionary["TeamIdentifier"] as? [String]
+        let teamIdentifier = entitlementTeam
+            ?? profileTeams?.first
+            ?? appIdentifier.split(separator: ".").first.map(String.init)
+            ?? "غير موجود"
+
+        return ProvisioningProfileSummary(
+            exists: true,
+            applicationIdentifier: appIdentifier,
+            teamIdentifier: teamIdentifier,
+            expirationDate: dictionary["ExpirationDate"] as? Date
+        )
     }
 }

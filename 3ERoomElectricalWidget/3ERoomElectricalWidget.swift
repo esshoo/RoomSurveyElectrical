@@ -1,7 +1,7 @@
 import SwiftUI
 import WidgetKit
 
-private let widgetKind = "3ERoomElectricalSideloadTestV2"
+private let widgetKind = "3ERoomElectricalSideloadTestV3"
 
 private struct StaticWidgetEntry: TimelineEntry {
     let date: Date
@@ -56,7 +56,7 @@ private struct StaticWidgetView: View {
                     .font(family == .systemSmall ? .headline : .title3.bold())
                     .multilineTextAlignment(.center)
 
-                Text("WidgetKit Test • Build 22")
+                Text("WidgetKit Provision Test • Build 23")
                     .font(.caption.bold())
                     .foregroundStyle(.white.opacity(0.72))
 

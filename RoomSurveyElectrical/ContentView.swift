@@ -38,7 +38,7 @@ struct ContentView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                 Label(
-                                    "الإصدار 1.9.5 • Unicode DXF • Widget ID Test",
+                                    "الإصدار 1.9.6 • R12 Vector Arabic • Widget Provision Test",
                                     systemImage: "checkmark.seal.fill"
                                 )
                                 .font(.caption2.weight(.semibold))
@@ -114,6 +114,46 @@ struct ContentView: View {
                     LabeledContent(
                         "Extension Point",
                         value: widgetReport.extensionPointIdentifier
+                    )
+                    .font(.caption2)
+
+
+                    Divider()
+
+                    Label(
+                        widgetReport.provisioningMessage,
+                        systemImage: widgetReport.provisioningIsValid
+                            ? "checkmark.shield.fill"
+                            : "xmark.shield.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(
+                        widgetReport.provisioningIsValid
+                            ? Color.green
+                            : Color.orange
+                    )
+
+                    LabeledContent(
+                        "App Profile ID",
+                        value: widgetReport.hostProfile.applicationIdentifier
+                    )
+                    .font(.caption2)
+
+                    LabeledContent(
+                        "Widget Profile ID",
+                        value: widgetReport.widgetProfile.applicationIdentifier
+                    )
+                    .font(.caption2)
+
+                    LabeledContent(
+                        "فريق التطبيق",
+                        value: widgetReport.hostProfile.teamIdentifier
+                    )
+                    .font(.caption2)
+
+                    LabeledContent(
+                        "فريق الويدجت",
+                        value: widgetReport.widgetProfile.teamIdentifier
                     )
                     .font(.caption2)
                 }
