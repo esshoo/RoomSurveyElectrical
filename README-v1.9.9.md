@@ -1,4 +1,4 @@
-# 3ERoomElectrical v1.9.9 — Build 27
+# 3ERoomElectrical v1.9.10 — Build 28
 
 This release cleans the projects home screen and replaces the temporary R12 vector-text DXF path with a modern, editable Unicode DXF export.
 

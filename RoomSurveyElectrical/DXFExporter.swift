@@ -195,7 +195,7 @@ private struct DXFPlanBuilder {
         )
 
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.9 MODEL_SPACE_UTF8_2007")
+        dxf.pair(999, "3ERoomElectrical v1.9.10 MODEL_SPACE_UTF8_2007")
         firstBuilder.addHeader(
             to: &dxf,
             bounds: Bounds(
@@ -270,7 +270,9 @@ private struct DXFPlanBuilder {
             horizontalAlignment: 2
         )
 
-        dxf.endEntitiesAndFile()
+        dxf.endEntities()
+        dxf.addRequiredObjects()
+        dxf.endFile()
         return dxf.output
     }
 
@@ -284,7 +286,7 @@ private struct DXFPlanBuilder {
 
     func build() -> String {
         var dxf = DXFWriter()
-        dxf.pair(999, "3ERoomElectrical v1.9.9 MODEL_SPACE_UTF8_2007")
+        dxf.pair(999, "3ERoomElectrical v1.9.10 MODEL_SPACE_UTF8_2007")
         addHeader(to: &dxf)
         addClasses(to: &dxf)
         addTables(to: &dxf)
@@ -292,7 +294,9 @@ private struct DXFPlanBuilder {
         dxf.beginEntities()
         addEntities(to: &dxf)
         addDrawingInformation(to: &dxf)
-        dxf.endEntitiesAndFile()
+        dxf.endEntities()
+        dxf.addRequiredObjects()
+        dxf.endFile()
         return dxf.output
     }
 
@@ -329,7 +333,7 @@ private struct DXFPlanBuilder {
         dxf.pair(9, "$HANDSEED")
         dxf.pair(5, "200000")
         dxf.pair(9, "$DWGCODEPAGE")
-        dxf.pair(3, "UTF-8")
+        dxf.pair(3, "ANSI_1252")
         dxf.pair(9, "$INSUNITS")
         dxf.pair(70, 6)
         dxf.pair(9, "$MEASUREMENT")
@@ -863,8 +867,34 @@ private struct DXFWriter {
         pair(2, "ENTITIES")
     }
 
-    mutating func endEntitiesAndFile() {
+    mutating func endEntities() {
         pair(0, "ENDSEC")
+    }
+
+    mutating func addRequiredObjects() {
+        pair(0, "SECTION")
+        pair(2, "OBJECTS")
+
+        // AutoCAD expects the Named Object Dictionary to contain ACAD_GROUP
+        // when modern database entities such as MTEXT are present.
+        pair(0, "DICTIONARY")
+        pair(5, "1F0000")
+        pair(330, "0")
+        pair(100, "AcDbDictionary")
+        pair(281, 1)
+        pair(3, "ACAD_GROUP")
+        pair(350, "1F0001")
+
+        pair(0, "DICTIONARY")
+        pair(5, "1F0001")
+        pair(330, "1F0000")
+        pair(100, "AcDbDictionary")
+        pair(281, 1)
+
+        pair(0, "ENDSEC")
+    }
+
+    mutating func endFile() {
         pair(0, "EOF")
     }
 
@@ -1086,6 +1116,8 @@ private struct DXFWriter {
         pair(330, "31")
         pair(100, "AcDbEntity")
         pair(8, layer)
+        pair(410, "Model")
+        pair(370, -1)
         pair(100, subclass)
     }
 

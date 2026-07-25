@@ -10,6 +10,7 @@ enum DXFCompatibilityError: LocalizedError {
     case invalidVersion
     case invalidEncoding
     case missingModelSpaceRecord
+    case missingObjectsDictionary
     case invalidEntity(type: String)
     case stringTooLong(code: Int)
 
@@ -33,6 +34,8 @@ enum DXFCompatibilityError: LocalizedError {
             "تعذر إنشاء DXF لأن ترميز الملف ليس UTF-8."
         case .missingModelSpaceRecord:
             "تعذر إنشاء DXF لأن تعريف *Model_Space غير مكتمل."
+        case .missingObjectsDictionary:
+            "تعذر إنشاء DXF لأن قسم OBJECTS أو قاموس ACAD_GROUP المطلوب لملف DXF الحديث غير مكتمل."
         case .invalidEntity(let type):
             "تعذر إنشاء DXF لأن كيان \(type) لا يحتوي بيانات الملكية أو Subclass المطلوبة."
         case .stringTooLong(let code):
@@ -105,6 +108,8 @@ enum DXFCompatibilityValidator {
         var modelEntityCount = 0
         var foundModelBlockRecord = false
         var foundModelBlockDefinition = false
+        var foundRootDictionaryWithAcadGroup = false
+        var foundAcadGroupDictionary = false
 
         func finishRecord() throws {
             guard let currentType else { return }
@@ -131,6 +136,26 @@ enum DXFCompatibilityValidator {
                 foundModelBlockDefinition = true
             }
 
+            if type == "DICTIONARY", currentSection == "OBJECTS" {
+                let handle = currentRecord.first(where: { $0.code == 5 })?
+                    .value.uppercased()
+                let owner = currentRecord.first(where: { $0.code == 330 })?
+                    .value.uppercased()
+                if handle == "1F0000",
+                   owner == "0",
+                   currentRecord.contains(where: {
+                       $0.code == 3 && $0.value == "ACAD_GROUP"
+                   }),
+                   currentRecord.contains(where: {
+                       $0.code == 350 && $0.value.uppercased() == "1F0001"
+                   }) {
+                    foundRootDictionaryWithAcadGroup = true
+                }
+                if handle == "1F0001", owner == "1F0000" {
+                    foundAcadGroupDictionary = true
+                }
+            }
+
             guard currentSection == "ENTITIES",
                   graphicalEntityTypes.contains(type) else {
                 return
@@ -142,6 +167,12 @@ enum DXFCompatibilityValidator {
                   }),
                   currentRecord.contains(where: {
                       $0.code == 100 && $0.value == "AcDbEntity"
+                  }),
+                  currentRecord.contains(where: {
+                      $0.code == 410 && $0.value == "Model"
+                  }),
+                  currentRecord.contains(where: {
+                      $0.code == 370
                   }),
                   let subclass = expectedSubclass[type],
                   currentRecord.contains(where: {
@@ -155,7 +186,9 @@ enum DXFCompatibilityValidator {
             }) {
                 throw DXFCompatibilityError.paperSpaceNotSupported(type)
             }
-            if currentRecord.contains(where: { $0.code == 410 }) {
+            if currentRecord.contains(where: {
+                $0.code == 410 && $0.value != "Model"
+            }) {
                 throw DXFCompatibilityError.paperSpaceNotSupported(type)
             }
 
@@ -221,14 +254,12 @@ enum DXFCompatibilityValidator {
         }
         try finishRecord()
 
-        let required = ["HEADER", "CLASSES", "TABLES", "BLOCKS", "ENTITIES"]
+        let required = [
+            "HEADER", "CLASSES", "TABLES", "BLOCKS", "ENTITIES", "OBJECTS"
+        ]
         for section in required where !sections.contains(section) {
             throw DXFCompatibilityError.missingSection(section)
         }
-        if sections.contains("OBJECTS") {
-            throw DXFCompatibilityError.forbiddenLayoutRecord("OBJECTS")
-        }
-
         let positions = try required.map { section -> Int in
             guard let position = sections.firstIndex(of: section) else {
                 throw DXFCompatibilityError.missingSection(section)
@@ -245,12 +276,16 @@ enum DXFCompatibilityValidator {
             throw DXFCompatibilityError.invalidVersion
         }
         guard pairs.contains(where: {
-            $0.code == 3 && $0.value.uppercased() == "UTF-8"
+            $0.code == 3
+                && ["ANSI_1252", "UTF-8"].contains($0.value.uppercased())
         }) else {
             throw DXFCompatibilityError.invalidEncoding
         }
         guard foundModelBlockRecord, foundModelBlockDefinition else {
             throw DXFCompatibilityError.missingModelSpaceRecord
+        }
+        guard foundRootDictionaryWithAcadGroup, foundAcadGroupDictionary else {
+            throw DXFCompatibilityError.missingObjectsDictionary
         }
         guard modelEntityCount > 0 else {
             throw DXFCompatibilityError.missingModelEntities

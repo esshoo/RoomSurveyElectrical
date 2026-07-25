@@ -170,11 +170,11 @@ def main() -> int:
                 errors.append("Malformed LWPOLYLINE vertex count")
 
     marker = any(
-        code == 999 and value == "3ERoomElectrical v1.9.9 MODEL_SPACE_UTF8_2007"
+        code == 999 and value == "3ERoomElectrical v1.9.10 MODEL_SPACE_UTF8_2007"
         for code, value in pairs
     )
     if not marker:
-        errors.append("v1.9.9 Model Space UTF-8 marker is missing")
+        errors.append("v1.9.10 Model Space UTF-8 marker is missing")
 
     print(f"File: {args.dxf}")
     print(f"Sections: {', '.join(sections)}")
