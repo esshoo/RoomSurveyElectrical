@@ -1151,6 +1151,7 @@ private struct ScanReferenceRow: View {
 
 private struct ScopedTakeoffRoom: Identifiable {
     let scan: ScanReference
+    let project: RoomProject?
     let summary: RoomTakeoffSummary?
     let location: String
 
@@ -1320,11 +1321,11 @@ private struct ProjectTakeoffView: View {
             }
             .sorted { $0.createdAt < $1.createdAt }
             .map { scan in
-                ScopedTakeoffRoom(
+                let roomProject = ProjectRepository.load(projectID: scan.id)
+                return ScopedTakeoffRoom(
                     scan: scan,
-                    summary: ProjectRepository.load(projectID: scan.id).map {
-                        RoomTakeoffSummary(project: $0)
-                    },
+                    project: roomProject,
+                    summary: roomProject.map { RoomTakeoffSummary(project: $0) },
                     location: locationPath(for: scan.parentID, in: project)
                 )
             }
@@ -1353,7 +1354,10 @@ private struct ProjectTakeoffView: View {
         HStack(spacing: 10) {
             if let summary = room.summary {
                 NavigationLink {
-                    ScanTakeoffDetailView(summary: summary)
+                    ScanTakeoffDetailView(
+                        summary: summary,
+                        project: room.project
+                    )
                 } label: {
                     takeoffRoomLabel(room, summary: summary)
                 }
@@ -1453,6 +1457,15 @@ private struct ProjectTakeoffView: View {
 
 struct ScanTakeoffDetailView: View {
     let summary: RoomTakeoffSummary
+    let project: RoomProject?
+
+    init(
+        summary: RoomTakeoffSummary,
+        project: RoomProject? = nil
+    ) {
+        self.summary = summary
+        self.project = project
+    }
 
     var body: some View {
         List {
@@ -1545,6 +1558,27 @@ struct ScanTakeoffDetailView: View {
                 }
             }
 
+            if let objects = project?.objects, !objects.isEmpty {
+                Section("تفاصيل الأثاث") {
+                    ForEach(Array(objects.enumerated()), id: \.element.id) {
+                        index, object in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(object.title) \(index + 1)")
+                                .font(.headline)
+                            Text(
+                                "\(formattedLength(object.width)) × "
+                                    + "\(formattedLength(object.depth)) × "
+                                    + "\(formattedLength(object.height))"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
             Section("الكهرباء") {
                 if summary.electrical.isEmpty
                     && summary.ceilingLightCount == 0 {
@@ -1552,34 +1586,32 @@ struct ScanTakeoffDetailView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(summary.electrical) { line in
-                        HStack {
-                            Label(
-                                line.type.title,
-                                systemImage: line.type.systemImage
-                            )
-                            Spacer()
-                            Text("\(line.count) • \(line.status.title)")
-                                .foregroundStyle(.secondary)
+                        if let project {
+                            NavigationLink {
+                                TakeoffElectricalGroupDetailView(
+                                    project: project,
+                                    type: line.type,
+                                    status: line.status
+                                )
+                            } label: {
+                                electricalLineLabel(line, project: project)
+                            }
+                        } else {
+                            electricalLineLabel(line, project: nil)
                         }
                     }
-                    if summary.existingCeilingLightCount > 0 {
-                        LabeledContent(
-                            "إضاءة سقف موجودة – كاميرا",
-                            value: "\(summary.existingCeilingLightCount)"
-                        )
-                    }
-                    if summary.manualCeilingLightCount > 0 {
-                        LabeledContent(
-                            "إضاءة سقف يدوية",
-                            value: "\(summary.manualCeilingLightCount)"
-                        )
-                    }
-                    if summary.automaticCeilingLightCount > 0 {
-                        LabeledContent(
-                            "إضاءة سقف تلقائية",
-                            value: "\(summary.automaticCeilingLightCount)"
-                        )
-                    }
+                    ceilingLightLine(
+                        source: .cameraExisting,
+                        count: summary.existingCeilingLightCount
+                    )
+                    ceilingLightLine(
+                        source: .planManual,
+                        count: summary.manualCeilingLightCount
+                    )
+                    ceilingLightLine(
+                        source: .planAutomatic,
+                        count: summary.automaticCeilingLightCount
+                    )
                 }
             }
 
@@ -1595,6 +1627,57 @@ struct ScanTakeoffDetailView: View {
         }
         .navigationTitle(summary.name)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private func electricalLineLabel(
+        _ line: ElectricalTakeoffLine,
+        project: RoomProject?
+    ) -> some View {
+        HStack(spacing: 12) {
+            Label(
+                line.type.title,
+                systemImage: line.type.systemImage
+            )
+            Spacer()
+            VStack(alignment: .trailing, spacing: 3) {
+                Text("\(line.count) • \(line.status.title)")
+                    .font(.headline.monospacedDigit())
+                if let project {
+                    Text(
+                        "ارتفاع "
+                            + electricalTakeoffHeightSummary(
+                                project: project,
+                                type: line.type,
+                                status: line.status
+                            )
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ceilingLightLine(
+        source: CeilingLightSource,
+        count: Int
+    ) -> some View {
+        if count > 0 {
+            if let project {
+                NavigationLink {
+                    TakeoffCeilingLightGroupDetailView(
+                        project: project,
+                        source: source
+                    )
+                } label: {
+                    LabeledContent(source.takeoffTitle, value: "\(count)")
+                }
+            } else {
+                LabeledContent(source.takeoffTitle, value: "\(count)")
+            }
+        }
     }
 
     private func floorNumber(_ id: UUID) -> Int {

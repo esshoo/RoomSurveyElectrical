@@ -23,6 +23,20 @@ struct ViewerLayerVisibility: Equatable {
     var electricalDimensions = false
 }
 
+enum Plan2DHighlightTarget: Equatable, Identifiable {
+    case electricalPoint(UUID)
+    case ceilingLight(UUID)
+
+    var id: String {
+        switch self {
+        case .electricalPoint(let id):
+            return "electrical-\(id.uuidString)"
+        case .ceilingLight(let id):
+            return "ceiling-\(id.uuidString)"
+        }
+    }
+}
+
 struct RoomViewerView: View {
     @EnvironmentObject private var store: ProjectStore
     @Environment(\.dismiss) private var dismiss
@@ -91,7 +105,8 @@ struct RoomViewerView: View {
         .sheet(isPresented: $showTakeoff) {
             NavigationStack {
                 ScanTakeoffDetailView(
-                    summary: RoomTakeoffSummary(project: project)
+                    summary: RoomTakeoffSummary(project: project),
+                    project: project
                 )
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
@@ -575,6 +590,66 @@ struct RoomViewerView: View {
     }
 }
 
+struct TakeoffFocusedPlanView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var project: RoomProject
+    @State private var layers: ViewerLayerVisibility
+
+    let target: Plan2DHighlightTarget
+    let title: String
+
+    init(
+        project: RoomProject,
+        target: Plan2DHighlightTarget,
+        title: String
+    ) {
+        _project = State(initialValue: project)
+        var initialLayers = ViewerLayerVisibility()
+        initialLayers.electricalDimensions = true
+        _layers = State(initialValue: initialLayers)
+        self.target = target
+        self.title = title
+    }
+
+    var body: some View {
+        NavigationStack {
+            Plan2DView(
+                project: $project,
+                layers: layers,
+                onProjectChanged: {},
+                initialHighlight: target,
+                allowsEditing: false
+            )
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("إغلاق", systemImage: "xmark")
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Toggle("الحوائط", isOn: $layers.walls)
+                        Toggle("الأبواب والشبابيك", isOn: $layers.openings)
+                        Toggle("الأثاث", isOn: $layers.furniture)
+                        Toggle("الكهرباء", isOn: $layers.electrical)
+                        Toggle("إضاءة السقف", isOn: $layers.ceilingLighting)
+                        Toggle("الأبعاد", isOn: $layers.dimensions)
+                        Toggle("أبعاد الكهرباء", isOn: $layers.electricalDimensions)
+                    } label: {
+                        Image(systemName: "square.3.layers.3d")
+                    }
+                }
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+}
+
 private enum Plan2DEditTool: Identifiable, Equatable {
     case door
     case window
@@ -689,6 +764,8 @@ private struct Plan2DView: View {
     @Binding var project: RoomProject
     let layers: ViewerLayerVisibility
     let onProjectChanged: () -> Void
+    var initialHighlight: Plan2DHighlightTarget? = nil
+    var allowsEditing = true
 
     @State private var zoom: CGFloat = 1
     @State private var committedZoom: CGFloat = 1
@@ -705,6 +782,9 @@ private struct Plan2DView: View {
     @State private var draggedElement: Plan2DElementSelection?
     @State private var editingAutomaticLayout: CeilingLightLayout?
     @State private var activeAlignmentFeedbackKey: String?
+    @State private var activeHighlight: Plan2DHighlightTarget?
+    @State private var highlightPulse = false
+    @State private var didFocusInitialHighlight = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -722,6 +802,11 @@ private struct Plan2DView: View {
                 .simultaneousGesture(rotationGesture)
                 .simultaneousGesture(
                     SpatialTapGesture(coordinateSpace: .named("plan2D")).onEnded { value in
+                        if activeHighlight != nil {
+                            clearHighlight()
+                            return
+                        }
+                        guard allowsEditing else { return }
                         if activeTool != nil {
                             placeActiveTool(at: value.location, viewSize: geometry.size)
                         } else {
@@ -736,6 +821,16 @@ private struct Plan2DView: View {
                 controlsOverlay
             }
             .coordinateSpace(name: "plan2D")
+            .onAppear {
+                prepareInitialHighlight(in: geometry.size)
+            }
+            .onChange(of: geometry.size) { _, newSize in
+                prepareInitialHighlight(in: newSize)
+            }
+            .onChange(of: initialHighlight) { _, _ in
+                didFocusInitialHighlight = false
+                prepareInitialHighlight(in: geometry.size)
+            }
         }
         .clipped()
         .confirmationDialog(
@@ -797,7 +892,19 @@ private struct Plan2DView: View {
                 .accessibilityLabel("إعادة ضبط المخطط")
             }
 
-            if let tool = activeTool {
+            if activeHighlight != nil {
+                Label(
+                    "تم تحديد العنصر على المخطط • المس الشاشة لإيقاف الوميض",
+                    systemImage: "scope"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+
+            if let tool = activeTool, allowsEditing {
                 HStack(spacing: 8) {
                     Label(
                         tool.placementInstruction,
@@ -828,10 +935,12 @@ private struct Plan2DView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
                     .background(.ultraThinMaterial, in: Capsule())
-            } else if activeTool == nil {
+            } else if activeTool == nil && activeHighlight == nil {
                 Label(
-                    "انقر على العنصر لتعديله • اضغط مطولًا واسحب لنقله",
-                    systemImage: "hand.tap.fill"
+                    allowsEditing
+                        ? "انقر على العنصر لتعديله • اضغط مطولًا واسحب لنقله"
+                        : "يمكنك التحريك والتكبير لمراجعة موضع العنصر",
+                    systemImage: allowsEditing ? "hand.tap.fill" : "hand.draw.fill"
                 )
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(.secondary)
@@ -842,9 +951,11 @@ private struct Plan2DView: View {
 
             Spacer()
 
-            HStack {
-                Spacer()
-                editMenu
+            if allowsEditing {
+                HStack {
+                    Spacer()
+                    editMenu
+                }
             }
         }
         .padding(12)
@@ -1100,6 +1211,10 @@ private struct Plan2DView: View {
                 )
             )
             .onChanged { value in
+                guard allowsEditing else {
+                    clearHighlight()
+                    return
+                }
                 switch value {
                 case .first(true):
                     break
@@ -1481,6 +1596,7 @@ private struct Plan2DView: View {
     private var dragGesture: some Gesture {
         DragGesture()
             .onChanged { value in
+                clearHighlight()
                 guard draggedElement == nil else { return }
                 offset = CGSize(
                     width: committedOffset.width + value.translation.width,
@@ -1496,6 +1612,7 @@ private struct Plan2DView: View {
     private var magnificationGesture: some Gesture {
         MagnificationGesture()
             .onChanged { value in
+                clearHighlight()
                 zoom = min(max(committedZoom * value, 0.75), 6)
             }
             .onEnded { _ in
@@ -1506,6 +1623,7 @@ private struct Plan2DView: View {
     private var rotationGesture: some Gesture {
         RotationGesture()
             .onChanged { value in
+                clearHighlight()
                 rotation = committedRotation + value
             }
             .onEnded { _ in
@@ -1541,6 +1659,77 @@ private struct Plan2DView: View {
             committedRotation = .zero
             offset = .zero
             committedOffset = .zero
+        }
+    }
+
+    private func prepareInitialHighlight(in size: CGSize) {
+        guard !didFocusInitialHighlight,
+              size.width > 0,
+              size.height > 0,
+              let initialHighlight,
+              highlightPlanPoint(for: initialHighlight) != nil else {
+            return
+        }
+
+        didFocusInitialHighlight = true
+        activeHighlight = initialHighlight
+        highlightPulse = false
+        focus(on: initialHighlight, in: size)
+        withAnimation(
+            .easeInOut(duration: 0.65)
+                .repeatForever(autoreverses: true)
+        ) {
+            highlightPulse = true
+        }
+    }
+
+    private func clearHighlight() {
+        guard activeHighlight != nil else { return }
+        activeHighlight = nil
+        highlightPulse = false
+    }
+
+    private func focus(
+        on target: Plan2DHighlightTarget,
+        in size: CGSize
+    ) {
+        guard let planPoint = highlightPlanPoint(for: target) else { return }
+        let projection = PlanProjection(project: project, size: size)
+        let canvasPoint = projection.map(planPoint)
+        let targetZoom: CGFloat = 2.4
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let targetOffset = CGSize(
+            width: -(canvasPoint.x - center.x) * targetZoom,
+            height: -(canvasPoint.y - center.y) * targetZoom
+        )
+
+        withAnimation(.easeInOut(duration: 0.35)) {
+            zoom = targetZoom
+            committedZoom = targetZoom
+            rotation = .zero
+            committedRotation = .zero
+            offset = targetOffset
+            committedOffset = targetOffset
+        }
+    }
+
+    private func highlightPlanPoint(
+        for target: Plan2DHighlightTarget
+    ) -> SIMD2<Float>? {
+        switch target {
+        case .electricalPoint(let id):
+            guard let point = project.points.first(where: { $0.id == id }),
+                  point.worldPosition.count >= 3 else {
+                return nil
+            }
+            return SIMD2(point.worldPosition[0], point.worldPosition[2])
+        case .ceilingLight(let id):
+            guard let light = project.ceilingLights?.first(where: {
+                $0.id == id
+            }), light.worldPosition.count >= 3 else {
+                return nil
+            }
+            return SIMD2(light.worldPosition[0], light.worldPosition[2])
         }
     }
 
@@ -2361,6 +2550,52 @@ private struct Plan2DView: View {
                 projection: projection
             )
         }
+
+        if let activeHighlight {
+            drawHighlight(
+                activeHighlight,
+                context: &context,
+                projection: projection
+            )
+        }
+    }
+
+    private func drawHighlight(
+        _ target: Plan2DHighlightTarget,
+        context: inout GraphicsContext,
+        projection: PlanProjection
+    ) {
+        guard let planPoint = highlightPlanPoint(for: target) else { return }
+        let center = projection.map(planPoint)
+        let pulseScale: CGFloat = highlightPulse ? 1.35 : 0.85
+        let radius = (18 * pulseScale) / max(zoom, 0.75)
+        let outerRect = CGRect(
+            x: center.x - radius,
+            y: center.y - radius,
+            width: radius * 2,
+            height: radius * 2
+        )
+        let innerRadius = max(4, radius * 0.38)
+        let innerRect = CGRect(
+            x: center.x - innerRadius,
+            y: center.y - innerRadius,
+            width: innerRadius * 2,
+            height: innerRadius * 2
+        )
+
+        context.fill(
+            Path(ellipseIn: outerRect),
+            with: .color(.orange.opacity(highlightPulse ? 0.18 : 0.34))
+        )
+        context.stroke(
+            Path(ellipseIn: outerRect),
+            with: .color(.red.opacity(0.95)),
+            lineWidth: 3 / max(zoom, 0.75)
+        )
+        context.fill(
+            Path(ellipseIn: innerRect),
+            with: .color(.red.opacity(0.92))
+        )
     }
 
     private func drawGrid(context: inout GraphicsContext, projection: PlanProjection) {
@@ -3691,6 +3926,8 @@ private struct USDZRoomView: UIViewRepresentable {
 
 private struct ScanInformationSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var focusedTarget: Plan2DHighlightTarget?
+
     let project: RoomProject
 
     var body: some View {
@@ -3717,41 +3954,128 @@ private struct ScanInformationSheet: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(project.boq) { line in
-                            HStack {
-                                Label(line.type.title, systemImage: line.type.systemImage)
-                                Spacer()
-                                Text("\(line.count) • \(line.status.title)")
-                                    .foregroundStyle(.secondary)
+                            NavigationLink {
+                                TakeoffElectricalGroupDetailView(
+                                    project: project,
+                                    type: line.type,
+                                    status: line.status
+                                )
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Label(
+                                        line.type.title,
+                                        systemImage: line.type.systemImage
+                                    )
+                                    Spacer()
+                                    VStack(alignment: .trailing, spacing: 3) {
+                                        Text("\(line.count) • \(line.status.title)")
+                                        Text(
+                                            "ارتفاع "
+                                                + electricalTakeoffHeightSummary(
+                                                    project: project,
+                                                    type: line.type,
+                                                    status: line.status
+                                                )
+                                        )
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    }
+                                }
                             }
                         }
+                    }
+                }
+
+                if let objects = project.objects, !objects.isEmpty {
+                    Section("مقاسات الأثاث") {
+                        ForEach(Array(objects.enumerated()), id: \.element.id) {
+                            index, object in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(object.title) \(index + 1)")
+                                    .font(.headline)
+                                Text(
+                                    String(
+                                        format: "%.2f × %.2f × %.2f م",
+                                        object.width,
+                                        object.depth,
+                                        object.height
+                                    )
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                if project.ceilingLightCount > 0 {
+                    Section("إضاءة السقف") {
+                        ceilingLightNavigation(
+                            source: .cameraExisting,
+                            count: (project.ceilingLights ?? []).filter {
+                                $0.resolvedSource == .cameraExisting
+                            }.count
+                        )
+                        ceilingLightNavigation(
+                            source: .planManual,
+                            count: (project.ceilingLights ?? []).filter {
+                                $0.resolvedSource == .planManual
+                            }.count
+                        )
+                        ceilingLightNavigation(
+                            source: .planAutomatic,
+                            count: (project.ceilingLights ?? []).filter {
+                                $0.resolvedSource == .planAutomatic
+                            }.count
+                        )
                     }
                 }
 
                 if !project.points.isEmpty {
                     Section("مراجعة المقاسات") {
                         ForEach(project.points) { point in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Label(point.type.title, systemImage: point.type.systemImage)
-                                    Spacer()
-                                    Text(String(format: "%.2f م", point.heightFromFloor))
+                            Button {
+                                focusedTarget = .electricalPoint(point.id)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Label(
+                                            point.type.title,
+                                            systemImage: point.type.systemImage
+                                        )
+                                        Spacer()
+                                        Text(
+                                            String(
+                                                format: "%.2f م",
+                                                point.heightFromFloor
+                                            )
+                                        )
                                         .monospacedDigit()
-                                }
+                                    }
 
-                                Text(measurementSummary(for: point))
+                                    HStack {
+                                        Text(measurementSummary(for: point))
+                                        Spacer()
+                                        Label("عرض", systemImage: "scope")
+                                    }
                                     .font(.caption)
                                     .foregroundStyle(measurementColor(for: point))
 
-                                if point.type.usesSwitchRules,
-                                   let doorOffset = point.measuredDoorOffset {
-                                    Text(
-                                        "البعد عن الباب: \(String(format: "%.0f", doorOffset * 100)) سم"
-                                    )
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                    if point.type.usesSwitchRules,
+                                       let doorOffset = point.measuredDoorOffset {
+                                        Text(
+                                            "البعد عن الباب: \(String(format: "%.0f", doorOffset * 100)) سم"
+                                        )
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    }
                                 }
+                                .padding(.vertical, 2)
+                                .contentShape(Rectangle())
                             }
-                            .padding(.vertical, 2)
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -3763,8 +4087,32 @@ private struct ScanInformationSheet: View {
                     Button("تم") { dismiss() }
                 }
             }
+            .fullScreenCover(item: $focusedTarget) { target in
+                TakeoffFocusedPlanView(
+                    project: project,
+                    target: target,
+                    title: "مراجعة العنصر"
+                )
+            }
         }
         .environment(\.layoutDirection, .rightToLeft)
+    }
+
+    @ViewBuilder
+    private func ceilingLightNavigation(
+        source: CeilingLightSource,
+        count: Int
+    ) -> some View {
+        if count > 0 {
+            NavigationLink {
+                TakeoffCeilingLightGroupDetailView(
+                    project: project,
+                    source: source
+                )
+            } label: {
+                LabeledContent(source.takeoffTitle, value: "\(count)")
+            }
+        }
     }
 
     private var electricalSettings: ElectricalPlacementSettings {

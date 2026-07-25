@@ -821,6 +821,8 @@ private struct DevicePickerSheet: View {
 
 private struct BOQSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var focusedTarget: Plan2DHighlightTarget?
+
     let project: RoomProject
     let settings: ElectricalPlacementSettings
 
@@ -834,85 +836,214 @@ private struct BOQSheet: View {
                     LabeledContent("نمط العمل", value: settings.designMode.title)
                 }
 
+                if !takeoffSummary.floors.isEmpty {
+                    Section("الأرضيات والأسقف") {
+                        ForEach(Array(takeoffSummary.floors.enumerated()), id: \.element.id) {
+                            index, floor in
+                            LabeledContent {
+                                Text(
+                                    String(
+                                        format: "%.2f × %.2f م • %.2f م²",
+                                        floor.width,
+                                        floor.depth,
+                                        floor.area
+                                    )
+                                )
+                                .monospacedDigit()
+                            } label: {
+                                Text("أرضية/سقف \(index + 1)")
+                            }
+                        }
+                    }
+                }
+
+                if !takeoffSummary.walls.isEmpty {
+                    Section("مقاسات الحوائط") {
+                        ForEach(Array(takeoffSummary.walls.enumerated()), id: \.element.id) {
+                            index, wall in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("حائط \(index + 1)")
+                                        .font(.headline)
+                                    Spacer()
+                                    Text(String(format: "%.2f م²", wall.netArea))
+                                        .font(.headline.monospacedDigit())
+                                }
+                                Text(
+                                    String(
+                                        format: "%.2f × %.2f م • قبل الخصم %.2f م²",
+                                        wall.width,
+                                        wall.height,
+                                        wall.grossArea
+                                    )
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                if wall.openingCount > 0 {
+                                    Text(
+                                        String(
+                                            format: "خصم %d فتحة بمساحة %.2f م²",
+                                            wall.openingCount,
+                                            wall.deductedOpeningArea
+                                        )
+                                    )
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                if !takeoffSummary.openings.isEmpty {
+                    Section("الأبواب والشبابيك والفتحات") {
+                        ForEach(Array(takeoffSummary.openings.enumerated()), id: \.element.id) {
+                            index, opening in
+                            LabeledContent {
+                                Text(
+                                    String(
+                                        format: "%.2f × %.2f م • %.2f م²",
+                                        opening.width,
+                                        opening.height,
+                                        opening.area
+                                    )
+                                )
+                                .monospacedDigit()
+                            } label: {
+                                Text("\(opening.title) \(index + 1)")
+                            }
+                        }
+                    }
+                }
+
+                if let objects = project.objects, !objects.isEmpty {
+                    Section("مقاسات الأثاث") {
+                        ForEach(Array(objects.enumerated()), id: \.element.id) {
+                            index, object in
+                            LabeledContent {
+                                Text(
+                                    String(
+                                        format: "%.2f × %.2f × %.2f م",
+                                        object.width,
+                                        object.depth,
+                                        object.height
+                                    )
+                                )
+                                .monospacedDigit()
+                            } label: {
+                                Text("\(object.title) \(index + 1)")
+                            }
+                        }
+                    }
+                }
+
                 Section("حصر نقاط الكهرباء") {
                     if project.boq.isEmpty {
                         Text("لم تتم إضافة نقاط بعد.")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(project.boq) { line in
-                            HStack {
-                                Label(line.type.title, systemImage: line.type.systemImage)
-                                Spacer()
-                                VStack(alignment: .trailing) {
-                                    Text("\(line.count)")
-                                        .font(.headline.monospacedDigit())
-                                    Text(line.status.title)
-                                        .font(.caption)
+                            NavigationLink {
+                                TakeoffElectricalGroupDetailView(
+                                    project: project,
+                                    type: line.type,
+                                    status: line.status
+                                )
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Label(
+                                        line.type.title,
+                                        systemImage: line.type.systemImage
+                                    )
+                                    Spacer()
+                                    VStack(alignment: .trailing, spacing: 3) {
+                                        Text("\(line.count) • \(line.status.title)")
+                                            .font(.headline.monospacedDigit())
+                                        Text(
+                                            "ارتفاع "
+                                                + electricalTakeoffHeightSummary(
+                                                    project: project,
+                                                    type: line.type,
+                                                    status: line.status
+                                                )
+                                        )
+                                        .font(.caption2)
                                         .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                if existingCeilingLights.count > 0 {
-                    Section("إضاءة السقف الموجودة") {
-                        LabeledContent(
-                            "إجمالي الإضاءة المسجلة بالكاميرا",
-                            value: "\(existingCeilingLights.count)"
-                        )
-                        ForEach(Array(existingCeilingLights.enumerated()), id: \.element.id) {
-                            index, light in
-                            LabeledContent(
-                                "إضاءة سقف \(index + 1)",
-                                value: ceilingLightHeightText(light)
-                            )
-                        }
+                if project.ceilingLightCount > 0 {
+                    Section("إضاءة السقف") {
+                        ceilingLightNavigation(source: .cameraExisting)
+                        ceilingLightNavigation(source: .planManual)
+                        ceilingLightNavigation(source: .planAutomatic)
                     }
                 }
 
                 if !project.points.isEmpty {
                     Section("مراجعة المقاسات") {
                         ForEach(project.points) { point in
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack {
-                                    Label(point.type.title, systemImage: point.type.systemImage)
-                                    Spacer()
-                                    Text(point.status.title)
-                                        .font(.caption.weight(.medium))
-                                        .foregroundStyle(
-                                            point.status == .existing ? .green : .orange
+                            Button {
+                                focusedTarget = .electricalPoint(point.id)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    HStack {
+                                        Label(
+                                            point.type.title,
+                                            systemImage: point.type.systemImage
                                         )
-                                }
+                                        Spacer()
+                                        Text(point.status.title)
+                                            .font(.caption.weight(.medium))
+                                            .foregroundStyle(
+                                                point.status == .existing
+                                                    ? Color.green
+                                                    : Color.orange
+                                            )
+                                    }
 
-                                HStack {
-                                    Text("الارتفاع الفعلي")
-                                    Spacer()
-                                    Text(String(format: "%.2f م", point.heightFromFloor))
+                                    HStack {
+                                        Text("الارتفاع الفعلي")
+                                        Spacer()
+                                        Text(
+                                            String(
+                                                format: "%.2f م",
+                                                point.heightFromFloor
+                                            )
+                                        )
                                         .monospacedDigit()
-                                }
-                                .font(.caption)
+                                    }
+                                    .font(.caption)
 
-                                HStack {
-                                    Text(heightComparison(for: point))
-                                    Spacer()
-                                    if point.wasAutomaticallyAdjusted == true {
-                                        Label("ضبط تلقائي", systemImage: "wand.and.stars")
+                                    HStack {
+                                        Text(heightComparison(for: point))
+                                        Spacer()
+                                        Label(
+                                            "عرض على المخطط",
+                                            systemImage: "scope"
+                                        )
+                                    }
+                                    .font(.caption2)
+                                    .foregroundStyle(comparisonColor(for: point))
+
+                                    if point.type.usesSwitchRules,
+                                       let measured = point.measuredDoorOffset {
+                                        Text(
+                                            "البعد عن الباب: \(String(format: "%.0f", measured * 100)) سم"
+                                        )
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
                                     }
                                 }
-                                .font(.caption2)
-                                .foregroundStyle(comparisonColor(for: point))
-
-                                if point.type.usesSwitchRules,
-                                   let measured = point.measuredDoorOffset {
-                                    Text(
-                                        "البعد عن الباب: \(String(format: "%.0f", measured * 100)) سم"
-                                    )
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                }
+                                .padding(.vertical, 3)
+                                .contentShape(Rectangle())
                             }
-                            .padding(.vertical, 3)
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -924,24 +1055,78 @@ private struct BOQSheet: View {
                     Button("تم") { dismiss() }
                 }
             }
+            .fullScreenCover(item: $focusedTarget) { target in
+                TakeoffFocusedPlanView(
+                    project: project,
+                    target: target,
+                    title: "مراجعة عنصر الكهرباء"
+                )
+            }
         }
         .environment(\.layoutDirection, .rightToLeft)
     }
 
-    private var existingCeilingLights: [CeilingLight] {
-        (project.ceilingLights ?? []).filter(\.isExistingAsBuilt)
+    private var takeoffSummary: RoomTakeoffSummary {
+        RoomTakeoffSummary(project: project)
     }
 
-    private func ceilingLightHeightText(_ light: CeilingLight) -> String {
-        guard light.worldPosition.count >= 2 else { return "موضع غير مكتمل" }
+    private func ceilingLights(
+        source: CeilingLightSource
+    ) -> [CeilingLight] {
+        (project.ceilingLights ?? []).filter {
+            $0.resolvedSource == source
+        }
+    }
+
+    @ViewBuilder
+    private func ceilingLightNavigation(
+        source: CeilingLightSource
+    ) -> some View {
+        let lights = ceilingLights(source: source)
+        if !lights.isEmpty {
+            NavigationLink {
+                TakeoffCeilingLightGroupDetailView(
+                    project: project,
+                    source: source
+                )
+            } label: {
+                HStack {
+                    Label(source.takeoffTitle, systemImage: "light.recessed")
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text("\(lights.count)")
+                            .font(.headline.monospacedDigit())
+                        Text(ceilingLightHeightRange(lights))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func ceilingLightHeightRange(
+        _ lights: [CeilingLight]
+    ) -> String {
         let floorHeight = (project.floors ?? []).map {
             $0.matrix.columns.3.y
         }.min() ?? project.walls.map {
             $0.matrix.columns.3.y - $0.height / 2
         }.min() ?? 0
+        let heights = lights.compactMap { light -> Float? in
+            guard light.worldPosition.count >= 2 else { return nil }
+            return max(0, light.worldPosition[1] - floorHeight)
+        }
+        guard let minimum = heights.min(), let maximum = heights.max() else {
+            return "موضع غير مكتمل"
+        }
+        if abs(maximum - minimum) <= 0.005 {
+            return String(format: "ارتفاع %.2f م", minimum)
+        }
         return String(
-            format: "ارتفاع %.2f م",
-            max(0, light.worldPosition[1] - floorHeight)
+            format: "ارتفاع %.2f–%.2f م",
+            minimum,
+            maximum
         )
     }
 
