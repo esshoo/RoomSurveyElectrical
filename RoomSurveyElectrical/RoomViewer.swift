@@ -1770,6 +1770,7 @@ private struct Plan2DView: View {
                     CeilingLight(
                         layoutID: layout.id,
                         placementMode: .automatic,
+                        source: .planAutomatic,
                         worldPosition: [
                             point.x,
                             reference.ceilingHeight - 0.03,
@@ -1817,6 +1818,7 @@ private struct Plan2DView: View {
 
         let light = CeilingLight(
             placementMode: .manual,
+            source: .planManual,
             worldPosition: [
                 point.x,
                 reference.ceilingHeight - 0.03,
@@ -2551,12 +2553,19 @@ private struct Plan2DView: View {
             Path(ellipseIn: rect),
             with: .color(color.opacity(0.45 + intensity * 0.55))
         )
+        let outlineColor: Color
+        switch light.resolvedSource {
+        case .cameraExisting:
+            outlineColor = .green
+        case .planAutomatic:
+            outlineColor = .blue
+        case .planManual:
+            outlineColor = .white
+        }
         context.stroke(
             Path(ellipseIn: rect),
-            with: .color(
-                light.placementMode == .automatic ? .blue : .white
-            ),
-            lineWidth: 1.5
+            with: .color(outlineColor),
+            lineWidth: light.isExistingAsBuilt ? 2.2 : 1.5
         )
     }
 

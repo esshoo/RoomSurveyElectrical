@@ -1009,6 +1009,15 @@ private struct TakeoffXLSXBuilder {
                     .integer(line.count)
                 ])
             }
+            if room.summary.existingCeilingLightCount > 0 {
+                rows.append([
+                    .text(room.location),
+                    .text(room.scan.name),
+                    .text("إضاءة سقف – كاميرا"),
+                    .text("موجود"),
+                    .integer(room.summary.existingCeilingLightCount)
+                ])
+            }
             if room.summary.manualCeilingLightCount > 0 {
                 rows.append([
                     .text(room.location),

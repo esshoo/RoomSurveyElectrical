@@ -1562,6 +1562,12 @@ struct ScanTakeoffDetailView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    if summary.existingCeilingLightCount > 0 {
+                        LabeledContent(
+                            "إضاءة سقف موجودة – كاميرا",
+                            value: "\(summary.existingCeilingLightCount)"
+                        )
+                    }
                     if summary.manualCeilingLightCount > 0 {
                         LabeledContent(
                             "إضاءة سقف يدوية",

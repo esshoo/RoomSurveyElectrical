@@ -6,6 +6,8 @@ import SwiftUI
 struct ElectricalEditorView: View {
     @State private var project: RoomProject
     @State private var pendingTap: WallTap?
+    @State private var pendingCeilingTap: CeilingTap?
+    @State private var lastAddedCeilingLightID: UUID?
     @State private var showBOQ = false
     @State private var errorMessage: String?
     @State private var placementMessage: String?
@@ -35,7 +37,8 @@ struct ElectricalEditorView: View {
             ElectricalARView(
                 project: project,
                 arSession: arSession,
-                onWallTapped: { pendingTap = $0 }
+                onWallTapped: { pendingTap = $0 },
+                onCeilingTapped: { pendingCeilingTap = $0 }
             )
             .ignoresSafeArea()
 
@@ -53,6 +56,13 @@ struct ElectricalEditorView: View {
                 pendingTap = nil
             }
             .presentationDetents([.medium, .large])
+        }
+        .sheet(item: $pendingCeilingTap) { tap in
+            ExistingCeilingLightPickerSheet {
+                addExistingCeilingLight(at: tap)
+                pendingCeilingTap = nil
+            }
+            .presentationDetents([.medium])
         }
         .sheet(isPresented: $showBOQ) {
             BOQSheet(project: project, settings: settings)
@@ -100,9 +110,13 @@ struct ElectricalEditorView: View {
             VStack(alignment: .trailing, spacing: 3) {
                 Text("توزيع الكهرباء")
                     .font(.headline)
-                Text("\(project.points.count) نقطة • \(settings.designMode.title)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "\(project.points.count) نقطة • "
+                        + "\(existingCeilingLightCount) إضاءة سقف موجودة • "
+                        + settings.designMode.title
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
@@ -127,14 +141,17 @@ struct ElectricalEditorView: View {
     }
 
     private var instructionText: String {
+        let wallInstruction: String
         switch settings.designMode {
         case .existing:
-            "اضغط مكان العنصر الحقيقي على الحائط؛ لن يتم تغيير الارتفاع أو الموضع."
+            wallInstruction = "اضغط مكان العنصر الحقيقي على الحائط؛ لن يتم تغيير الارتفاع أو الموضع."
         case .newInstallation:
-            "اضغط الحائط واختر العنصر؛ سيطبق التطبيق الارتفاع القياسي وبعد الباب تلقائيًا."
+            wallInstruction = "اضغط الحائط واختر العنصر؛ سيطبق التطبيق الارتفاع القياسي وبعد الباب تلقائيًا."
         case .shopDrawing:
-            "اضغط الحائط، ثم اختر موجود لحفظ الواقع أو مقترح لتطبيق قواعد التأسيس."
+            wallInstruction = "اضغط الحائط، ثم اختر موجود لحفظ الواقع أو مقترح لتطبيق قواعد التأسيس."
         }
+        return wallInstruction
+            + " اضغط مباشرة على السقف لتسجيل إضاءة سقف موجودة فعليًا."
     }
 
     private var instructionIcon: String {
@@ -158,10 +175,14 @@ struct ElectricalEditorView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .disabled(project.points.isEmpty)
+            .disabled(project.points.isEmpty && lastAddedCeilingLightID == nil)
         }
         .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var existingCeilingLightCount: Int {
+        (project.ceilingLights ?? []).filter(\.isExistingAsBuilt).count
     }
 
     @ViewBuilder
@@ -297,6 +318,7 @@ struct ElectricalEditorView: View {
     }
 
     private func addPoint(_ draft: PlacementDraft) {
+        lastAddedCeilingLightID = nil
         let type = draft.type
         let status = draft.status
         let tap = draft.tap
@@ -406,7 +428,37 @@ struct ElectricalEditorView: View {
         persistProject()
     }
 
+    private func addExistingCeilingLight(at tap: CeilingTap) {
+        guard tap.worldPosition.count >= 3 else {
+            errorMessage = "تعذر تحديد موضع إضاءة السقف. حاول الضغط على السقف مرة أخرى."
+            return
+        }
+
+        let light = CeilingLight(
+            placementMode: .manual,
+            source: .cameraExisting,
+            worldPosition: tap.worldPosition
+        )
+        var lights = project.ceilingLights ?? []
+        lights.append(light)
+        project.ceilingLights = lights
+        lastAddedCeilingLightID = light.id
+        placementMessage = "تم حفظ إضاءة السقف كعنصر موجود فعليًا – As-Built."
+        persistProject()
+    }
+
     private func removeLastPoint() {
+        if let lightID = lastAddedCeilingLightID,
+           let lightIndex = project.ceilingLights?.firstIndex(where: {
+               $0.id == lightID
+           }) {
+            project.ceilingLights?.remove(at: lightIndex)
+            lastAddedCeilingLightID = nil
+            placementMessage = "تم التراجع عن إضاءة السقف الموجودة."
+            persistProject()
+            return
+        }
+
         guard let removedPoint = project.points.popLast() else { return }
         project.normalizeElectricalGroups()
         placementMessage = "تم التراجع عن \(removedPoint.type.title)."
@@ -577,6 +629,56 @@ private extension SurfaceSnapshot.Kind {
         case .window: "فتحة الشباك"
         case .opening: "الفتحة المعمارية"
         }
+    }
+}
+
+private struct ExistingCeilingLightPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let onConfirm: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("طريقة الإضافة") {
+                    Label("موجود – As-Built", systemImage: "scope")
+                        .font(.headline)
+                        .foregroundStyle(.green)
+                    Text(
+                        "هذه الإضافة توثّق لمبة سقف موجودة فعليًا في الموقع. "
+                            + "لن تُعامل كتأسيس جديد أو Shop Drawing، ولن تدخل "
+                            + "ضمن التوزيع اليدوي أو التلقائي في مخطط 2D."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section("إضاءة السقف") {
+                    Button {
+                        onConfirm()
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Label(
+                                "حفظ إضاءة سقف موجودة",
+                                systemImage: "lightbulb.fill"
+                            )
+                            Spacer()
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                }
+            }
+            .navigationTitle("إضافة إضاءة سقف")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+            }
+        }
+        .environment(\.layoutDirection, .rightToLeft)
     }
 }
 
@@ -753,6 +855,22 @@ private struct BOQSheet: View {
                     }
                 }
 
+                if existingCeilingLights.count > 0 {
+                    Section("إضاءة السقف الموجودة") {
+                        LabeledContent(
+                            "إجمالي الإضاءة المسجلة بالكاميرا",
+                            value: "\(existingCeilingLights.count)"
+                        )
+                        ForEach(Array(existingCeilingLights.enumerated()), id: \.element.id) {
+                            index, light in
+                            LabeledContent(
+                                "إضاءة سقف \(index + 1)",
+                                value: ceilingLightHeightText(light)
+                            )
+                        }
+                    }
+                }
+
                 if !project.points.isEmpty {
                     Section("مراجعة المقاسات") {
                         ForEach(project.points) { point in
@@ -808,6 +926,23 @@ private struct BOQSheet: View {
             }
         }
         .environment(\.layoutDirection, .rightToLeft)
+    }
+
+    private var existingCeilingLights: [CeilingLight] {
+        (project.ceilingLights ?? []).filter(\.isExistingAsBuilt)
+    }
+
+    private func ceilingLightHeightText(_ light: CeilingLight) -> String {
+        guard light.worldPosition.count >= 2 else { return "موضع غير مكتمل" }
+        let floorHeight = (project.floors ?? []).map {
+            $0.matrix.columns.3.y
+        }.min() ?? project.walls.map {
+            $0.matrix.columns.3.y - $0.height / 2
+        }.min() ?? 0
+        return String(
+            format: "ارتفاع %.2f م",
+            max(0, light.worldPosition[1] - floorHeight)
+        )
     }
 
     private func targetHeight(for point: ElectricalPoint) -> Float {
