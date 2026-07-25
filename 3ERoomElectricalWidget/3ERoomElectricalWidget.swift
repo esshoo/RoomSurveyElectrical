@@ -339,7 +339,7 @@ struct RecentProjectsHomeWidget: Widget {
         ) { entry in
             RecentProjectsWidgetView(entry: entry)
         }
-        .configurationDisplayName("آخر مشروعات 3E")
+        .configurationDisplayName("3ERoomElectrical – آخر المشاريع")
         .description("اعرض آخر المشروعات والمسحات مباشرة على شاشة iPhone.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }

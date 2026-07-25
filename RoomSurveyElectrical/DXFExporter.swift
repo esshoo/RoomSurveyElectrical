@@ -92,6 +92,9 @@ extension ProjectExportService {
         )
     }
 
+    /// Compatibility alias retained for old callers and saved export records.
+    /// Paper-space layouts are intentionally no longer emitted. Every drawing
+    /// is written as real geometry in Model Space only.
     static func makeLayoutDXF(
         title: String,
         rooms: [ExportRoomRecord],
@@ -99,7 +102,7 @@ extension ProjectExportService {
     ) throws -> URL {
         guard !rooms.isEmpty else { throw ProjectExportError.noRooms }
         let data = try validatedDXFData(
-            DXFPlanBuilder.layouts(
+            DXFPlanBuilder.combined(
                 title: title,
                 rooms: rooms,
                 metadata: metadata
@@ -107,7 +110,7 @@ extension ProjectExportService {
         )
         return try writeTemporaryFile(
             data,
-            name: "\(sanitized(title))-Layouts-2D",
+            name: "\(sanitized(title))-ModelSpace-2D",
             extension: "dxf"
         )
     }
@@ -1699,9 +1702,15 @@ private struct DXFWriter {
         pair(5, nextEntityHandle())
         pair(330, entityOwnerHandle)
         pair(100, "AcDbEntity")
-        pair(67, paperSpaceEntity ? 1 : 0)
-        if let entityLayoutName {
-            pair(410, entityLayoutName)
+        // Group 67 is optional. Omitting it is the canonical default for
+        // Model Space and avoids readers that incorrectly classify an
+        // explicit zero as Paper Space. Layout name 410 is only written for
+        // genuine Paper Space entities.
+        if paperSpaceEntity {
+            pair(67, 1)
+            if let entityLayoutName {
+                pair(410, entityLayoutName)
+            }
         }
         pair(8, layer)
         pair(100, subclass)

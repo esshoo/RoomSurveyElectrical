@@ -1,4 +1,4 @@
-# 3ERoomElectrical v1.9.2 (Build 19)
+# 3ERoomElectrical v1.9.3 Build 20
 
 ## Important upgrade cleanup
 
@@ -107,3 +107,12 @@ The source has passed:
 - ZIP integrity validation
 
 A full Xcode/iOS build must still be run by GitHub Actions or Xcode because this preparation environment is not macOS.
+
+## v1.9.3 changes
+
+- DXF export is Model Space only; Paper Space/Layout export is disabled.
+- The legacy Layout export function now emits the combined Model Space drawing.
+- Model entities omit optional group code 67 and do not carry Paper Space tags.
+- The export validator rejects every Paper Space entity.
+- Widget gallery name now matches the application name.
+- `Tools/inspect-signed-ipa.py` diagnoses widget loss during signing.

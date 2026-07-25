@@ -126,6 +126,10 @@ def main() -> int:
         errors.append(
             f"{len(paper_after_model)} paper-space entities appear after model entities"
         )
+    if paper:
+        errors.append(
+            f"{len(paper)} paper-space entities exist; this build must export Model Space only"
+        )
 
     for record in model:
         layout = record.first(410)

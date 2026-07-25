@@ -8,6 +8,7 @@ enum DXFCompatibilityError: LocalizedError {
     case missingModelEntities
     case paperSpaceEntityInBlocks(String)
     case paperEntityAfterModelEntity
+    case paperSpaceNotSupported(String)
     case invalidEntity(type: String, missingCode: String)
     case duplicateHandle(String)
     case stringTooLong(code: Int)
@@ -28,6 +29,8 @@ enum DXFCompatibilityError: LocalizedError {
             "تعذر إنشاء DXF لأن كيان Paper Space من النوع \(type) كُتب داخل BLOCKS بدل ENTITIES."
         case .paperEntityAfterModelEntity:
             "تعذر إنشاء DXF لأن ترتيب كيانات Paper Space وModel Space غير متوافق."
+        case .paperSpaceNotSupported(let type):
+            "تعذر إنشاء DXF لأن كيان \(type) كُتب في Paper Space. التصدير الحالي يجب أن يكون Model Space فقط."
         case .invalidEntity(let type, let missingCode):
             "تعذر إنشاء DXF لأن كيان \(type) يفتقد \(missingCode)."
         case .duplicateHandle(let handle):
@@ -83,6 +86,7 @@ enum DXFCompatibilityValidator {
         var sections: [String] = []
         var currentSection: String?
         var sawModelBlockRecord = false
+        var modelBlockRecordHandle: String?
         var sawModelBlock = false
         var modelEntityCount = 0
         var reachedModelEntities = false
@@ -154,8 +158,8 @@ enum DXFCompatibilityValidator {
                 let paperSpace = currentRecordPairs.first {
                     $0.code == 67
                 }.flatMap { Int($0.value) } == 1
-                let layoutName = currentRecordPairs.first {
-                    $0.code == 410
+                let ownerHandle = currentRecordPairs.first {
+                    $0.code == 330
                 }?.value
 
                 if currentSection == "BLOCKS", paperSpace {
@@ -164,40 +168,43 @@ enum DXFCompatibilityValidator {
                 }
 
                 if currentSection == "ENTITIES" {
-                    guard let layoutName, !layoutName.isEmpty else {
-                        throw DXFCompatibilityError.invalidEntity(
-                            type: upperType,
-                            missingCode: "layout name (410)"
-                        )
-                    }
                     if paperSpace {
                         if reachedModelEntities {
                             throw DXFCompatibilityError
                                 .paperEntityAfterModelEntity
                         }
-                    } else {
-                        reachedModelEntities = true
-                        modelEntityCount += 1
-                        guard layoutName.caseInsensitiveCompare("Model")
-                                == .orderedSame else {
-                            throw DXFCompatibilityError.invalidEntity(
-                                type: upperType,
-                                missingCode: "Model layout tag (410)"
-                            )
-                        }
+                        throw DXFCompatibilityError
+                            .paperSpaceNotSupported(upperType)
+                    }
+
+                    reachedModelEntities = true
+                    modelEntityCount += 1
+                    if let modelBlockRecordHandle,
+                       ownerHandle?.caseInsensitiveCompare(
+                           modelBlockRecordHandle
+                       ) != .orderedSame {
+                        throw DXFCompatibilityError.invalidEntity(
+                            type: upperType,
+                            missingCode: "Model Space owner (330)"
+                        )
                     }
                 }
             }
 
             if upperType == "BLOCK_RECORD",
                currentRecordPairs.contains(where: {
-                   $0.code == 2 && $0.value == "*Model_Space"
+                   $0.code == 2
+                       && $0.value.caseInsensitiveCompare("*MODEL_SPACE")
+                           == .orderedSame
                }) {
                 sawModelBlockRecord = true
+                modelBlockRecordHandle = handle
             }
             if upperType == "BLOCK",
                currentRecordPairs.contains(where: {
-                   $0.code == 2 && $0.value == "*Model_Space"
+                   $0.code == 2
+                       && $0.value.caseInsensitiveCompare("*MODEL_SPACE")
+                           == .orderedSame
                }) {
                 sawModelBlock = true
             }

@@ -236,20 +236,12 @@ struct ExportCenterView: View {
                         )
                     }
 
-                    exportButton(
-                        "DXF Layouts – متقدم",
-                        subtitle: "الرسم كامل في Model Space • Layout مستقل لكل مساحة",
-                        systemImage: "rectangle.stack.fill",
-                        kind: .layoutDXF,
-                        roomIDs: planRooms.map(\.id),
-                        disabled: planRooms.isEmpty
-                    ) {
-                        try ProjectExportService.makeLayoutDXF(
-                            title: title,
-                            rooms: planRooms,
-                            metadata: exportMetadata
-                        )
-                    }
+                    Label(
+                        "تم إيقاف Paper Space مؤقتًا لضمان أن كل الرسم يظهر داخل Model Space في AutoCAD وباقي البرامج.",
+                        systemImage: "checkmark.shield.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
                 exportButton(
