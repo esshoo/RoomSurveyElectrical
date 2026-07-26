@@ -596,6 +596,12 @@ struct WallPhotoSegment: Codable, Identifiable, Equatable {
     var photoID: UUID?
     var qualityScore: Float?
     var capturedAt: Date?
+    var needsRecaptureValue: Bool?
+
+    var needsRecapture: Bool {
+        get { needsRecaptureValue ?? false }
+        set { needsRecaptureValue = newValue ? true : nil }
+    }
 
     init(
         id: UUID = UUID(),
@@ -611,7 +617,8 @@ struct WallPhotoSegment: Codable, Identifiable, Equatable {
         state: WallPhotoSegmentState = .pending,
         photoID: UUID? = nil,
         qualityScore: Float? = nil,
-        capturedAt: Date? = nil
+        capturedAt: Date? = nil,
+        needsRecaptureValue: Bool? = nil
     ) {
         self.id = id
         self.wallID = wallID
@@ -627,6 +634,7 @@ struct WallPhotoSegment: Codable, Identifiable, Equatable {
         self.photoID = photoID
         self.qualityScore = qualityScore.map { min(max($0, 0), 1) }
         self.capturedAt = capturedAt
+        self.needsRecaptureValue = needsRecaptureValue
     }
 
     var centerX: Float { (localMinX + localMaxX) / 2 }
@@ -773,9 +781,13 @@ extension RoomProject {
                 normalizedSegment.photoID = nil
                 normalizedSegment.qualityScore = nil
                 normalizedSegment.capturedAt = nil
+                normalizedSegment.needsRecapture = false
                 if normalizedSegment.state == .captured {
                     normalizedSegment.state = .pending
                 }
+            }
+            if normalizedSegment.state != .captured {
+                normalizedSegment.needsRecapture = false
             }
             return normalizedSegment
         }

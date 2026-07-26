@@ -68,6 +68,12 @@ struct WallPhotosTabView: View {
                     onDeletePhoto: { photo in
                         deletePhoto(photo)
                     },
+                    onRebuildComposite: {
+                        try rebuildComposite(for: wall.id)
+                    },
+                    onMarkWeakForRecapture: {
+                        markWeakSegmentsForRecapture(wallID: wall.id)
+                    },
                     onOpenWall2D: {
                         selectedWallID = nil
                         onOpenWall2D(wall.id)
@@ -99,7 +105,7 @@ struct WallPhotosTabView: View {
                 .font(.headline)
             Text(
                 "تظهر هنا صور الحوائط وألوانها وتغطية المسح الفوتوغرافي. "
-                    + "الأجزاء الخضراء مصورة، والرمادية متخطاة، والزرقاء ما زالت مطلوبة."
+                    + "الأجزاء الخضراء جيدة، والبرتقالية تحتاج مراجعة، والزرقاء ما زالت مطلوبة."
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -210,6 +216,32 @@ struct WallPhotosTabView: View {
         persist()
     }
 
+    private func rebuildComposite(for wallID: UUID) throws {
+        project.normalizeWallPhotoMetadata()
+        _ = try WallPhotoCompositeBuilder.rebuildComposite(
+            project: &project,
+            wallID: wallID,
+            performanceProfile: project.electricalSettings?.spatialScanPerformanceProfile
+                ?? .balanced
+        )
+        persist()
+    }
+
+    @discardableResult
+    private func markWeakSegmentsForRecapture(wallID: UUID) -> Int {
+        guard var segments = project.wallPhotoSegments else { return 0 }
+        var markedCount = 0
+        for index in segments.indices
+            where segments[index].wallID == wallID
+                && segments[index].isWeakPhotoCapture {
+            segments[index].needsRecapture = true
+            markedCount += 1
+        }
+        project.wallPhotoSegments = segments
+        if markedCount > 0 { persist() }
+        return markedCount
+    }
+
     private func persist() {
         onProjectChanged()
     }
@@ -316,11 +348,13 @@ private struct WallPhotoCard: View {
                         .foregroundStyle(.primary)
                     Text(
                         String(
-                            format: "%.2f × %.2f م • %@ • صور %d%%",
+                            format: "%.2f × %.2f م • %@ • جيد %d • ضعيف %d • ناقص %d",
                             wall.width,
                             wall.height,
                             appearance.visualMode.title,
-                            Int((segmentCoverage * 100).rounded())
+                            qualitySummary.goodCount,
+                            qualitySummary.weakCount,
+                            qualitySummary.missingCount
                         )
                     )
                     .font(.caption)
@@ -340,9 +374,8 @@ private struct WallPhotoCard: View {
         }
     }
 
-    private var segmentCoverage: Double {
-        guard !segments.isEmpty else { return 0 }
-        return Double(segments.filter { $0.state == .captured }.count) / Double(segments.count)
+    private var qualitySummary: WallPhotoQualitySummary {
+        WallPhotoQualitySummary(segments: segments)
     }
 
     private var previewHeight: CGFloat {
@@ -367,6 +400,8 @@ private struct WallPhotoDetailView: View {
     let onImportPhoto: (Data, WallPhotoSource) -> UUID?
     let onSelectPhoto: (UUID) -> Void
     let onDeletePhoto: (WallPhotoAsset) -> Void
+    let onRebuildComposite: () throws -> Void
+    let onMarkWeakForRecapture: () -> Int
     let onOpenWall2D: () -> Void
     let onOpenWall3D: () -> Void
 
@@ -377,7 +412,9 @@ private struct WallPhotoDetailView: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var selectedPhotoID: UUID?
     @State private var isImporting = false
+    @State private var isRebuildingComposite = false
     @State private var errorMessage: String?
+    @State private var operationMessage: String?
 
     init(
         projectID: UUID,
@@ -393,6 +430,8 @@ private struct WallPhotoDetailView: View {
         onImportPhoto: @escaping (Data, WallPhotoSource) -> UUID?,
         onSelectPhoto: @escaping (UUID) -> Void,
         onDeletePhoto: @escaping (WallPhotoAsset) -> Void,
+        onRebuildComposite: @escaping () throws -> Void,
+        onMarkWeakForRecapture: @escaping () -> Int,
         onOpenWall2D: @escaping () -> Void,
         onOpenWall3D: @escaping () -> Void
     ) {
@@ -409,6 +448,8 @@ private struct WallPhotoDetailView: View {
         self.onImportPhoto = onImportPhoto
         self.onSelectPhoto = onSelectPhoto
         self.onDeletePhoto = onDeletePhoto
+        self.onRebuildComposite = onRebuildComposite
+        self.onMarkWeakForRecapture = onMarkWeakForRecapture
         self.onOpenWall2D = onOpenWall2D
         self.onOpenWall3D = onOpenWall3D
         _displayName = State(initialValue: appearance.displayName)
@@ -460,13 +501,68 @@ private struct WallPhotoDetailView: View {
                 }
 
                 if !segments.isEmpty {
-                    Section("تغطية المسح الفوتوغرافي") {
-                        LabeledContent("الأجزاء", value: "\(capturedSegmentCount) / \(segments.count)")
-                        ProgressView(value: segmentCoverage)
+                    Section("جودة وتغطية الصور") {
+                        LabeledContent(
+                            "التغطية",
+                            value: "\(qualitySummary.capturedCount) / \(qualitySummary.totalCount)"
+                        )
+                        ProgressView(value: qualitySummary.coverage)
                             .tint(.green)
-                        Text("كل صورة ملتقطة مرتبطة بجزء محدد، ويمكن استكمال الأجزاء الناقصة لاحقًا من وضع الكاميرا.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 14) {
+                            qualityBadge(
+                                title: "جيد",
+                                count: qualitySummary.goodCount,
+                                color: .green
+                            )
+                            qualityBadge(
+                                title: "ضعيف",
+                                count: qualitySummary.weakCount,
+                                color: .orange
+                            )
+                            qualityBadge(
+                                title: "ناقص",
+                                count: qualitySummary.missingCount,
+                                color: .blue
+                            )
+                        }
+
+                        ProgressView(value: qualitySummary.qualityCompletion)
+                            .tint(qualitySummary.isReadyForBestExport ? .green : .orange)
+
+                        if qualitySummary.weakCount > 0 {
+                            Button {
+                                let count = onMarkWeakForRecapture()
+                                operationMessage = count > 0
+                                    ? "تم تحديد \(count) جزء لإعادة التصوير. عند فتح المسح الفوتوغرافي سيبحث التطبيق عن هذه الأجزاء فقط مع أي أجزاء ناقصة."
+                                    : "لا توجد أجزاء ضعيفة جديدة لإعادة تصويرها."
+                            } label: {
+                                Label(
+                                    "إعادة تصوير الأجزاء الضعيفة فقط",
+                                    systemImage: "camera.metering.partial"
+                                )
+                            }
+                        }
+
+                        if qualitySummary.capturedCount > 0 {
+                            Button(action: rebuildComposite) {
+                                Label(
+                                    "إعادة بناء وتحسين صورة الحائط",
+                                    systemImage: "wand.and.stars"
+                                )
+                            }
+                            .disabled(isRebuildingComposite)
+
+                            if isRebuildingComposite {
+                                ProgressView("جاري توحيد الألوان ودمج الحواف...")
+                            }
+                        }
+
+                        Text(
+                            "التحسين يطبق على الصورة المركبة فقط؛ صور المربعات الأصلية تبقى محفوظة دون تعديل."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                 }
 
@@ -591,17 +687,49 @@ private struct WallPhotoDetailView: View {
             } message: {
                 Text(errorMessage ?? "")
             }
+            .alert("صور الحائط", isPresented: Binding(
+                get: { operationMessage != nil },
+                set: { if !$0 { operationMessage = nil } }
+            )) {
+                Button("حسنًا", role: .cancel) {}
+            } message: {
+                Text(operationMessage ?? "")
+            }
         }
         .environment(\.layoutDirection, .rightToLeft)
     }
 
-    private var capturedSegmentCount: Int {
-        segments.filter { $0.state == .captured }.count
+    private var qualitySummary: WallPhotoQualitySummary {
+        WallPhotoQualitySummary(segments: segments)
     }
 
-    private var segmentCoverage: Double {
-        guard !segments.isEmpty else { return 0 }
-        return Double(capturedSegmentCount) / Double(segments.count)
+    private func qualityBadge(
+        title: String,
+        count: Int,
+        color: Color
+    ) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text("\(title): \(count)")
+                .font(.caption.weight(.semibold))
+        }
+    }
+
+    private func rebuildComposite() {
+        guard !isRebuildingComposite else { return }
+        isRebuildingComposite = true
+        Task { @MainActor in
+            await Task.yield()
+            defer { isRebuildingComposite = false }
+            do {
+                try onRebuildComposite()
+                operationMessage = "تمت إعادة بناء صورة الحائط مع توحيد الإضاءة والألوان وتنعيم الفواصل بين الأجزاء."
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private var primaryPhoto: WallPhotoAsset? {
@@ -830,7 +958,8 @@ struct WallElevationPreview: View {
                 ).insetBy(dx: 1.5, dy: 1.5)
                 let color: Color
                 switch segment.state {
-                case .captured: color = .green
+                case .captured:
+                    color = segment.isWeakPhotoCapture ? .orange : .green
                 case .skipped: color = .gray
                 case .pending: color = .blue
                 }

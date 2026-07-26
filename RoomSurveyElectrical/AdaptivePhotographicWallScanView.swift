@@ -279,11 +279,11 @@ struct AdaptivePhotographicWallScanView: View {
     private var totalCount: Int { segments.count }
 
     private var capturedCount: Int {
-        segments.filter { $0.state == .captured }.count
+        segments.filter(\.isPhotoCaptureSatisfied).count
     }
 
     private var remainingCount: Int {
-        segments.filter { $0.state != .captured }.count
+        segments.filter { !$0.isPhotoCaptureSatisfied }.count
     }
 
     private var coverage: Double {
@@ -332,17 +332,15 @@ struct AdaptivePhotographicWallScanView: View {
         guard let segmentIndex = project.wallPhotoSegments?.firstIndex(where: {
             $0.id == segmentID
         }), let segment = project.wallPhotoSegments?[segmentIndex],
-              segment.state != .captured else {
+              !segment.isPhotoCaptureSatisfied else {
             return
         }
 
         do {
-            if let oldPhotoID = segment.photoID,
-               let oldPhoto = project.wallPhotos?.first(where: { $0.id == oldPhotoID }) {
-                WallPhotoStorage.delete(projectID: project.id, asset: oldPhoto)
-                project.wallPhotos?.removeAll { $0.id == oldPhotoID }
-            }
-
+            let combinedQualityScore = WallPhotoQualityAnalyzer.combinedCaptureScore(
+                geometricScore: qualityScore,
+                jpegData: jpegData
+            )
             let asset = try WallPhotoStorage.importImage(
                 data: jpegData,
                 projectID: project.id,
@@ -356,12 +354,13 @@ struct AdaptivePhotographicWallScanView: View {
             project.wallPhotos = photos
             project.wallPhotoSegments?[segmentIndex].state = .captured
             project.wallPhotoSegments?[segmentIndex].photoID = asset.id
-            project.wallPhotoSegments?[segmentIndex].qualityScore = qualityScore
+            project.wallPhotoSegments?[segmentIndex].qualityScore = combinedQualityScore
             project.wallPhotoSegments?[segmentIndex].capturedAt = Date()
+            project.wallPhotoSegments?[segmentIndex].needsRecapture = false
             dirtyCompositeWallIDs.insert(segment.wallID)
 
             let wallIsComplete = project.photographicSegments(for: segment.wallID)
-                .allSatisfy { $0.state == .captured }
+                .allSatisfy(\.isPhotoCaptureSatisfied)
             if wallIsComplete {
                 try rebuildComposite(for: segment.wallID)
             }
@@ -640,7 +639,9 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
                     let color: UIColor
                     switch segment.state {
                     case .captured:
-                        color = UIColor.systemGreen.withAlphaComponent(0.12)
+                        color = segment.needsRecapture
+                            ? UIColor.systemOrange.withAlphaComponent(0.20)
+                            : UIColor.systemGreen.withAlphaComponent(0.12)
                     case .skipped:
                         color = UIColor.systemGray.withAlphaComponent(0.08)
                     case .pending:
@@ -665,7 +666,11 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
                         to: node,
                         width: segment.width,
                         height: segment.height,
-                        color: isActive ? .systemYellow : (segment.state == .captured ? .systemGreen : .systemCyan),
+                        color: isActive
+                            ? .systemYellow
+                            : (segment.needsRecapture
+                                ? .systemOrange
+                                : (segment.state == .captured ? .systemGreen : .systemCyan)),
                         thickness: isActive ? 0.018 : 0.006
                     )
                 }
@@ -675,7 +680,7 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
 
         private var guideSignature: String {
             let segmentState = parent.project.wallPhotoSegments?.map {
-                "\($0.id.uuidString):\($0.state.rawValue)"
+                "\($0.id.uuidString):\($0.state.rawValue):\($0.needsRecapture)"
             }.joined(separator: "|") ?? ""
             return segmentState + "#\(currentActiveSegmentID?.uuidString ?? "none")"
         }
@@ -699,7 +704,7 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
             lastEvaluationTime = now
 
             let pending = (parent.project.wallPhotoSegments ?? []).filter {
-                $0.state != .captured
+                !$0.isPhotoCaptureSatisfied
             }
             guard !pending.isEmpty else {
                 currentActiveSegmentID = nil
