@@ -104,6 +104,7 @@ struct ElectricalPlacementSettings: Codable, Equatable {
     var lowCurrentHighHeightMetersValue: Double?
     var splitAirConditionerCeilingOffsetMetersValue: Double?
     var windowAirConditionerHeightMetersValue: Double?
+    var keepScreenAwakeDuringSpatialScanValue: Bool?
 
     var doorSuggestionMinimumMeters: Double {
         get { doorSuggestionMinimumMetersValue ?? 0.20 }
@@ -170,6 +171,11 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         set { windowAirConditionerHeightMetersValue = max(0, newValue) }
     }
 
+    var keepScreenAwakeDuringSpatialScan: Bool {
+        get { keepScreenAwakeDuringSpatialScanValue ?? true }
+        set { keepScreenAwakeDuringSpatialScanValue = newValue }
+    }
+
     static let standard = ElectricalPlacementSettings(
         switchHeightMeters: 1.20,
         socketHeightMeters: 0.50,
@@ -189,7 +195,8 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         lowCurrentLowHeightMetersValue: 0.50,
         lowCurrentHighHeightMetersValue: 1.20,
         splitAirConditionerCeilingOffsetMetersValue: 0.30,
-        windowAirConditionerHeightMetersValue: 1.60
+        windowAirConditionerHeightMetersValue: 1.60,
+        keepScreenAwakeDuringSpatialScanValue: true
     )
 }
 

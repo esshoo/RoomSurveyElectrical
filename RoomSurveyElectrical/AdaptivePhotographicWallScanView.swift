@@ -58,6 +58,7 @@ struct AdaptivePhotographicWallScanView: View {
     @State private var autoCaptureEnabled = true
     @State private var errorMessage: String?
     @State private var isFinishing = false
+    @State private var dirtyCompositeWallIDs: Set<UUID> = []
 
     var body: some View {
         ZStack {
@@ -301,6 +302,13 @@ struct AdaptivePhotographicWallScanView: View {
             }
             project.wallPhotoSegments = restored
         }
+        dirtyCompositeWallIDs = Set(
+            project.walls.compactMap { wall in
+                project.photographicSegments(for: wall.id).contains {
+                    $0.state == .captured && $0.photoID != nil
+                } ? wall.id : nil
+            }
+        )
         var progress = project.photographicScanProgress ?? WallPhotographicScanProgress()
         progress.startedAt = progress.startedAt ?? Date()
         project.photographicScanProgress = progress
@@ -340,13 +348,16 @@ struct AdaptivePhotographicWallScanView: View {
             project.wallPhotoSegments?[segmentIndex].photoID = asset.id
             project.wallPhotoSegments?[segmentIndex].qualityScore = qualityScore
             project.wallPhotoSegments?[segmentIndex].capturedAt = Date()
+            dirtyCompositeWallIDs.insert(segment.wallID)
 
-            try WallPhotoCompositeBuilder.rebuildComposite(
-                project: &project,
-                wallID: segment.wallID
-            )
+            let wallIsComplete = project.photographicSegments(for: segment.wallID)
+                .allSatisfy { $0.state == .captured }
+            if wallIsComplete {
+                try rebuildComposite(for: segment.wallID)
+            }
 
             if remainingCount == 0 {
+                try rebuildDirtyComposites()
                 var progress = project.photographicScanProgress ?? WallPhotographicScanProgress()
                 progress.completedAt = Date()
                 project.photographicScanProgress = progress
@@ -360,19 +371,39 @@ struct AdaptivePhotographicWallScanView: View {
     private func finishAndClose() {
         guard !isFinishing else { return }
         isFinishing = true
-        if remainingCount == 0 {
-            var progress = project.photographicScanProgress ?? WallPhotographicScanProgress()
-            progress.completedAt = Date()
-            project.photographicScanProgress = progress
+        do {
+            try rebuildDirtyComposites()
+            if remainingCount == 0 {
+                var progress = project.photographicScanProgress ?? WallPhotographicScanProgress()
+                progress.completedAt = Date()
+                project.photographicScanProgress = progress
+            }
+            try ProjectRepository.save(project)
+            onClose()
+        } catch {
+            isFinishing = false
+            errorMessage = error.localizedDescription
         }
-        persist()
-        onClose()
+    }
+
+    private func rebuildComposite(for wallID: UUID) throws {
+        guard dirtyCompositeWallIDs.contains(wallID) else { return }
+        try WallPhotoCompositeBuilder.rebuildComposite(
+            project: &project,
+            wallID: wallID
+        )
+        dirtyCompositeWallIDs.remove(wallID)
+    }
+
+    private func rebuildDirtyComposites() throws {
+        for wallID in Array(dirtyCompositeWallIDs) {
+            try rebuildComposite(for: wallID)
+        }
     }
 
     private func persist() {
         do {
             try ProjectRepository.save(project)
-            onProjectChanged()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -440,8 +471,10 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
         let sceneView = ARSCNView(frame: .zero)
         sceneView.session = arSession
         sceneView.scene = SCNScene()
-        sceneView.automaticallyUpdatesLighting = true
-        sceneView.antialiasingMode = .multisampling4X
+        sceneView.automaticallyUpdatesLighting = false
+        sceneView.antialiasingMode = .none
+        sceneView.preferredFramesPerSecond = 30
+        sceneView.contentScaleFactor = min(UIScreen.main.scale, 2)
         sceneView.backgroundColor = .black
         context.coordinator.sceneView = sceneView
         context.coordinator.rebuildGuideNodes()
@@ -476,6 +509,8 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
         private var lastCapturedSegmentID: UUID?
         private var captureInProgress = false
         private var lastGuidance = AdaptivePhotoScanGuidance.searching
+        private var lastThermalState = ProcessInfo.processInfo.thermalState
+        private static let imageContext = CIContext(options: nil)
 
         init(parent: AdaptivePhotographicWallScanARView) {
             self.parent = parent
@@ -486,11 +521,7 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
         func startDisplayLink() {
             guard displayLink == nil else { return }
             let link = CADisplayLink(target: self, selector: #selector(displayLinkTick))
-            link.preferredFrameRateRange = CAFrameRateRange(
-                minimum: 10,
-                maximum: 20,
-                preferred: 15
-            )
+            configureDisplayLink(link, for: ProcessInfo.processInfo.thermalState)
             link.add(to: .main, forMode: .common)
             displayLink = link
         }
@@ -498,6 +529,37 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
         func stopDisplayLink() {
             displayLink?.invalidate()
             displayLink = nil
+        }
+
+        private func configureDisplayLink(
+            _ link: CADisplayLink,
+            for thermalState: ProcessInfo.ThermalState
+        ) {
+            let preferred: Float
+            switch thermalState {
+            case .nominal:
+                preferred = 15
+            case .fair:
+                preferred = 12
+            case .serious, .critical:
+                preferred = 10
+            @unknown default:
+                preferred = 12
+            }
+            link.preferredFrameRateRange = CAFrameRateRange(
+                minimum: 8,
+                maximum: 20,
+                preferred: preferred
+            )
+        }
+
+        private var evaluationInterval: TimeInterval {
+            switch ProcessInfo.processInfo.thermalState {
+            case .nominal: 0.12
+            case .fair: 0.16
+            case .serious, .critical: 0.24
+            @unknown default: 0.16
+            }
         }
 
         func cancelPendingCapture() {
@@ -582,7 +644,14 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
                 return
             }
             let now = CACurrentMediaTime()
-            guard now - lastEvaluationTime >= 0.09 else { return }
+            let thermalState = ProcessInfo.processInfo.thermalState
+            if thermalState != lastThermalState {
+                lastThermalState = thermalState
+                if let displayLink {
+                    configureDisplayLink(displayLink, for: thermalState)
+                }
+            }
+            guard now - lastEvaluationTime >= evaluationInterval else { return }
             lastEvaluationTime = now
 
             let pending = (parent.project.wallPhotoSegments ?? []).filter {
@@ -681,11 +750,12 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
             let screenCenter = CGPoint(x: sceneView.bounds.midX, y: sceneView.bounds.midY)
             let viewArea = max(sceneView.bounds.width * sceneView.bounds.height, 1)
             var candidates: [Candidate] = []
+            let wallsByID = Dictionary(
+                uniqueKeysWithValues: parent.project.walls.map { ($0.id, $0) }
+            )
 
             for segment in segments {
-                guard let wall = parent.project.walls.first(where: {
-                    $0.id == segment.wallID
-                }) else { continue }
+                guard let wall = wallsByID[segment.wallID] else { continue }
                 let worldCorners = segmentWorldCorners(segment: segment, wall: wall)
                 let projected3D = worldCorners.map {
                     sceneView.projectPoint(SCNVector3($0.x, $0.y, $0.z))
@@ -1017,7 +1087,7 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
             let extent = output.extent.integral
             guard extent.width >= 96,
                   extent.height >= 96,
-                  let correctedCG = CIContext(options: nil).createCGImage(output, from: extent) else {
+                  let correctedCG = Self.imageContext.createCGImage(output, from: extent) else {
                 return nil
             }
             return UIImage(cgImage: correctedCG)

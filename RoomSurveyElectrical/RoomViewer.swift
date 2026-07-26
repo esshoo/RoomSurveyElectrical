@@ -205,6 +205,16 @@ struct RoomViewerView: View {
         }
     }
 
+    private var effectiveLayers: ViewerLayerVisibility {
+        var resolved = layers
+        if layers.wallPhotos,
+           project.hasCapturedWallPhotoAppearance,
+           !project.showsFurnitureWithWallPhotos {
+            resolved.furniture = false
+        }
+        return resolved
+    }
+
     @ViewBuilder
     private var model3D: some View {
         if let url = try? ProjectRepository.fileURL(
@@ -214,7 +224,7 @@ struct RoomViewerView: View {
             USDZRoomView(
                 url: url,
                 project: project,
-                layers: layers,
+                layers: effectiveLayers,
                 focusedWallID: focusedWallID
             )
                 .ignoresSafeArea(edges: .bottom)
@@ -3687,10 +3697,11 @@ private struct USDZRoomView: UIViewRepresentable {
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView(frame: .zero)
         view.backgroundColor = .secondarySystemGroupedBackground
-        view.antialiasingMode = .multisampling4X
+        view.antialiasingMode = .multisampling2X
         view.autoenablesDefaultLighting = true
         view.allowsCameraControl = true
-        view.rendersContinuously = true
+        view.preferredFramesPerSecond = 30
+        view.rendersContinuously = false
         context.coordinator.loadScene(into: view)
 
         let doubleTap = UITapGestureRecognizer(

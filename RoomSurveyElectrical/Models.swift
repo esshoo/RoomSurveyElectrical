@@ -641,19 +641,27 @@ struct WallPhotographicScanProgress: Codable, Equatable {
     var promptedAfterRoomScan: Bool
     var startedAt: Date?
     var completedAt: Date?
+    var showsFurnitureWithWallPhotosValue: Bool?
+
+    var showsFurnitureWithWallPhotos: Bool {
+        get { showsFurnitureWithWallPhotosValue ?? true }
+        set { showsFurnitureWithWallPhotosValue = newValue }
+    }
 
     init(
         targetSegmentWidthMeters: Float = 1.35,
         targetSegmentHeightMeters: Float = 1.20,
         promptedAfterRoomScan: Bool = false,
         startedAt: Date? = nil,
-        completedAt: Date? = nil
+        completedAt: Date? = nil,
+        showsFurnitureWithWallPhotosValue: Bool? = nil
     ) {
         self.targetSegmentWidthMeters = min(max(targetSegmentWidthMeters, 0.55), 2.50)
         self.targetSegmentHeightMeters = min(max(targetSegmentHeightMeters, 0.55), 2.50)
         self.promptedAfterRoomScan = promptedAfterRoomScan
         self.startedAt = startedAt
         self.completedAt = completedAt
+        self.showsFurnitureWithWallPhotosValue = showsFurnitureWithWallPhotosValue
     }
 }
 
@@ -861,6 +869,22 @@ extension RoomProject {
             return photos.first
         }
         return photos.first { $0.id == primaryID } ?? photos.first
+    }
+
+    var showsFurnitureWithWallPhotos: Bool {
+        get { photographicScanProgress?.showsFurnitureWithWallPhotos ?? true }
+        set {
+            var progress = photographicScanProgress ?? WallPhotographicScanProgress()
+            progress.showsFurnitureWithWallPhotos = newValue
+            photographicScanProgress = progress
+        }
+    }
+
+    var hasCapturedWallPhotoAppearance: Bool {
+        (wallAppearances ?? []).contains { appearance in
+            appearance.visualMode == .capturedPhotos
+                && primaryPhoto(for: appearance.wallID) != nil
+        }
     }
 
     @discardableResult

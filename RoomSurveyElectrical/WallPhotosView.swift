@@ -28,6 +28,8 @@ struct WallPhotosTabView: View {
                             photo: project.primaryPhoto(for: wall.id),
                             segments: project.photographicSegments(for: wall.id),
                             surfaces: projectedSurfaces(on: wall),
+                            furniture: projectedFurniture(on: wall),
+                            showFurnitureOverlay: project.showsFurnitureWithWallPhotos,
                             points: project.points.filter { $0.wallID == wall.id }
                         )
                     }
@@ -51,6 +53,8 @@ struct WallPhotosTabView: View {
                     segments: project.photographicSegments(for: wall.id),
                     points: project.points.filter { $0.wallID == wall.id },
                     surfaces: projectedSurfaces(on: wall),
+                    furniture: projectedFurniture(on: wall),
+                    showFurnitureOverlay: project.showsFurnitureWithWallPhotos,
                     onSaveAppearance: { updated in
                         updateAppearance(updated)
                     },
@@ -100,6 +104,28 @@ struct WallPhotosTabView: View {
             )
             .font(.caption.weight(.medium))
             .foregroundStyle(.blue)
+
+            Divider()
+
+            Toggle(
+                "إظهار مجسمات الفرش فوق صور الحوائط",
+                isOn: Binding(
+                    get: { project.showsFurnitureWithWallPhotos },
+                    set: { newValue in
+                        project.showsFurnitureWithWallPhotos = newValue
+                        persist()
+                    }
+                )
+            )
+            .font(.subheadline.weight(.semibold))
+
+            Text(
+                project.showsFurnitureWithWallPhotos
+                    ? "سيظهر الفرش الذي اكتشفه RoomPlan فوق معاينة الصور وفي 3D. أوقفه إذا كانت الصور نفسها تحتوي على الفرش وتريد منع التكرار."
+                    : "سيُخفى مجسم الفرش عند عرض صور الحوائط، بينما تبقى الحوائط والفتحات والكهرباء ظاهرة."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -180,12 +206,7 @@ struct WallPhotosTabView: View {
     }
 
     private func persist() {
-        do {
-            try ProjectRepository.save(project)
-            onProjectChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        onProjectChanged()
     }
 
     private func projectedSurfaces(on wall: WallSnapshot) -> [WallPhotoSurfaceProjection] {
@@ -205,6 +226,56 @@ struct WallPhotosTabView: View {
             )
         }
     }
+
+    private func projectedFurniture(on wall: WallSnapshot) -> [WallPhotoFurnitureProjection] {
+        let inverseWall = simd_inverse(wall.matrix)
+        return (project.objects ?? []).compactMap { object in
+            let halfWidth = object.width / 2
+            let halfHeight = object.height / 2
+            let halfDepth = object.depth / 2
+            let localCorners: [SIMD4<Float>] = [
+                SIMD4(-halfWidth, -halfHeight, -halfDepth, 1),
+                SIMD4(halfWidth, -halfHeight, -halfDepth, 1),
+                SIMD4(halfWidth, halfHeight, -halfDepth, 1),
+                SIMD4(-halfWidth, halfHeight, -halfDepth, 1),
+                SIMD4(-halfWidth, -halfHeight, halfDepth, 1),
+                SIMD4(halfWidth, -halfHeight, halfDepth, 1),
+                SIMD4(halfWidth, halfHeight, halfDepth, 1),
+                SIMD4(-halfWidth, halfHeight, halfDepth, 1)
+            ]
+            let wallCorners = localCorners.map { corner in
+                simd_mul(inverseWall, simd_mul(object.matrix, corner))
+            }
+            guard let minX = wallCorners.map(\.x).min(),
+                  let maxX = wallCorners.map(\.x).max(),
+                  let minY = wallCorners.map(\.y).min(),
+                  let maxY = wallCorners.map(\.y).max(),
+                  let minimumDepth = wallCorners.map({ abs($0.z) }).min(),
+                  minimumDepth <= 2.75,
+                  maxX >= -wall.width / 2,
+                  minX <= wall.width / 2,
+                  maxY >= -wall.height / 2,
+                  minY <= wall.height / 2 else {
+                return nil
+            }
+            let clippedMinX = max(minX, -wall.width / 2)
+            let clippedMaxX = min(maxX, wall.width / 2)
+            let clippedMinY = max(minY, -wall.height / 2)
+            let clippedMaxY = min(maxY, wall.height / 2)
+            guard clippedMaxX - clippedMinX > 0.03,
+                  clippedMaxY - clippedMinY > 0.03 else {
+                return nil
+            }
+            return WallPhotoFurnitureProjection(
+                id: object.id,
+                title: object.title,
+                centerX: (clippedMinX + clippedMaxX) / 2,
+                centerY: (clippedMinY + clippedMaxY) / 2,
+                width: clippedMaxX - clippedMinX,
+                height: clippedMaxY - clippedMinY
+            )
+        }
+    }
 }
 
 private struct WallPhotoCard: View {
@@ -214,6 +285,8 @@ private struct WallPhotoCard: View {
     let photo: WallPhotoAsset?
     let segments: [WallPhotoSegment]
     let surfaces: [WallPhotoSurfaceProjection]
+    let furniture: [WallPhotoFurnitureProjection]
+    let showFurnitureOverlay: Bool
     let points: [ElectricalPoint]
 
     var body: some View {
@@ -225,6 +298,8 @@ private struct WallPhotoCard: View {
                 photo: photo,
                 segments: segments,
                 surfaces: surfaces,
+                furniture: furniture,
+                showFurnitureOverlay: showFurnitureOverlay,
                 points: points
             )
             .frame(height: previewHeight)
@@ -281,6 +356,8 @@ private struct WallPhotoDetailView: View {
     let segments: [WallPhotoSegment]
     let points: [ElectricalPoint]
     let surfaces: [WallPhotoSurfaceProjection]
+    let furniture: [WallPhotoFurnitureProjection]
+    let showFurnitureOverlay: Bool
     let onSaveAppearance: (WallAppearance) -> Void
     let onImportPhoto: (Data, WallPhotoSource) -> UUID?
     let onSelectPhoto: (UUID) -> Void
@@ -304,6 +381,8 @@ private struct WallPhotoDetailView: View {
         segments: [WallPhotoSegment],
         points: [ElectricalPoint],
         surfaces: [WallPhotoSurfaceProjection],
+        furniture: [WallPhotoFurnitureProjection],
+        showFurnitureOverlay: Bool,
         onSaveAppearance: @escaping (WallAppearance) -> Void,
         onImportPhoto: @escaping (Data, WallPhotoSource) -> UUID?,
         onSelectPhoto: @escaping (UUID) -> Void,
@@ -317,6 +396,8 @@ private struct WallPhotoDetailView: View {
         self.segments = segments
         self.points = points
         self.surfaces = surfaces
+        self.furniture = furniture
+        self.showFurnitureOverlay = showFurnitureOverlay
         self.onSaveAppearance = onSaveAppearance
         self.onImportPhoto = onImportPhoto
         self.onSelectPhoto = onSelectPhoto
@@ -342,6 +423,8 @@ private struct WallPhotoDetailView: View {
                         photo: primaryPhoto,
                         segments: segments,
                         surfaces: surfaces,
+                        furniture: furniture,
+                        showFurnitureOverlay: showFurnitureOverlay,
                         points: points
                     )
                     .frame(height: 220)
@@ -625,6 +708,8 @@ struct WallElevationPreview: View {
     let photo: WallPhotoAsset?
     let segments: [WallPhotoSegment]
     let surfaces: [WallPhotoSurfaceProjection]
+    let furniture: [WallPhotoFurnitureProjection]
+    let showFurnitureOverlay: Bool
     let points: [ElectricalPoint]
 
     var body: some View {
@@ -637,6 +722,12 @@ struct WallElevationPreview: View {
 
                 gridOverlay
                 segmentCoverageOverlay
+
+                if showFurnitureOverlay {
+                    ForEach(furniture) { item in
+                        furnitureView(item, size: size)
+                    }
+                }
 
                 ForEach(Array(surfaces.enumerated()), id: \.offset) { _, surface in
                     openingView(surface, size: size)
@@ -743,6 +834,35 @@ struct WallElevationPreview: View {
         .allowsHitTesting(false)
     }
 
+    private func furnitureView(
+        _ item: WallPhotoFurnitureProjection,
+        size: CGSize
+    ) -> some View {
+        let rect = previewRect(
+            centerX: item.centerX,
+            centerY: item.centerY,
+            width: item.width,
+            height: item.height,
+            size: size
+        )
+        return RoundedRectangle(cornerRadius: 5)
+            .fill(Color.brown.opacity(0.16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(Color.brown.opacity(0.78), lineWidth: 1.5)
+            }
+            .overlay {
+                Text(item.title)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 3)
+            }
+            .frame(width: rect.width, height: rect.height)
+            .position(x: rect.midX, y: rect.midY)
+            .allowsHitTesting(false)
+    }
+
     private func openingView(
         _ surface: WallPhotoSurfaceProjection,
         size: CGSize
@@ -816,6 +936,15 @@ struct WallElevationPreview: View {
 
 struct WallPhotoSurfaceProjection: Equatable {
     let kind: SurfaceSnapshot.Kind
+    let centerX: Float
+    let centerY: Float
+    let width: Float
+    let height: Float
+}
+
+struct WallPhotoFurnitureProjection: Identifiable, Equatable {
+    let id: UUID
+    let title: String
     let centerX: Float
     let centerY: Float
     let width: Float

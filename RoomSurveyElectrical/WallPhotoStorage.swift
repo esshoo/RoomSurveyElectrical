@@ -17,6 +17,20 @@ enum WallPhotoStorageError: LocalizedError {
 }
 
 enum WallPhotoStorage {
+    private static let fullImageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 12
+        cache.totalCostLimit = 96 * 1024 * 1024
+        return cache
+    }()
+
+    private static let thumbnailImageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 48
+        cache.totalCostLimit = 48 * 1024 * 1024
+        return cache
+    }()
+
     static func importImage(
         data: Data,
         projectID: UUID,
@@ -61,6 +75,19 @@ enum WallPhotoStorage {
             throw error
         }
 
+        cache(
+            fullImage,
+            projectID: projectID,
+            fileName: fileName,
+            thumbnail: false
+        )
+        cache(
+            thumbnail,
+            projectID: projectID,
+            fileName: thumbnailFileName,
+            thumbnail: true
+        )
+
         let dimensions = fullImage.pixelDimensions
         return WallPhotoAsset(
             id: id,
@@ -82,12 +109,20 @@ enum WallPhotoStorage {
         let preferredName = thumbnail ? asset.thumbnailFileName : asset.fileName
         let fallbackName = asset.fileName
         for fileName in [preferredName, fallbackName].compactMap({ $0 }) {
+            let key = cacheKey(projectID: projectID, fileName: fileName)
+            let cache = thumbnail && fileName == preferredName
+                ? thumbnailImageCache
+                : fullImageCache
+            if let cached = cache.object(forKey: key) {
+                return cached
+            }
             guard let url = try? ProjectRepository.fileURL(
                 projectID: projectID,
                 fileName: fileName
             ), let image = UIImage(contentsOfFile: url.path) else {
                 continue
             }
+            cache.setObject(image, forKey: key, cost: image.memoryCost)
             return image
         }
         return nil
@@ -107,6 +142,10 @@ enum WallPhotoStorage {
         projectID: UUID,
         asset: WallPhotoAsset
     ) {
+        removeCachedImage(projectID: projectID, fileName: asset.fileName)
+        if let thumbnailFileName = asset.thumbnailFileName {
+            removeCachedImage(projectID: projectID, fileName: thumbnailFileName)
+        }
         ProjectRepository.removeAsset(
             projectID: projectID,
             fileName: asset.fileName
@@ -115,6 +154,33 @@ enum WallPhotoStorage {
             projectID: projectID,
             fileName: asset.thumbnailFileName
         )
+    }
+
+    static func removeCachedImage(
+        projectID: UUID,
+        fileName: String
+    ) {
+        let key = cacheKey(projectID: projectID, fileName: fileName)
+        fullImageCache.removeObject(forKey: key)
+        thumbnailImageCache.removeObject(forKey: key)
+    }
+
+    private static func cache(
+        _ image: UIImage,
+        projectID: UUID,
+        fileName: String,
+        thumbnail: Bool
+    ) {
+        let target = thumbnail ? thumbnailImageCache : fullImageCache
+        target.setObject(
+            image,
+            forKey: cacheKey(projectID: projectID, fileName: fileName),
+            cost: image.memoryCost
+        )
+    }
+
+    private static func cacheKey(projectID: UUID, fileName: String) -> NSString {
+        "\(projectID.uuidString)/\(fileName)" as NSString
     }
 
     private static func downsampledImage(
@@ -163,6 +229,11 @@ enum WallPhotoStorage {
 }
 
 private extension UIImage {
+    var memoryCost: Int {
+        let dimensions = pixelDimensions
+        return dimensions.width * dimensions.height * 4
+    }
+
     var pixelDimensions: (width: Int, height: Int) {
         if let cgImage {
             return (cgImage.width, cgImage.height)

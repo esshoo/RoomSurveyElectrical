@@ -60,6 +60,14 @@ enum WallPhotoCompositeBuilder {
             fileName: thumbnailFileName,
             createProjectDirectory: true
         )
+        WallPhotoStorage.removeCachedImage(
+            projectID: project.id,
+            fileName: fileName
+        )
+        WallPhotoStorage.removeCachedImage(
+            projectID: project.id,
+            fileName: thumbnailFileName
+        )
         try fullData.write(to: fullURL, options: .atomic)
         try thumbnailData.write(to: thumbnailURL, options: .atomic)
 
@@ -104,8 +112,8 @@ enum WallPhotoCompositeBuilder {
 
     private static func canvasSize(for wall: WallSnapshot) -> CGSize {
         let aspect = CGFloat(max(wall.width, 0.10) / max(wall.height, 0.10))
-        let maximumDimension: CGFloat = 3072
-        let minimumDimension: CGFloat = 1024
+        let maximumDimension: CGFloat = 2048
+        let minimumDimension: CGFloat = 768
         if aspect >= 1 {
             let width = maximumDimension
             let height = max(minimumDimension, width / max(aspect, 0.01))

@@ -87,6 +87,8 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
             roomCaptureView.captureSession.stop(pauseARSession: true)
         }
         arSession.pause()
+        rawRoomData = nil
+        project = nil
         phase = .idle
     }
 
@@ -97,6 +99,7 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
         Task { @MainActor [weak self] in
             guard let self else { return }
             if let error {
+                self.rawRoomData = nil
                 self.phase = .failed(error.localizedDescription)
             } else {
                 self.rawRoomData = roomDataForProcessing
@@ -113,6 +116,7 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
             guard let self else { return }
 
             if let error {
+                self.rawRoomData = nil
                 self.phase = .failed(error.localizedDescription)
                 return
             }
@@ -123,12 +127,14 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
                     rawData: self.rawRoomData,
                     name: self.destination?.scanName
                 )
+                self.rawRoomData = nil
                 if let destination = self.destination {
                     _ = try WorkspaceRepository.attachScan(roomProject, to: destination)
                 }
                 self.project = roomProject
                 self.phase = .ready
             } catch {
+                self.rawRoomData = nil
                 self.phase = .failed("فشل حفظ نتيجة المسح: \(error.localizedDescription)")
             }
         }

@@ -27,9 +27,19 @@ enum ProjectRepository {
 
     private static let fileManager = FileManager.default
 
-    private static var encoder: JSONEncoder {
+    private static var storageEncoder: JSONEncoder {
+        configuredEncoder(outputFormatting: [])
+    }
+
+    private static var diagnosticEncoder: JSONEncoder {
+        configuredEncoder(outputFormatting: [.prettyPrinted, .sortedKeys])
+    }
+
+    private static func configuredEncoder(
+        outputFormatting: JSONEncoder.OutputFormatting
+    ) -> JSONEncoder {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = outputFormatting
         encoder.dateEncodingStrategy = .iso8601
         encoder.nonConformingFloatEncodingStrategy = .convertToString(
             positiveInfinity: "Infinity",
@@ -96,9 +106,9 @@ enum ProjectRepository {
         // never discarded just because Apple's diagnostic JSON failed.
         let processedData: Data
         do {
-            processedData = try encoder.encode(room)
+            processedData = try diagnosticEncoder.encode(room)
         } catch {
-            processedData = try encoder.encode(RoomSummaryExport(room: room))
+            processedData = try diagnosticEncoder.encode(RoomSummaryExport(room: room))
         }
         try processedData.write(
             to: projectDirectory.appendingPathComponent(processedFile),
@@ -111,7 +121,7 @@ enum ProjectRepository {
             // required by the electrical editor. Some scans contain values
             // that JSONEncoder cannot represent, so do not fail the project.
             do {
-                let encodedRawData = try encoder.encode(rawData)
+                let encodedRawData = try diagnosticEncoder.encode(rawData)
                 try encodedRawData.write(
                     to: projectDirectory.appendingPathComponent(rawFile),
                     options: .atomic
@@ -162,7 +172,7 @@ enum ProjectRepository {
         var normalizedProject = project
         normalizedProject.normalizeWallPhotoMetadata()
         let projectDirectory = try directory(for: normalizedProject.id, create: true)
-        let data = try encoder.encode(normalizedProject)
+        let data = try storageEncoder.encode(normalizedProject)
         try data.write(
             to: projectDirectory.appendingPathComponent("project.json"),
             options: .atomic
@@ -331,7 +341,7 @@ enum ProjectRepository {
                 options: .atomic
             )
         }
-        let projectData = try encoder.encode(project)
+        let projectData = try storageEncoder.encode(project)
         try projectData.write(
             to: staging.appendingPathComponent("project.json"),
             options: .atomic

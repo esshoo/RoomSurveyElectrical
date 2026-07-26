@@ -1,5 +1,6 @@
 import RoomPlan
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -2478,6 +2479,19 @@ private struct ElectricalSettingsView: View {
 
     @ViewBuilder
     private var appInformationSections: some View {
+        Section("المسح المكاني") {
+            Toggle(
+                "إبقاء الشاشة مضاءة أثناء المسح المكاني",
+                isOn: $settings.keepScreenAwakeDuringSpatialScan
+            )
+            Text(
+                "يُعطّل التطبيق القفل التلقائي أثناء مرحلة RoomPlan فقط، "
+                    + "ثم يعيد إعداد الشاشة الطبيعي فور إنهاء المسح أو الخروج منه."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
         Section("حول التطبيق") {
             LabeledContent("الاسم", value: "3E Room Electrical")
             LabeledContent("الإصدار", value: appVersion)
@@ -2785,17 +2799,23 @@ struct RoomWorkflowView: View {
                     }
                 )
             } else {
-                ScanRoomView(model: model, onClose: {
-                    model.cancel()
-                    onClose()
-                })
+                ScanRoomView(
+                    model: model,
+                    keepScreenAwakeDuringSpatialScan: settings.keepScreenAwakeDuringSpatialScan,
+                    onClose: {
+                        model.cancel()
+                        onClose()
+                    }
+                )
             }
         }
     }
 }
 
 private struct ScanRoomView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var model: RoomCaptureModel
+    let keepScreenAwakeDuringSpatialScan: Bool
     let onClose: () -> Void
 
     var body: some View {
@@ -2855,7 +2875,24 @@ private struct ScanRoomView: View {
         }
         .onAppear {
             model.start()
+            updateIdleTimer(for: model.phase)
         }
+        .onChange(of: model.phase) { _, newPhase in
+            updateIdleTimer(for: newPhase)
+        }
+        .onChange(of: scenePhase) { _, _ in
+            updateIdleTimer(for: model.phase)
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+    }
+
+    private func updateIdleTimer(for phase: RoomCaptureModel.Phase) {
+        UIApplication.shared.isIdleTimerDisabled =
+            keepScreenAwakeDuringSpatialScan
+                && phase == .scanning
+                && scenePhase == .active
     }
 }
 
