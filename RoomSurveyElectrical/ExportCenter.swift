@@ -126,6 +126,8 @@ struct ExportCenterView: View {
     @State private var exportedFile: ExportedFile?
     @State private var isExporting = false
     @State private var errorMessage: String?
+    @State private var includeWallAppearancesInGLB = true
+    @State private var includeFurnitureInGLB = true
 
     private var takeoffRooms: [ExportRoomRecord] {
         ExportScopeBuilder.records(
@@ -148,6 +150,24 @@ struct ExportCenterView: View {
             projectName: surveyProject.name,
             projectCreatedAt: surveyProject.createdAt
         )
+    }
+
+    private var glbExportOptions: GLBExportOptions {
+        GLBExportOptions(
+            includeWallAppearances: includeWallAppearancesInGLB,
+            includeFurniture: includeFurnitureInGLB
+        )
+    }
+
+    private var glbSubtitle: String {
+        var parts: [String] = ["كهرباء وإضاءة"]
+        parts.append(
+            includeWallAppearancesInGLB
+                ? "صور وألوان الجدران"
+                : "جدران افتراضية"
+        )
+        parts.append(includeFurnitureInGLB ? "مع الفرش" : "بدون فرش")
+        return parts.joined(separator: " • ")
     }
 
     var body: some View {
@@ -322,13 +342,38 @@ struct ExportCenterView: View {
             }
 
             Section("GLB – مجسم ثلاثي الأبعاد") {
+                Toggle(isOn: $includeWallAppearancesInGLB) {
+                    Label(
+                        "تضمين صور وألوان الجدران",
+                        systemImage: "photo.on.rectangle.angled"
+                    )
+                }
+
+                Toggle(isOn: $includeFurnitureInGLB) {
+                    Label(
+                        "تضمين الفرش",
+                        systemImage: "sofa.fill"
+                    )
+                }
+
+                Label(
+                    includeWallAppearancesInGLB
+                        ? "تُضغط نسخة مخصصة للتصدير داخل GLB، وتظل الصور الأصلية محفوظة داخل المشروع."
+                        : "سيُصدّر المجسم بخامات الجدران الافتراضية بدون الصور والألوان المخصصة.",
+                    systemImage: includeWallAppearancesInGLB
+                        ? "checkmark.seal.fill"
+                        : "eye.slash.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
                 exportButton(
                     planRooms.count == 1
                         ? "تصدير المجسم GLB"
                         : "تصدير كل المجسمات GLB",
                     subtitle: planRooms.count == 1
-                        ? "مجسم خفيف بالألوان والكهرباء والإضاءة"
-                        : "ملف ZIP يحتوي GLB مستقل لكل مسح",
+                        ? glbSubtitle
+                        : "ملف ZIP يحتوي GLB مستقل لكل مسح بالإعدادات المحددة",
                     systemImage: "cube.fill",
                     kind: planRooms.count == 1 ? .singleGLB : .glbPackage,
                     roomIDs: planRooms.map(\.id),
@@ -337,7 +382,8 @@ struct ExportCenterView: View {
                     try ProjectExportService.makeGLBPackage(
                         title: title,
                         rooms: planRooms,
-                        metadata: exportMetadata
+                        metadata: exportMetadata,
+                        options: glbExportOptions
                     )
                 }
 
@@ -345,7 +391,7 @@ struct ExportCenterView: View {
                     ForEach(planRooms) { room in
                         exportButton(
                             room.scan.name,
-                            subtitle: "GLB منفرد • طبقات ملونة",
+                            subtitle: glbSubtitle,
                             systemImage: "cube.transparent",
                             kind: .singleGLB,
                             roomIDs: [room.id]
@@ -353,7 +399,8 @@ struct ExportCenterView: View {
                             try ProjectExportService.makeGLB(
                                 title: room.scan.name,
                                 room: room,
-                                metadata: exportMetadata
+                                metadata: exportMetadata,
+                                options: glbExportOptions
                             )
                         }
                     }
