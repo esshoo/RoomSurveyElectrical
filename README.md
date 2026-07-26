@@ -1,6 +1,11 @@
-# 3ERoomElectrical v1.9.18 — Build 38
+# 3ERoomElectrical v1.9.18 — Build 39
 
-This source continues from **v1.9.17 Build 37**.
+This source contains the Build 39 compile correction on top of **v1.9.18 Build 38**.
+
+## Build 39 compile correction
+
+- Fixed the `evaluationInterval` computed property by returning the selected thermal-state interval explicitly.
+- Runtime behaviour and profile values are unchanged from Build 38.
 
 ## New in this build
 

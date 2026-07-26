@@ -595,10 +595,14 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
         private var evaluationInterval: TimeInterval {
             let intervals = parent.performanceProfile.photoScanEvaluationIntervals
             switch ProcessInfo.processInfo.thermalState {
-            case .nominal: intervals.nominal
-            case .fair: intervals.fair
-            case .serious, .critical: intervals.hot
-            @unknown default: intervals.fair
+            case .nominal:
+                return intervals.nominal
+            case .fair:
+                return intervals.fair
+            case .serious, .critical:
+                return intervals.hot
+            @unknown default:
+                return intervals.fair
             }
         }
 
