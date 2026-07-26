@@ -4,7 +4,8 @@ import UIKit
 enum WallPhotoCompositeBuilder {
     static func rebuildComposite(
         project: inout RoomProject,
-        wallID: UUID
+        wallID: UUID,
+        performanceProfile: SpatialScanPerformanceProfile = .balanced
     ) throws {
         guard let wall = project.walls.first(where: { $0.id == wallID }) else {
             return
@@ -13,7 +14,12 @@ enum WallPhotoCompositeBuilder {
             .filter { $0.state == .captured && $0.photoID != nil }
         guard !capturedSegments.isEmpty else { return }
 
-        let targetSize = canvasSize(for: wall)
+        let targetSize = canvasSize(
+            for: wall,
+            maximumDimension: CGFloat(
+                performanceProfile.photoCompositeMaximumDimension
+            )
+        )
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 1
         format.opaque = true
@@ -36,11 +42,25 @@ enum WallPhotoCompositeBuilder {
             }
         }
 
-        guard let fullData = composite.jpegData(compressionQuality: 0.92) else {
+        guard let fullData = composite.jpegData(
+            compressionQuality: CGFloat(
+                performanceProfile.capturedPhotoJPEGQuality
+            )
+        ) else {
             throw WallPhotoStorageError.imageEncodingFailed
         }
-        let thumbnail = resized(composite, maximumPixelDimension: 960)
-        guard let thumbnailData = thumbnail.jpegData(compressionQuality: 0.84) else {
+        let thumbnail = resized(
+            composite,
+            maximumPixelDimension: CGFloat(
+                performanceProfile.photoThumbnailMaximumDimension
+            )
+        )
+        guard let thumbnailData = thumbnail.jpegData(
+            compressionQuality: max(
+                CGFloat(performanceProfile.capturedPhotoJPEGQuality) - 0.08,
+                0.72
+            )
+        ) else {
             throw WallPhotoStorageError.imageEncodingFailed
         }
 
@@ -110,10 +130,13 @@ enum WallPhotoCompositeBuilder {
         "wall-composite-\(wallID.uuidString)-thumb.jpg"
     }
 
-    private static func canvasSize(for wall: WallSnapshot) -> CGSize {
+    private static func canvasSize(
+        for wall: WallSnapshot,
+        maximumDimension: CGFloat
+    ) -> CGSize {
         let aspect = CGFloat(max(wall.width, 0.10) / max(wall.height, 0.10))
-        let maximumDimension: CGFloat = 2048
-        let minimumDimension: CGFloat = 768
+        let maximumDimension = max(maximumDimension, 1024)
+        let minimumDimension = min(maximumDimension * 0.375, 960)
         if aspect >= 1 {
             let width = maximumDimension
             let height = max(minimumDimension, width / max(aspect, 0.01))

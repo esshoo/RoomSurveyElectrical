@@ -207,6 +207,9 @@ struct RoomViewerView: View {
 
     private var effectiveLayers: ViewerLayerVisibility {
         var resolved = layers
+        if project.objects?.isEmpty != false {
+            resolved.furniture = false
+        }
         if layers.wallPhotos,
            project.hasCapturedWallPhotoAppearance,
            !project.showsFurnitureWithWallPhotos {
@@ -3697,10 +3700,9 @@ private struct USDZRoomView: UIViewRepresentable {
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView(frame: .zero)
         view.backgroundColor = .secondarySystemGroupedBackground
-        view.antialiasingMode = .multisampling2X
+        applyPerformanceProfile(to: view)
         view.autoenablesDefaultLighting = true
         view.allowsCameraControl = true
-        view.preferredFramesPerSecond = 30
         view.rendersContinuously = false
         context.coordinator.loadScene(into: view)
 
@@ -3715,7 +3717,24 @@ private struct USDZRoomView: UIViewRepresentable {
 
     func updateUIView(_ uiView: SCNView, context: Context) {
         context.coordinator.parent = self
+        applyPerformanceProfile(to: uiView)
         context.coordinator.updateScene(in: uiView)
+    }
+
+    private var performanceProfile: SpatialScanPerformanceProfile {
+        project.electricalSettings?.spatialScanPerformanceProfile ?? .balanced
+    }
+
+    private func applyPerformanceProfile(to view: SCNView) {
+        view.preferredFramesPerSecond = performanceProfile.viewerFramesPerSecond
+        switch performanceProfile.viewerAntialiasingLevel {
+        case 4:
+            view.antialiasingMode = .multisampling4X
+        case 2:
+            view.antialiasingMode = .multisampling2X
+        default:
+            view.antialiasingMode = .none
+        }
     }
 
     final class Coordinator: NSObject {

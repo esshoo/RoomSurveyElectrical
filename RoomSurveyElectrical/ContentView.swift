@@ -2480,6 +2480,35 @@ private struct ElectricalSettingsView: View {
     @ViewBuilder
     private var appInformationSections: some View {
         Section("المسح المكاني") {
+            Picker(
+                "محتوى المسح",
+                selection: $settings.spatialScanContentMode
+            ) {
+                ForEach(SpatialScanContentMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Text(settings.spatialScanContentMode.subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker(
+                "الأداء والجودة",
+                selection: $settings.spatialScanPerformanceProfile
+            ) {
+                ForEach(SpatialScanPerformanceProfile.allCases) { profile in
+                    Label(profile.title, systemImage: profile.systemImage)
+                        .tag(profile)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Text(settings.spatialScanPerformanceProfile.subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Toggle(
                 "إبقاء الشاشة مضاءة أثناء المسح المكاني",
                 isOn: $settings.keepScreenAwakeDuringSpatialScan
@@ -2487,6 +2516,33 @@ private struct ElectricalSettingsView: View {
             Text(
                 "يُعطّل التطبيق القفل التلقائي أثناء مرحلة RoomPlan فقط، "
                     + "ثم يعيد إعداد الشاشة الطبيعي فور إنهاء المسح أو الخروج منه."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        Section("تأثير الوضع الحالي") {
+            LabeledContent(
+                "الفرش داخل المشروع",
+                value: settings.spatialScanContentMode.includesFurniture
+                    ? "محفوظ ومعروض"
+                    : "غير محفوظ"
+            )
+            LabeledContent(
+                "صور المسح الفوتوغرافي",
+                value: "حتى \(Int(settings.spatialScanPerformanceProfile.capturedPhotoMaximumDimension)) px"
+            )
+            LabeledContent(
+                "صورة الحائط المركبة",
+                value: "حتى \(Int(settings.spatialScanPerformanceProfile.photoCompositeMaximumDimension)) px"
+            )
+            LabeledContent(
+                "العرض ثلاثي الأبعاد",
+                value: "\(settings.spatialScanPerformanceProfile.viewerFramesPerSecond) إطار/ث"
+            )
+            Text(
+                "وضع الحوائط والفتحات فقط يمنع حفظ ورسم الفرش في المشروع، "
+                    + "لكن RoomPlan قد يستمر في ملاحظته داخليًا أثناء فهم المشهد."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -2780,9 +2836,16 @@ struct RoomWorkflowView: View {
     let onClose: () -> Void
 
     init(destination: ScanDestination, onClose: @escaping () -> Void) {
-        _model = StateObject(wrappedValue: RoomCaptureModel(destination: destination))
-        settings = WorkspaceRepository.load(projectID: destination.surveyProjectID)?.settings
-            ?? GlobalSettingsRepository.load()
+        let resolvedSettings = WorkspaceRepository.load(
+            projectID: destination.surveyProjectID
+        )?.settings ?? GlobalSettingsRepository.load()
+        settings = resolvedSettings
+        _model = StateObject(
+            wrappedValue: RoomCaptureModel(
+                destination: destination,
+                settings: resolvedSettings
+            )
+        )
         self.onClose = onClose
     }
 
@@ -2802,6 +2865,7 @@ struct RoomWorkflowView: View {
                 ScanRoomView(
                     model: model,
                     keepScreenAwakeDuringSpatialScan: settings.keepScreenAwakeDuringSpatialScan,
+                    scanContentMode: settings.spatialScanContentMode,
                     onClose: {
                         model.cancel()
                         onClose()
@@ -2816,6 +2880,7 @@ private struct ScanRoomView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var model: RoomCaptureModel
     let keepScreenAwakeDuringSpatialScan: Bool
+    let scanContentMode: SpatialScanContentMode
     let onClose: () -> Void
 
     var body: some View {
@@ -2832,6 +2897,16 @@ private struct ScanRoomView: View {
                             .background(.ultraThinMaterial, in: Circle())
                     }
                     Spacer()
+                    Label(
+                        scanContentMode.title,
+                        systemImage: scanContentMode.includesFurniture
+                            ? "chair.lounge.fill"
+                            : "rectangle.3.group.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .frame(height: 38)
+                    .background(.ultraThinMaterial, in: Capsule())
                 }
                 .padding()
 

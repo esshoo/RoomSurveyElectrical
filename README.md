@@ -1,20 +1,31 @@
-# 3ERoomElectrical v1.9.17 — Build 37
+# 3ERoomElectrical v1.9.18 — Build 38
 
-This source continues from the accepted **v1.9.16 Build 36** adaptive photographic scan.
+This source continues from **v1.9.17 Build 37**.
 
 ## New in this build
 
-- The Photos tab contains an option to show or hide RoomPlan furniture over captured wall photos.
-- When hidden, furniture geometry is removed from the 3D view while the captured wall-photo layer is active, preventing duplicated furniture already visible in the photograph.
-- The App settings tab contains **إبقاء الشاشة مضاءة أثناء المسح المكاني**. It applies only while RoomPlan is actively scanning and is reset during processing, backgrounding, cancellation, or navigation away.
-- Photographic capture evaluation and rendering are thermally throttled.
-- Core Image context reuse, image caching, compact internal project saves, deferred wall-composite generation, and on-demand 3D rendering reduce repeated CPU/GPU and storage work.
+- App settings now include three performance/quality profiles:
+  - **موفر للطاقة**
+  - **متوازن**
+  - **جودة عالية**
+- The selected profile controls photographic-scan rendering/evaluation, stored photographic image size, wall-composite resolution, and 3D viewer frame rate/antialiasing.
+- Spatial-scan content can be set to:
+  - **غرفة كاملة**
+  - **حوائط وفتحات فقط**
+- Architecture-only scans retain walls, floors, doors, windows, and openings while excluding RoomPlan furniture from the saved project, takeoff, 2D/3D overlays, and app exports.
+- Architecture-only scans do not retain raw RoomPlan diagnostic data, reducing project storage and post-scan memory work.
+- The scan screen shows the active content mode.
+- Existing projects and settings remain backward compatible; missing new values default to **متوازن** and **غرفة كاملة**.
+
+## Important RoomPlan limitation
+
+RoomPlan does not currently expose a configuration option that disables object recognition itself. Architecture-only mode therefore discards furniture after RoomPlan processes the room; it reduces app-side saving, rendering, takeoff, and export work, but cannot guarantee a reduction in Apple framework recognition work during the live scan.
 
 ## Preserved behaviour
 
-- Photographic squares remain direction-free and activate according to the camera view.
+- Adaptive photographic capture remains direction-free.
 - Manual/local wall-photo import remains available.
 - Electrical placement modes and rules are unchanged.
-- DXF, PDF, PNG, GLB geometry, widget, and signing logic are unchanged.
+- DXF and electrical geometry logic are unchanged.
 
-See `Docs/3E-v1.9.17-photo-furniture-performance.md` for implementation details.
+See `Docs/3E-v1.9.18-performance-quality-scan-scope.md`.

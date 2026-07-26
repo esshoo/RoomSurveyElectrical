@@ -22,9 +22,11 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
     private let configuration = RoomCaptureSession.Configuration()
     private var rawRoomData: CapturedRoomData?
     private let destination: ScanDestination?
+    private let includeFurniture: Bool
 
     override init() {
         destination = nil
+        includeFurniture = true
         let sharedSession = ARSession()
         arSession = sharedSession
         roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
@@ -32,8 +34,12 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
         roomCaptureView.delegate = self
     }
 
-    init(destination: ScanDestination) {
+    init(
+        destination: ScanDestination,
+        settings: ElectricalPlacementSettings
+    ) {
         self.destination = destination
+        includeFurniture = settings.spatialScanContentMode.includesFurniture
         let sharedSession = ARSession()
         arSession = sharedSession
         roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
@@ -43,6 +49,7 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
 
     required init?(coder: NSCoder) {
         destination = nil
+        includeFurniture = true
         let sharedSession = ARSession()
         arSession = sharedSession
         roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
@@ -102,7 +109,9 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
                 self.rawRoomData = nil
                 self.phase = .failed(error.localizedDescription)
             } else {
-                self.rawRoomData = roomDataForProcessing
+                self.rawRoomData = self.includeFurniture
+                    ? roomDataForProcessing
+                    : nil
             }
         }
         return error == nil
@@ -125,7 +134,8 @@ final class RoomCaptureModel: NSObject, ObservableObject, RoomCaptureViewDelegat
                 let roomProject = try ProjectRepository.createProject(
                     room: processedResult,
                     rawData: self.rawRoomData,
-                    name: self.destination?.scanName
+                    name: self.destination?.scanName,
+                    includeFurniture: self.includeFurniture
                 )
                 self.rawRoomData = nil
                 if let destination = self.destination {

@@ -84,6 +84,178 @@ enum ElectricalDesignMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum SpatialScanPerformanceProfile: String, Codable, CaseIterable, Identifiable {
+    case powerSaving
+    case balanced
+    case highQuality
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .powerSaving: "موفر للطاقة"
+        case .balanced: "متوازن"
+        case .highQuality: "جودة عالية"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .powerSaving:
+            "حرارة واستهلاك أقل، مع صور عرض أخف واستجابة ثابتة."
+        case .balanced:
+            "التوازن الموصى به بين جودة الصور وسرعة الاستجابة والحرارة."
+        case .highQuality:
+            "صور وخامات أعلى دقة وعرض أنعم، مع استهلاك وحرارة أكبر."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .powerSaving: "battery.100percent"
+        case .balanced: "dial.medium"
+        case .highQuality: "sparkles.rectangle.stack"
+        }
+    }
+
+    var photoScanFramesPerSecond: Int {
+        switch self {
+        case .powerSaving: 24
+        case .balanced: 30
+        case .highQuality: 60
+        }
+    }
+
+    var photoScanContentScaleLimit: Double {
+        switch self {
+        case .powerSaving: 1.5
+        case .balanced: 2.0
+        case .highQuality: 3.0
+        }
+    }
+
+    var photoScanDisplayLinkRates: (nominal: Double, fair: Double, hot: Double) {
+        switch self {
+        case .powerSaving: (10, 8, 6)
+        case .balanced: (15, 12, 10)
+        case .highQuality: (20, 16, 10)
+        }
+    }
+
+    var photoScanEvaluationIntervals: (nominal: Double, fair: Double, hot: Double) {
+        switch self {
+        case .powerSaving: (0.17, 0.22, 0.30)
+        case .balanced: (0.12, 0.16, 0.24)
+        case .highQuality: (0.08, 0.12, 0.20)
+        }
+    }
+
+    var photoScanRequiredStabilityDuration: Double {
+        switch self {
+        case .powerSaving: 0.72
+        case .balanced: 0.80
+        case .highQuality: 0.95
+        }
+    }
+
+    var photoScanMinimumFacing: Float {
+        switch self {
+        case .powerSaving: 0.44
+        case .balanced: 0.48
+        case .highQuality: 0.54
+        }
+    }
+
+    var photoScanMinimumWidthFraction: Double {
+        switch self {
+        case .powerSaving: 0.26
+        case .balanced: 0.30
+        case .highQuality: 0.34
+        }
+    }
+
+    var photoScanMinimumHeightFraction: Double {
+        switch self {
+        case .powerSaving: 0.17
+        case .balanced: 0.20
+        case .highQuality: 0.23
+        }
+    }
+
+    var capturedPhotoMaximumDimension: Double {
+        switch self {
+        case .powerSaving: 2048
+        case .balanced: 3072
+        case .highQuality: 4096
+        }
+    }
+
+    var capturedPhotoJPEGQuality: Double {
+        switch self {
+        case .powerSaving: 0.84
+        case .balanced: 0.88
+        case .highQuality: 0.92
+        }
+    }
+
+    var photoCompositeMaximumDimension: Double {
+        switch self {
+        case .powerSaving: 1536
+        case .balanced: 2048
+        case .highQuality: 3072
+        }
+    }
+
+    var photoThumbnailMaximumDimension: Double {
+        switch self {
+        case .powerSaving: 640
+        case .balanced: 800
+        case .highQuality: 960
+        }
+    }
+
+    var viewerFramesPerSecond: Int {
+        switch self {
+        case .powerSaving: 24
+        case .balanced: 30
+        case .highQuality: 60
+        }
+    }
+
+    var viewerAntialiasingLevel: Int {
+        switch self {
+        case .powerSaving: 0
+        case .balanced: 2
+        case .highQuality: 4
+        }
+    }
+}
+
+enum SpatialScanContentMode: String, Codable, CaseIterable, Identifiable {
+    case completeRoom
+    case architectureOnly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .completeRoom: "غرفة كاملة"
+        case .architectureOnly: "حوائط وفتحات فقط"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .completeRoom:
+            "يحفظ الحوائط والأبواب والشبابيك والفتحات وقطع الفرش المكتشفة."
+        case .architectureOnly:
+            "يتجاهل الفرش بعد معالجة RoomPlan ولا يحفظه أو يرسمه داخل المشروع."
+        }
+    }
+
+    var includesFurniture: Bool { self == .completeRoom }
+}
+
 struct ElectricalPlacementSettings: Codable, Equatable {
     var switchHeightMeters: Double
     var socketHeightMeters: Double
@@ -105,6 +277,8 @@ struct ElectricalPlacementSettings: Codable, Equatable {
     var splitAirConditionerCeilingOffsetMetersValue: Double?
     var windowAirConditionerHeightMetersValue: Double?
     var keepScreenAwakeDuringSpatialScanValue: Bool?
+    var spatialScanPerformanceProfileValue: SpatialScanPerformanceProfile?
+    var spatialScanContentModeValue: SpatialScanContentMode?
 
     var doorSuggestionMinimumMeters: Double {
         get { doorSuggestionMinimumMetersValue ?? 0.20 }
@@ -176,6 +350,16 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         set { keepScreenAwakeDuringSpatialScanValue = newValue }
     }
 
+    var spatialScanPerformanceProfile: SpatialScanPerformanceProfile {
+        get { spatialScanPerformanceProfileValue ?? .balanced }
+        set { spatialScanPerformanceProfileValue = newValue }
+    }
+
+    var spatialScanContentMode: SpatialScanContentMode {
+        get { spatialScanContentModeValue ?? .completeRoom }
+        set { spatialScanContentModeValue = newValue }
+    }
+
     static let standard = ElectricalPlacementSettings(
         switchHeightMeters: 1.20,
         socketHeightMeters: 0.50,
@@ -196,7 +380,9 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         lowCurrentHighHeightMetersValue: 1.20,
         splitAirConditionerCeilingOffsetMetersValue: 0.30,
         windowAirConditionerHeightMetersValue: 1.60,
-        keepScreenAwakeDuringSpatialScanValue: true
+        keepScreenAwakeDuringSpatialScanValue: true,
+        spatialScanPerformanceProfileValue: .balanced,
+        spatialScanContentModeValue: .completeRoom
     )
 }
 

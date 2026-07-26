@@ -66,6 +66,7 @@ struct ElectricalEditorView: View {
                 AdaptivePhotographicWallScanView(
                     project: $project,
                     arSession: arSession,
+                    performanceProfile: settings.spatialScanPerformanceProfile,
                     onProjectChanged: persistProject,
                     onClose: returnToElectricalMode
                 )

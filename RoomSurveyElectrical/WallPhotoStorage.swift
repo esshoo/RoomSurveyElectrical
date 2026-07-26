@@ -36,19 +36,38 @@ enum WallPhotoStorage {
         projectID: UUID,
         wallID: UUID,
         source: WallPhotoSource = .manualImport,
-        segmentIDs: [UUID]? = nil
+        segmentIDs: [UUID]? = nil,
+        performanceProfile: SpatialScanPerformanceProfile? = nil
     ) throws -> WallPhotoAsset {
+        let maximumDimension = CGFloat(
+            performanceProfile?.capturedPhotoMaximumDimension ?? 4096
+        )
+        let jpegQuality = CGFloat(
+            performanceProfile?.capturedPhotoJPEGQuality ?? 0.90
+        )
+        let thumbnailDimension = CGFloat(
+            performanceProfile?.photoThumbnailMaximumDimension ?? 960
+        )
         guard let sourceImage = downsampledImage(
             data: data,
-            maximumPixelDimension: 4096
+            maximumPixelDimension: maximumDimension
         ) else {
             throw WallPhotoStorageError.invalidImage
         }
 
-        let fullImage = preparedImage(sourceImage, maximumPixelDimension: 4096)
-        let thumbnail = preparedImage(fullImage, maximumPixelDimension: 960)
-        guard let fullData = fullImage.jpegData(compressionQuality: 0.90),
-              let thumbnailData = thumbnail.jpegData(compressionQuality: 0.82) else {
+        let fullImage = preparedImage(
+            sourceImage,
+            maximumPixelDimension: maximumDimension
+        )
+        let thumbnail = preparedImage(
+            fullImage,
+            maximumPixelDimension: thumbnailDimension
+        )
+        guard let fullData = fullImage.jpegData(
+            compressionQuality: jpegQuality
+        ), let thumbnailData = thumbnail.jpegData(
+            compressionQuality: max(jpegQuality - 0.08, 0.72)
+        ) else {
             throw WallPhotoStorageError.imageEncodingFailed
         }
 

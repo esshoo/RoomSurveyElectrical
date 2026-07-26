@@ -92,7 +92,8 @@ enum ProjectRepository {
     static func createProject(
         room: CapturedRoom,
         rawData: CapturedRoomData?,
-        name requestedName: String? = nil
+        name requestedName: String? = nil,
+        includeFurniture: Bool = true
     ) throws -> RoomProject {
         let id = UUID()
         let projectDirectory = try directory(for: id, create: true)
@@ -105,9 +106,16 @@ enum ProjectRepository {
         // Keep a stable app-owned snapshot as a fallback so a valid scan is
         // never discarded just because Apple's diagnostic JSON failed.
         let processedData: Data
-        do {
-            processedData = try diagnosticEncoder.encode(room)
-        } catch {
+        if includeFurniture {
+            do {
+                processedData = try diagnosticEncoder.encode(room)
+            } catch {
+                processedData = try diagnosticEncoder.encode(RoomSummaryExport(room: room))
+            }
+        } else {
+            // Architecture-only mode intentionally avoids persisting RoomPlan
+            // object classifications. The stable summary contains the room
+            // envelope and openings required by the electrical workflow.
             processedData = try diagnosticEncoder.encode(RoomSummaryExport(room: room))
         }
         try processedData.write(
@@ -116,7 +124,7 @@ enum ProjectRepository {
         )
 
         var savedRawFile: String?
-        if let rawData {
+        if includeFurniture, let rawData {
             // Raw CapturedRoomData is useful for diagnostics, but it is not
             // required by the electrical editor. Some scans contain values
             // that JSONEncoder cannot represent, so do not fail the project.
@@ -155,7 +163,9 @@ enum ProjectRepository {
             walls: room.walls.map { WallSnapshot(surface: $0) },
             surfaces: surfaces,
             floors: room.floors.map { FloorSnapshot(surface: $0) },
-            objects: room.objects.map { RoomObjectSnapshot(object: $0) },
+            objects: includeFurniture
+                ? room.objects.map { RoomObjectSnapshot(object: $0) }
+                : [],
             points: [],
             processedJSONFile: processedFile,
             rawJSONFile: savedRawFile,

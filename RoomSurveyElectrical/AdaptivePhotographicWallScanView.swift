@@ -51,6 +51,7 @@ private struct AdaptivePhotoScanGuidance: Equatable {
 struct AdaptivePhotographicWallScanView: View {
     @Binding var project: RoomProject
     let arSession: ARSession
+    let performanceProfile: SpatialScanPerformanceProfile
     let onProjectChanged: () -> Void
     let onClose: () -> Void
 
@@ -65,6 +66,7 @@ struct AdaptivePhotographicWallScanView: View {
             AdaptivePhotographicWallScanARView(
                 project: project,
                 arSession: arSession,
+                performanceProfile: performanceProfile,
                 autoCaptureEnabled: autoCaptureEnabled,
                 onGuidanceChanged: { newGuidance in
                     guidance = newGuidance
@@ -139,6 +141,13 @@ struct AdaptivePhotographicWallScanView: View {
             }
             ProgressView(value: coverage)
                 .tint(.green)
+
+            Label(
+                "وضع \(performanceProfile.title)",
+                systemImage: performanceProfile.systemImage
+            )
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
 
             if remainingCount == 0 {
                 Label(
@@ -339,7 +348,8 @@ struct AdaptivePhotographicWallScanView: View {
                 projectID: project.id,
                 wallID: segment.wallID,
                 source: .photographicScan,
-                segmentIDs: [segment.id]
+                segmentIDs: [segment.id],
+                performanceProfile: performanceProfile
             )
             var photos = project.wallPhotos ?? []
             photos.append(asset)
@@ -390,7 +400,8 @@ struct AdaptivePhotographicWallScanView: View {
         guard dirtyCompositeWallIDs.contains(wallID) else { return }
         try WallPhotoCompositeBuilder.rebuildComposite(
             project: &project,
-            wallID: wallID
+            wallID: wallID,
+            performanceProfile: performanceProfile
         )
         dirtyCompositeWallIDs.remove(wallID)
     }
@@ -459,6 +470,7 @@ private struct PhotoScanEdgePulse: View {
 private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
     var project: RoomProject
     let arSession: ARSession
+    let performanceProfile: SpatialScanPerformanceProfile
     let autoCaptureEnabled: Bool
     let onGuidanceChanged: (AdaptivePhotoScanGuidance) -> Void
     let onCaptured: (Data, UUID, Float) -> Void
@@ -472,9 +484,12 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
         sceneView.session = arSession
         sceneView.scene = SCNScene()
         sceneView.automaticallyUpdatesLighting = false
-        sceneView.antialiasingMode = .none
-        sceneView.preferredFramesPerSecond = 30
-        sceneView.contentScaleFactor = min(UIScreen.main.scale, 2)
+        sceneView.antialiasingMode = antialiasingMode
+        sceneView.preferredFramesPerSecond = performanceProfile.photoScanFramesPerSecond
+        sceneView.contentScaleFactor = min(
+            UIScreen.main.scale,
+            CGFloat(performanceProfile.photoScanContentScaleLimit)
+        )
         sceneView.backgroundColor = .black
         context.coordinator.sceneView = sceneView
         context.coordinator.rebuildGuideNodes()
@@ -484,7 +499,22 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
 
     func updateUIView(_ uiView: ARSCNView, context: Context) {
         context.coordinator.parent = self
+        uiView.antialiasingMode = antialiasingMode
+        uiView.preferredFramesPerSecond = performanceProfile.photoScanFramesPerSecond
+        uiView.contentScaleFactor = min(
+            UIScreen.main.scale,
+            CGFloat(performanceProfile.photoScanContentScaleLimit)
+        )
+        context.coordinator.refreshDisplayLinkForCurrentProfile()
         context.coordinator.rebuildGuideNodesIfNeeded()
+    }
+
+    private var antialiasingMode: SCNAntialiasingMode {
+        switch performanceProfile.viewerAntialiasingLevel {
+        case 4: .multisampling4X
+        case 2: .multisampling2X
+        default: .none
+        }
     }
 
     static func dismantleUIView(_ uiView: ARSCNView, coordinator: Coordinator) {
@@ -535,30 +565,40 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
             _ link: CADisplayLink,
             for thermalState: ProcessInfo.ThermalState
         ) {
+            let rates = parent.performanceProfile.photoScanDisplayLinkRates
             let preferred: Float
             switch thermalState {
             case .nominal:
-                preferred = 15
+                preferred = Float(rates.nominal)
             case .fair:
-                preferred = 12
+                preferred = Float(rates.fair)
             case .serious, .critical:
-                preferred = 10
+                preferred = Float(rates.hot)
             @unknown default:
-                preferred = 12
+                preferred = Float(rates.fair)
             }
             link.preferredFrameRateRange = CAFrameRateRange(
-                minimum: 8,
-                maximum: 20,
+                minimum: min(6, preferred),
+                maximum: max(20, preferred),
                 preferred: preferred
             )
         }
 
+        func refreshDisplayLinkForCurrentProfile() {
+            guard let displayLink else { return }
+            configureDisplayLink(
+                displayLink,
+                for: ProcessInfo.processInfo.thermalState
+            )
+        }
+
         private var evaluationInterval: TimeInterval {
+            let intervals = parent.performanceProfile.photoScanEvaluationIntervals
             switch ProcessInfo.processInfo.thermalState {
-            case .nominal: 0.12
-            case .fair: 0.16
-            case .serious, .critical: 0.24
-            @unknown default: 0.16
+            case .nominal: intervals.nominal
+            case .fair: intervals.fair
+            case .serious, .critical: intervals.hot
+            @unknown default: intervals.fair
             }
         }
 
@@ -865,8 +905,16 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
                 )
             }
 
-            let minimumWidth = min(sceneView.bounds.width * 0.30, 180)
-            let minimumHeight = min(sceneView.bounds.height * 0.20, 155)
+            let minimumWidth = min(
+                sceneView.bounds.width
+                    * CGFloat(parent.performanceProfile.photoScanMinimumWidthFraction),
+                210
+            )
+            let minimumHeight = min(
+                sceneView.bounds.height
+                    * CGFloat(parent.performanceProfile.photoScanMinimumHeightFraction),
+                180
+            )
             guard candidate.bounds.width >= minimumWidth,
                   candidate.bounds.height >= minimumHeight else {
                 stableSince = nil
@@ -883,7 +931,7 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
                 )
             }
 
-            guard candidate.facing >= 0.48 else {
+            guard candidate.facing >= parent.performanceProfile.photoScanMinimumFacing else {
                 stableSince = nil
                 return (
                     AdaptivePhotoScanGuidance(
@@ -920,7 +968,7 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
 
             if stableSince == nil { stableSince = now }
             let stableDuration = now - (stableSince ?? now)
-            let requiredDuration = 0.80
+            let requiredDuration = parent.performanceProfile.photoScanRequiredStabilityDuration
             let readiness = min(0.68 + stableDuration / requiredDuration * 0.32, 1)
             let isReady = stableDuration >= requiredDuration
             let quality = min(
