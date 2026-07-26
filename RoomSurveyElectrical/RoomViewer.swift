@@ -2,6 +2,7 @@ import Foundation
 import SceneKit
 import simd
 import SwiftUI
+import UIKit
 
 enum ScanPresentationMode: String, CaseIterable, Identifiable {
     case plan2D
@@ -40,11 +41,14 @@ struct ViewerLayerVisibility: Equatable {
 }
 
 enum Plan2DHighlightTarget: Equatable, Identifiable {
+    case wall(UUID)
     case electricalPoint(UUID)
     case ceilingLight(UUID)
 
     var id: String {
         switch self {
+        case .wall(let id):
+            return "wall-\(id.uuidString)"
         case .electricalPoint(let id):
             return "electrical-\(id.uuidString)"
         case .ceilingLight(let id):
@@ -87,7 +91,8 @@ struct RoomViewerView: View {
                 Plan2DView(
                     project: $project,
                     layers: layers,
-                    onProjectChanged: persistViewerProject
+                    onProjectChanged: persistViewerProject,
+                    initialHighlight: focusedWallID.map { .wall($0) }
                 )
             case .model3D:
                 model3D
@@ -95,6 +100,10 @@ struct RoomViewerView: View {
                 WallPhotosTabView(
                     project: $project,
                     onProjectChanged: persistViewerProject,
+                    onOpenWall2D: { wallID in
+                        focusedWallID = wallID
+                        mode = .plan2D
+                    },
                     onOpenWall3D: { wallID in
                         focusedWallID = wallID
                         mode = .model3D
@@ -832,6 +841,7 @@ private struct Plan2DView: View {
     @State private var activeHighlight: Plan2DHighlightTarget?
     @State private var highlightPulse = false
     @State private var didFocusInitialHighlight = false
+    @State private var planWallPhotoThumbnails: [UUID: UIImage] = [:]
 
     var body: some View {
         GeometryReader { geometry in
@@ -869,6 +879,7 @@ private struct Plan2DView: View {
             }
             .coordinateSpace(name: "plan2D")
             .onAppear {
+                refreshPlanWallPhotoThumbnails()
                 prepareInitialHighlight(in: geometry.size)
             }
             .onChange(of: geometry.size) { _, newSize in
@@ -877,6 +888,12 @@ private struct Plan2DView: View {
             .onChange(of: initialHighlight) { _, _ in
                 didFocusInitialHighlight = false
                 prepareInitialHighlight(in: geometry.size)
+            }
+            .onChange(of: project.wallPhotos) { _, _ in
+                refreshPlanWallPhotoThumbnails()
+            }
+            .onChange(of: project.wallAppearances) { _, _ in
+                refreshPlanWallPhotoThumbnails()
             }
         }
         .clipped()
@@ -1764,6 +1781,12 @@ private struct Plan2DView: View {
         for target: Plan2DHighlightTarget
     ) -> SIMD2<Float>? {
         switch target {
+        case .wall(let id):
+            guard let wall = project.walls.first(where: { $0.id == id }) else {
+                return nil
+            }
+            let endpoints = wallPlanEndpoints(wall)
+            return (endpoints.0 + endpoints.1) / 2
         case .electricalPoint(let id):
             guard let point = project.points.first(where: { $0.id == id }),
                   point.worldPosition.count >= 3 else {
@@ -2553,6 +2576,13 @@ private struct Plan2DView: View {
             }
         }
 
+        if layers.wallPhotos {
+            drawWallAppearanceLayer(
+                context: &context,
+                projection: projection
+            )
+        }
+
         if layers.furniture {
             for object in project.objects ?? [] {
                 drawObject(object, context: &context, projection: projection)
@@ -2612,6 +2642,34 @@ private struct Plan2DView: View {
         context: inout GraphicsContext,
         projection: PlanProjection
     ) {
+        if case .wall(let id) = target,
+           let wall = project.walls.first(where: { $0.id == id }) {
+            let endpoints = wallPlanEndpoints(wall)
+            var wallPath = Path()
+            wallPath.move(to: projection.map(endpoints.0))
+            wallPath.addLine(to: projection.map(endpoints.1))
+            let pulseWidth = (highlightPulse ? 18.0 : 12.0) / max(zoom, 0.75)
+            context.stroke(
+                wallPath,
+                with: .color(.orange.opacity(highlightPulse ? 0.30 : 0.50)),
+                style: StrokeStyle(
+                    lineWidth: pulseWidth,
+                    lineCap: .round,
+                    lineJoin: .round
+                )
+            )
+            context.stroke(
+                wallPath,
+                with: .color(.red.opacity(0.96)),
+                style: StrokeStyle(
+                    lineWidth: 3 / max(zoom, 0.75),
+                    lineCap: .round,
+                    lineJoin: .round
+                )
+            )
+            return
+        }
+
         guard let planPoint = highlightPlanPoint(for: target) else { return }
         let center = projection.map(planPoint)
         let pulseScale: CGFloat = highlightPulse ? 1.35 : 0.85
@@ -2681,6 +2739,139 @@ private struct Plan2DView: View {
         path.closeSubpath()
         context.fill(path, with: .color(.gray.opacity(0.12)))
         context.stroke(path, with: .color(.gray.opacity(0.35)), lineWidth: 1)
+    }
+
+    private func refreshPlanWallPhotoThumbnails() {
+        var loaded: [UUID: UIImage] = [:]
+        loaded.reserveCapacity(project.walls.count)
+
+        for wall in project.walls {
+            guard let appearance = project.wallAppearance(for: wall.id),
+                  appearance.visualMode == .capturedPhotos,
+                  let photo = project.primaryPhoto(for: wall.id),
+                  let image = WallPhotoStorage.image(
+                    projectID: project.id,
+                    asset: photo,
+                    thumbnail: true
+                  ) else {
+                continue
+            }
+            loaded[wall.id] = image
+        }
+
+        planWallPhotoThumbnails = loaded
+    }
+
+    private func drawWallAppearanceLayer(
+        context: inout GraphicsContext,
+        projection: PlanProjection
+    ) {
+        let appearances = (project.wallAppearances ?? []).reduce(
+            into: [UUID: WallAppearance]()
+        ) { result, appearance in
+            result[appearance.wallID] = appearance
+        }
+
+        for wall in project.walls {
+            guard let appearance = appearances[wall.id],
+                  appearance.visualMode != .defaultMaterial else {
+                continue
+            }
+
+            let endpoints = wallPlanEndpoints(wall)
+            let start = projection.map(endpoints.0)
+            let end = projection.map(endpoints.1)
+            let deltaX = end.x - start.x
+            let deltaY = end.y - start.y
+            let length = hypot(deltaX, deltaY)
+            guard length > 1 else { continue }
+
+            let center = CGPoint(
+                x: (start.x + end.x) / 2,
+                y: (start.y + end.y) / 2
+            )
+            let angle = atan2(deltaY, deltaX)
+            let ribbonThickness = 30 / max(zoom, 0.75)
+            let localRect = CGRect(
+                x: -length / 2,
+                y: -ribbonThickness / 2,
+                width: length,
+                height: ribbonThickness
+            )
+
+            var localContext = context
+            localContext.translateBy(x: center.x, y: center.y)
+            localContext.rotate(by: .radians(Double(angle)))
+            localContext.opacity = Double(appearance.opacity)
+
+            switch appearance.visualMode {
+            case .defaultMaterial:
+                break
+            case .solidColor:
+                let color = Color(
+                    uiColor: wallPhotoUIColor(
+                        hex: appearance.solidColorHex
+                    )
+                )
+                localContext.fill(
+                    Path(localRect),
+                    with: .color(color)
+                )
+            case .capturedPhotos:
+                if let image = planWallPhotoThumbnails[wall.id] {
+                    drawWallPhotoRibbon(
+                        image,
+                        in: localRect,
+                        context: localContext
+                    )
+                } else {
+                    localContext.fill(
+                        Path(localRect),
+                        with: .color(.gray.opacity(0.20))
+                    )
+                }
+            }
+
+            localContext.stroke(
+                Path(localRect),
+                with: .color(.white.opacity(0.60)),
+                lineWidth: 1 / max(zoom, 0.75)
+            )
+        }
+    }
+
+    private func drawWallPhotoRibbon(
+        _ image: UIImage,
+        in targetRect: CGRect,
+        context: GraphicsContext
+    ) {
+        let imageWidth = max(image.size.width, 1)
+        let imageHeight = max(image.size.height, 1)
+        let imageAspect = imageWidth / imageHeight
+        let targetAspect = max(targetRect.width / max(targetRect.height, 1), 0.01)
+
+        let drawRect: CGRect
+        if imageAspect > targetAspect {
+            let width = targetRect.height * imageAspect
+            drawRect = CGRect(
+                x: targetRect.midX - width / 2,
+                y: targetRect.minY,
+                width: width,
+                height: targetRect.height
+            )
+        } else {
+            let height = targetRect.width / imageAspect
+            drawRect = CGRect(
+                x: targetRect.minX,
+                y: targetRect.midY - height / 2,
+                width: targetRect.width,
+                height: height
+            )
+        }
+
+        var imageContext = context
+        imageContext.clip(to: Path(targetRect))
+        imageContext.draw(Image(uiImage: image), in: drawRect)
     }
 
     private func drawWall(

@@ -6,6 +6,7 @@ import UIKit
 struct WallPhotosTabView: View {
     @Binding var project: RoomProject
     let onProjectChanged: () -> Void
+    let onOpenWall2D: (UUID) -> Void
     let onOpenWall3D: (UUID) -> Void
 
     @State private var selectedWallID: UUID?
@@ -67,6 +68,10 @@ struct WallPhotosTabView: View {
                     onDeletePhoto: { photo in
                         deletePhoto(photo)
                     },
+                    onOpenWall2D: {
+                        selectedWallID = nil
+                        onOpenWall2D(wall.id)
+                    },
                     onOpenWall3D: {
                         selectedWallID = nil
                         onOpenWall3D(wall.id)
@@ -99,7 +104,7 @@ struct WallPhotosTabView: View {
             .font(.footnote)
             .foregroundStyle(.secondary)
             Label(
-                "رموز الكهرباء والفتحات تظهر دائمًا فوق صورة الحائط.",
+                "صور الحوائط لها طبقة مستقلة في 2D و3D، وتبقى الكهرباء والفتحات والأبعاد فوقها.",
                 systemImage: "square.3.layers.3d.top.filled"
             )
             .font(.caption.weight(.medium))
@@ -362,6 +367,7 @@ private struct WallPhotoDetailView: View {
     let onImportPhoto: (Data, WallPhotoSource) -> UUID?
     let onSelectPhoto: (UUID) -> Void
     let onDeletePhoto: (WallPhotoAsset) -> Void
+    let onOpenWall2D: () -> Void
     let onOpenWall3D: () -> Void
 
     @State private var displayName: String
@@ -387,6 +393,7 @@ private struct WallPhotoDetailView: View {
         onImportPhoto: @escaping (Data, WallPhotoSource) -> UUID?,
         onSelectPhoto: @escaping (UUID) -> Void,
         onDeletePhoto: @escaping (WallPhotoAsset) -> Void,
+        onOpenWall2D: @escaping () -> Void,
         onOpenWall3D: @escaping () -> Void
     ) {
         self.projectID = projectID
@@ -402,6 +409,7 @@ private struct WallPhotoDetailView: View {
         self.onImportPhoto = onImportPhoto
         self.onSelectPhoto = onSelectPhoto
         self.onDeletePhoto = onDeletePhoto
+        self.onOpenWall2D = onOpenWall2D
         self.onOpenWall3D = onOpenWall3D
         _displayName = State(initialValue: appearance.displayName)
         _visualMode = State(initialValue: appearance.visualMode)
@@ -437,6 +445,12 @@ private struct WallPhotoDetailView: View {
                         "المقاس",
                         value: String(format: "%.2f × %.2f م", wall.width, wall.height)
                     )
+                    Button {
+                        saveAppearance()
+                        onOpenWall2D()
+                    } label: {
+                        Label("الذهاب إلى الحائط في 2D", systemImage: "square.grid.2x2")
+                    }
                     Button {
                         saveAppearance()
                         onOpenWall3D()

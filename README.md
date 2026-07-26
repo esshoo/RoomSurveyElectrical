@@ -1,3 +1,7 @@
+# 3ERoomElectrical v1.9.19 — Build 40
+
+طبقة صور وألوان الحوائط أصبحت ظاهرة داخل مخطط 2D مع بقاء الفرش والفتحات والكهرباء والإضاءة والأبعاد فوقها. يمكن فتح الحائط من تبويب الصور مباشرة في 2D أو 3D.
+
 # 3ERoomElectrical v1.9.18 — Build 39
 
 This source contains the Build 39 compile correction on top of **v1.9.18 Build 38**.
