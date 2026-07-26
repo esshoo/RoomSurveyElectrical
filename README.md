@@ -1,6 +1,10 @@
-# 3ERoomElectrical v1.9.16 — Build 35
+# 3ERoomElectrical v1.9.16 — Build 36
 
-## Adaptive photographic scan V2 — based directly on v1.9.14
+## Compile fix
+
+This patch fixes the Swift compiler error in `AdaptivePhotographicWallScanView.swift` where the `position` computed property did not explicitly return a `CGPoint` after declaring a local margin constant.
+
+No capture, electrical, DXF, PDF, GLB, wall-photo storage or project-data behaviour was changed.
 
 This source is built from **v1.9.14 Build 32**, not from the rejected v1.9.15/v1.9.15.1 capture flow.
 

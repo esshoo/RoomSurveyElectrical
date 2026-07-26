@@ -406,21 +406,21 @@ private struct PhotoScanEdgePulse: View {
         let margin: CGFloat = 48
         switch direction {
         case .up:
-            CGPoint(x: size.width / 2, y: margin)
+            return CGPoint(x: size.width / 2, y: margin)
         case .down:
-            CGPoint(x: size.width / 2, y: size.height - margin)
+            return CGPoint(x: size.width / 2, y: size.height - margin)
         case .left:
-            CGPoint(x: margin, y: size.height / 2)
+            return CGPoint(x: margin, y: size.height / 2)
         case .right:
-            CGPoint(x: size.width - margin, y: size.height / 2)
+            return CGPoint(x: size.width - margin, y: size.height / 2)
         case .upLeft:
-            CGPoint(x: margin, y: margin)
+            return CGPoint(x: margin, y: margin)
         case .upRight:
-            CGPoint(x: size.width - margin, y: margin)
+            return CGPoint(x: size.width - margin, y: margin)
         case .downLeft:
-            CGPoint(x: margin, y: size.height - margin)
+            return CGPoint(x: margin, y: size.height - margin)
         case .downRight:
-            CGPoint(x: size.width - margin, y: size.height - margin)
+            return CGPoint(x: size.width - margin, y: size.height - margin)
         }
     }
 }
