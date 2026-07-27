@@ -52,6 +52,7 @@ struct AdaptivePhotographicWallScanView: View {
     @Binding var project: RoomProject
     let arSession: ARSession
     let performanceProfile: SpatialScanPerformanceProfile
+    let targetSegmentIDs: Set<UUID>?
     let onProjectChanged: () -> Void
     let onClose: () -> Void
 
@@ -61,12 +62,29 @@ struct AdaptivePhotographicWallScanView: View {
     @State private var isFinishing = false
     @State private var dirtyCompositeWallIDs: Set<UUID> = []
 
+    init(
+        project: Binding<RoomProject>,
+        arSession: ARSession,
+        performanceProfile: SpatialScanPerformanceProfile,
+        targetSegmentIDs: Set<UUID>? = nil,
+        onProjectChanged: @escaping () -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        _project = project
+        self.arSession = arSession
+        self.performanceProfile = performanceProfile
+        self.targetSegmentIDs = targetSegmentIDs
+        self.onProjectChanged = onProjectChanged
+        self.onClose = onClose
+    }
+
     var body: some View {
         ZStack {
             AdaptivePhotographicWallScanARView(
                 project: project,
                 arSession: arSession,
                 performanceProfile: performanceProfile,
+                targetSegmentIDs: targetSegmentIDs,
                 autoCaptureEnabled: autoCaptureEnabled,
                 onGuidanceChanged: { newGuidance in
                     guidance = newGuidance
@@ -276,14 +294,19 @@ struct AdaptivePhotographicWallScanView: View {
         project.wallPhotoSegments ?? []
     }
 
-    private var totalCount: Int { segments.count }
+    private var sessionSegments: [WallPhotoSegment] {
+        guard let targetSegmentIDs else { return segments }
+        return segments.filter { targetSegmentIDs.contains($0.id) }
+    }
+
+    private var totalCount: Int { sessionSegments.count }
 
     private var capturedCount: Int {
-        segments.filter(\.isPhotoCaptureSatisfied).count
+        sessionSegments.filter(\.isPhotoCaptureSatisfied).count
     }
 
     private var remainingCount: Int {
-        segments.filter { !$0.isPhotoCaptureSatisfied }.count
+        sessionSegments.filter { !$0.isPhotoCaptureSatisfied }.count
     }
 
     private var coverage: Double {
@@ -470,6 +493,7 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
     var project: RoomProject
     let arSession: ARSession
     let performanceProfile: SpatialScanPerformanceProfile
+    let targetSegmentIDs: Set<UUID>?
     let autoCaptureEnabled: Bool
     let onGuidanceChanged: (AdaptivePhotoScanGuidance) -> Void
     let onCaptured: (Data, UUID, Float) -> Void
@@ -704,7 +728,8 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
             lastEvaluationTime = now
 
             let pending = (parent.project.wallPhotoSegments ?? []).filter {
-                !$0.isPhotoCaptureSatisfied
+                (parent.targetSegmentIDs == nil || parent.targetSegmentIDs?.contains($0.id) == true)
+                    && !$0.isPhotoCaptureSatisfied
             }
             guard !pending.isEmpty else {
                 currentActiveSegmentID = nil

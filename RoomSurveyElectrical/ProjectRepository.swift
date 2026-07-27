@@ -1,3 +1,4 @@
+import ARKit
 import Foundation
 import RoomPlan
 
@@ -242,6 +243,48 @@ enum ProjectRepository {
         ).appendingPathComponent(fileName)
     }
 
+
+    static func saveWorldMap(
+        _ worldMap: ARWorldMap,
+        projectID: UUID
+    ) throws -> String {
+        let fileName = "spatial-world-map.arexperience"
+        let url = try assetURL(
+            projectID: projectID,
+            fileName: fileName,
+            createProjectDirectory: true
+        )
+        let data = try NSKeyedArchiver.archivedData(
+            withRootObject: worldMap,
+            requiringSecureCoding: true
+        )
+        try data.write(to: url, options: .atomic)
+        return fileName
+    }
+
+    static func loadWorldMap(
+        projectID: UUID,
+        fileName: String
+    ) throws -> ARWorldMap {
+        let url = try assetURL(projectID: projectID, fileName: fileName)
+        let data = try Data(contentsOf: url)
+        guard let map = try NSKeyedUnarchiver.unarchivedObject(
+            ofClass: ARWorldMap.self,
+            from: data
+        ) else {
+            throw RepositoryError.invalidImportedFiles
+        }
+        return map
+    }
+
+    static func hasWorldMap(_ project: RoomProject) -> Bool {
+        guard let fileName = project.worldMapFile,
+              let url = try? assetURL(projectID: project.id, fileName: fileName) else {
+            return false
+        }
+        return fileManager.fileExists(atPath: url.path)
+    }
+
     static func removeAsset(projectID: UUID, fileName: String?) {
         guard let fileName,
               let url = try? assetURL(
@@ -295,11 +338,14 @@ enum ProjectRepository {
             processedJSONFile: source.processedJSONFile,
             rawJSONFile: source.rawJSONFile,
             usdzFile: source.usdzFile,
+            worldMapFile: source.worldMapFile,
             electricalSettings: source.electricalSettings,
             ceilingLights: source.ceilingLights,
             ceilingLightLayouts: source.ceilingLightLayouts,
             wallAppearances: source.wallAppearances,
-            wallPhotos: source.wallPhotos
+            wallPhotos: source.wallPhotos,
+            wallPhotoSegments: source.wallPhotoSegments,
+            photographicScanProgress: source.photographicScanProgress
         )
         try save(copy)
         return copy

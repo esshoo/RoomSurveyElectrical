@@ -130,6 +130,9 @@ enum ProjectPackageService {
             if let rawJSONFile = room.rawJSONFile {
                 assetNames.append(rawJSONFile)
             }
+            if let worldMapFile = room.worldMapFile {
+                assetNames.append(worldMapFile)
+            }
             if !(room.wallPhotos ?? []).isEmpty {
                 requiresWallPhotoReader = true
             }
@@ -328,6 +331,7 @@ enum ProjectPackageService {
                     room.processedJSONFile,
                     room.usdzFile
                 ] + (room.rawJSONFile.map { [$0] } ?? [])
+                    + (room.worldMapFile.map { [$0] } ?? [])
                     + wallPhotoAssets
             )
             let availableAssets = Set(assets.keys)
@@ -543,11 +547,14 @@ enum ProjectPackageService {
             processedJSONFile: source.processedJSONFile,
             rawJSONFile: source.rawJSONFile,
             usdzFile: source.usdzFile,
+            worldMapFile: source.worldMapFile,
             electricalSettings: source.electricalSettings,
             ceilingLights: source.ceilingLights,
             ceilingLightLayouts: source.ceilingLightLayouts,
             wallAppearances: source.wallAppearances,
-            wallPhotos: source.wallPhotos
+            wallPhotos: source.wallPhotos,
+            wallPhotoSegments: source.wallPhotoSegments,
+            photographicScanProgress: source.photographicScanProgress
         )
     }
 

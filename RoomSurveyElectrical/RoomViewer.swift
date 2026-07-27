@@ -57,6 +57,19 @@ enum Plan2DHighlightTarget: Equatable, Identifiable {
     }
 }
 
+
+private enum RoomViewerScanWorkflow: String, Identifiable {
+    case continueExisting
+    case rescanAsNew
+
+    var id: String { rawValue }
+}
+
+private struct WeakPhotoRecaptureRequest: Identifiable {
+    let id = UUID()
+    let segmentIDs: Set<UUID>
+}
+
 struct RoomViewerView: View {
     @EnvironmentObject private var store: ProjectStore
     @Environment(\.dismiss) private var dismiss
@@ -75,6 +88,8 @@ struct RoomViewerView: View {
     @State private var isExporting = false
     @State private var errorMessage: String?
     @State private var focusedWallID: UUID?
+    @State private var scanWorkflow: RoomViewerScanWorkflow?
+    @State private var weakPhotoRecaptureRequest: WeakPhotoRecaptureRequest?
 
     init(initialProject: RoomProject, surveyProjectID: UUID) {
         self.surveyProjectID = surveyProjectID
@@ -107,6 +122,18 @@ struct RoomViewerView: View {
                     onOpenWall3D: { wallID in
                         focusedWallID = wallID
                         mode = .model3D
+                    },
+                    onRecaptureWeakSegments: { segmentIDs in
+                        guard ProjectRepository.hasWorldMap(project) else {
+                            errorMessage =
+                                "هذا المسح لا يحتوي على خريطة تتبع محفوظة. "
+                                + "أعد المسح كنسخة جديدة مرة واحدة بالإصدار الحالي، "
+                                + "أو استخدم رفع صورة محلية."
+                            return
+                        }
+                        weakPhotoRecaptureRequest = WeakPhotoRecaptureRequest(
+                            segmentIDs: segmentIDs
+                        )
                     }
                 )
             }
@@ -188,6 +215,43 @@ struct RoomViewerView: View {
         .sheet(item: $exportedFile) { file in
             ExportShareSheet(items: [file.url])
         }
+        .fullScreenCover(item: $weakPhotoRecaptureRequest) { request in
+            WallPhotoRecaptureWorkflowView(
+                initialProject: project,
+                performanceProfile: workspaceSettings.spatialScanPerformanceProfile,
+                targetSegmentIDs: request.segmentIDs,
+                onClose: {
+                    weakPhotoRecaptureRequest = nil
+                    reloadProject()
+                }
+            )
+        }
+        .fullScreenCover(item: $scanWorkflow) { workflow in
+            switch workflow {
+            case .continueExisting:
+                RoomWorkflowView(
+                    existingProject: project,
+                    surveyProjectID: surveyProjectID,
+                    onClose: {
+                        scanWorkflow = nil
+                        reloadProject()
+                    }
+                )
+            case .rescanAsNew:
+                RoomWorkflowView(
+                    destination: ScanDestination(
+                        surveyProjectID: surveyProjectID,
+                        parentItemID: scanReference?.parentID,
+                        scanName: "إعادة مسح - \(project.name)"
+                    ),
+                    onClose: {
+                        scanWorkflow = nil
+                        store.reload()
+                        reloadProject()
+                    }
+                )
+            }
+        }
         .alert("تعذر تنفيذ العملية", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -212,6 +276,10 @@ struct RoomViewerView: View {
             store.reload()
             reloadProject()
         }
+    }
+
+    private var workspaceSettings: ElectricalPlacementSettings {
+        store.project(id: surveyProjectID)?.settings ?? .standard
     }
 
     private var effectiveLayers: ViewerLayerVisibility {
@@ -333,6 +401,32 @@ struct RoomViewerView: View {
                 )
             ) {
                 Label("يدخل في حصر المشروع", systemImage: "checklist")
+            }
+
+            Section("تحديث المسح") {
+                Button {
+                    guard ProjectRepository.hasWorldMap(project) else {
+                        errorMessage =
+                            "لا يمكن استكمال هذا المسح بدقة لأنه لا يحتوي على خريطة تتبع محفوظة. "
+                            + "استخدم «إعادة المسح كنسخة جديدة»؛ المسحات الجديدة سيمكن استكمالها لاحقًا."
+                        return
+                    }
+                    scanWorkflow = .continueExisting
+                } label: {
+                    Label(
+                        "استكمال أو مسح جزء إضافي",
+                        systemImage: "viewfinder.circle"
+                    )
+                }
+
+                Button {
+                    scanWorkflow = .rescanAsNew
+                } label: {
+                    Label(
+                        "إعادة المسح كنسخة جديدة",
+                        systemImage: "arrow.clockwise.circle"
+                    )
+                }
             }
 
             Section("تصدير") {

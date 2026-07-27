@@ -8,6 +8,7 @@ struct WallPhotosTabView: View {
     let onProjectChanged: () -> Void
     let onOpenWall2D: (UUID) -> Void
     let onOpenWall3D: (UUID) -> Void
+    let onRecaptureWeakSegments: (Set<UUID>) -> Void
 
     @State private var selectedWallID: UUID?
     @State private var errorMessage: String?
@@ -73,6 +74,12 @@ struct WallPhotosTabView: View {
                     },
                     onMarkWeakForRecapture: {
                         markWeakSegmentsForRecapture(wallID: wall.id)
+                    },
+                    onStartWeakRecapture: { segmentIDs in
+                        selectedWallID = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            onRecaptureWeakSegments(segmentIDs)
+                        }
                     },
                     onOpenWall2D: {
                         selectedWallID = nil
@@ -228,18 +235,18 @@ struct WallPhotosTabView: View {
     }
 
     @discardableResult
-    private func markWeakSegmentsForRecapture(wallID: UUID) -> Int {
-        guard var segments = project.wallPhotoSegments else { return 0 }
-        var markedCount = 0
+    private func markWeakSegmentsForRecapture(wallID: UUID) -> Set<UUID> {
+        guard var segments = project.wallPhotoSegments else { return [] }
+        var markedIDs: Set<UUID> = []
         for index in segments.indices
             where segments[index].wallID == wallID
                 && segments[index].isWeakPhotoCapture {
             segments[index].needsRecapture = true
-            markedCount += 1
+            markedIDs.insert(segments[index].id)
         }
         project.wallPhotoSegments = segments
-        if markedCount > 0 { persist() }
-        return markedCount
+        if !markedIDs.isEmpty { persist() }
+        return markedIDs
     }
 
     private func persist() {
@@ -401,7 +408,8 @@ private struct WallPhotoDetailView: View {
     let onSelectPhoto: (UUID) -> Void
     let onDeletePhoto: (WallPhotoAsset) -> Void
     let onRebuildComposite: () throws -> Void
-    let onMarkWeakForRecapture: () -> Int
+    let onMarkWeakForRecapture: () -> Set<UUID>
+    let onStartWeakRecapture: (Set<UUID>) -> Void
     let onOpenWall2D: () -> Void
     let onOpenWall3D: () -> Void
 
@@ -431,7 +439,8 @@ private struct WallPhotoDetailView: View {
         onSelectPhoto: @escaping (UUID) -> Void,
         onDeletePhoto: @escaping (WallPhotoAsset) -> Void,
         onRebuildComposite: @escaping () throws -> Void,
-        onMarkWeakForRecapture: @escaping () -> Int,
+        onMarkWeakForRecapture: @escaping () -> Set<UUID>,
+        onStartWeakRecapture: @escaping (Set<UUID>) -> Void,
         onOpenWall2D: @escaping () -> Void,
         onOpenWall3D: @escaping () -> Void
     ) {
@@ -450,6 +459,7 @@ private struct WallPhotoDetailView: View {
         self.onDeletePhoto = onDeletePhoto
         self.onRebuildComposite = onRebuildComposite
         self.onMarkWeakForRecapture = onMarkWeakForRecapture
+        self.onStartWeakRecapture = onStartWeakRecapture
         self.onOpenWall2D = onOpenWall2D
         self.onOpenWall3D = onOpenWall3D
         _displayName = State(initialValue: appearance.displayName)
@@ -532,10 +542,14 @@ private struct WallPhotoDetailView: View {
 
                         if qualitySummary.weakCount > 0 {
                             Button {
-                                let count = onMarkWeakForRecapture()
-                                operationMessage = count > 0
-                                    ? "تم تحديد \(count) جزء لإعادة التصوير. عند فتح المسح الفوتوغرافي سيبحث التطبيق عن هذه الأجزاء فقط مع أي أجزاء ناقصة."
-                                    : "لا توجد أجزاء ضعيفة جديدة لإعادة تصويرها."
+                                let segmentIDs = onMarkWeakForRecapture()
+                                guard !segmentIDs.isEmpty else {
+                                    operationMessage = "لا توجد أجزاء ضعيفة جديدة لإعادة تصويرها."
+                                    return
+                                }
+                                saveAppearance()
+                                dismiss()
+                                onStartWeakRecapture(segmentIDs)
                             } label: {
                                 Label(
                                     "إعادة تصوير الأجزاء الضعيفة فقط",

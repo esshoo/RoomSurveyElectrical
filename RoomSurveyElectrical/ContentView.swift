@@ -2849,9 +2849,27 @@ struct RoomWorkflowView: View {
         self.onClose = onClose
     }
 
+    init(
+        existingProject: RoomProject,
+        surveyProjectID: UUID,
+        onClose: @escaping () -> Void
+    ) {
+        let resolvedSettings = WorkspaceRepository.load(
+            projectID: surveyProjectID
+        )?.settings ?? existingProject.electricalSettings ?? GlobalSettingsRepository.load()
+        settings = resolvedSettings
+        _model = StateObject(
+            wrappedValue: RoomCaptureModel(
+                existingProject: existingProject,
+                settings: resolvedSettings
+            )
+        )
+        self.onClose = onClose
+    }
+
     var body: some View {
         Group {
-            if let project = model.project {
+            if model.phase == .ready, let project = model.project {
                 ElectricalEditorView(
                     initialProject: project,
                     arSession: model.arSession,
@@ -2913,22 +2931,59 @@ private struct ScanRoomView: View {
                 Spacer()
 
                 VStack(spacing: 12) {
-                    if model.phase == .processing {
-                        ProgressView("جارٍ تجهيز JSON وUSDZ…")
-                            .padding()
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    switch model.phase {
+                    case .relocalizing:
+                        VStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.large)
+                            Text("التعرف على مكان المسح السابق")
+                                .font(.headline)
+                            Text(model.relocalizationMessage)
+                                .font(.subheadline)
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            .ultraThinMaterial,
+                            in: RoundedRectangle(cornerRadius: 14)
+                        )
+
+                    case .processing:
+                        ProgressView(
+                            model.thermalState == .serious || model.thermalState == .critical
+                                ? "جارٍ إيقاف الكاميرا وحفظ المسح لحماية الهاتف…"
+                                : "جارٍ تجهيز JSON وUSDZ وحفظ خريطة المكان…"
+                        )
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            .ultraThinMaterial,
+                            in: RoundedRectangle(cornerRadius: 14)
+                        )
+
+                    case .coolingDown:
+                        thermalCoolingCard
+
+                    default:
+                        EmptyView()
                     }
 
-                    Button {
-                        model.finish()
-                    } label: {
-                        Label("إنهاء المسح وتجهيز الغرفة", systemImage: "checkmark.circle.fill")
+                    if model.phase == .scanning {
+                        Button {
+                            model.finish()
+                        } label: {
+                            Label(
+                                "إنهاء المسح وتجهيز الغرفة",
+                                systemImage: "checkmark.circle.fill"
+                            )
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.phase != .scanning)
                 }
                 .padding()
             }
@@ -2961,6 +3016,59 @@ private struct ScanRoomView: View {
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
         }
+    }
+
+    private var thermalCoolingCard: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "thermometer.high")
+                .font(.largeTitle)
+                .foregroundStyle(.orange)
+
+            Text("تم إيقاف المسح وحفظ ما تم")
+                .font(.headline)
+
+            Text(
+                "حالة حرارة الهاتف: \(model.thermalStateTitle). "
+                    + "تم إيقاف الكاميرا لحماية الجهاز ومنع ضياع نتيجة المسح."
+            )
+            .font(.subheadline)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+
+            if model.canResumeAfterCooling {
+                Button {
+                    model.resumeAfterCooling()
+                } label: {
+                    Label(
+                        "متابعة المسح من نفس المكان",
+                        systemImage: "play.circle.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                ProgressView("انتظر حتى تنخفض حرارة الهاتف…")
+            }
+
+            if model.project != nil {
+                Button {
+                    model.acceptSavedPartialResult()
+                } label: {
+                    Label(
+                        "اعتماد الجزء المحفوظ والانتقال للكهرباء",
+                        systemImage: "checkmark.shield.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 16)
+        )
     }
 
     private func updateIdleTimer(for phase: RoomCaptureModel.Phase) {

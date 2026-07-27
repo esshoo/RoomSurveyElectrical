@@ -275,6 +275,18 @@ struct WallSnapshot: Codable, Identifiable, Equatable {
         transform = surface.transform.columnMajorValues
     }
 
+    init(
+        id: UUID,
+        width: Float,
+        height: Float,
+        matrix: simd_float4x4
+    ) {
+        self.id = id
+        self.width = width
+        self.height = height
+        transform = matrix.columnMajorValues
+    }
+
     var matrix: simd_float4x4 {
         simd_float4x4(columnMajorValues: transform)
     }
@@ -341,6 +353,18 @@ struct FloorSnapshot: Codable, Identifiable, Equatable {
         transform = surface.transform.columnMajorValues
     }
 
+    init(
+        id: UUID,
+        width: Float,
+        depth: Float,
+        matrix: simd_float4x4
+    ) {
+        self.id = id
+        self.width = width
+        self.depth = depth
+        transform = matrix.columnMajorValues
+    }
+
     var matrix: simd_float4x4 {
         simd_float4x4(columnMajorValues: transform)
     }
@@ -361,6 +385,22 @@ struct RoomObjectSnapshot: Codable, Identifiable, Equatable {
         height = object.dimensions.y
         depth = object.dimensions.z
         transform = object.transform.columnMajorValues
+    }
+
+    init(
+        id: UUID,
+        category: String,
+        width: Float,
+        height: Float,
+        depth: Float,
+        matrix: simd_float4x4
+    ) {
+        self.id = id
+        self.category = category
+        self.width = width
+        self.height = height
+        self.depth = depth
+        transform = matrix.columnMajorValues
     }
 
     var matrix: simd_float4x4 {
@@ -705,7 +745,7 @@ struct RoomProject: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
     let createdAt: Date
-    let walls: [WallSnapshot]
+    var walls: [WallSnapshot]
     var surfaces: [SurfaceSnapshot]
     var floors: [FloorSnapshot]?
     var objects: [RoomObjectSnapshot]?
@@ -713,6 +753,7 @@ struct RoomProject: Codable, Identifiable, Equatable {
     let processedJSONFile: String
     let rawJSONFile: String?
     let usdzFile: String
+    var worldMapFile: String? = nil
     var electricalSettings: ElectricalPlacementSettings?
     var ceilingLights: [CeilingLight]? = nil
     var ceilingLightLayouts: [CeilingLightLayout]? = nil
