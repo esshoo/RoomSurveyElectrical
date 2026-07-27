@@ -231,6 +231,72 @@ enum SpatialScanPerformanceProfile: String, Codable, CaseIterable, Identifiable 
     }
 }
 
+
+enum SpatialScanThermalProtectionMode: String, Codable, CaseIterable, Identifiable {
+    case earlyProtection
+    case balanced
+    case extendedSession
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .earlyProtection: "حماية مبكرة"
+        case .balanced: "متوازن — موصى به"
+        case .extendedSession: "جلسة ممتدة"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .earlyProtection:
+            "يتدخل مبكرًا عند الحرارة الدافئة، ويوقف ويحفظ المسح إذا استمرت الحالة لحماية الأجهزة والبيئات الأكثر حرارة."
+        case .balanced:
+            "يستمر عند الحرارة الدافئة، ويوقف ويحفظ المسح عند وصول النظام إلى حرارة مرتفعة."
+        case .extendedSession:
+            "يستمر بحذر عند الحرارة المرتفعة، ويتوقف إلزاميًا عند الحالة الحرجة. قد يزيد احتمال ظهور تحذير iOS الحراري."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .earlyProtection: "thermometer.low"
+        case .balanced: "thermometer.medium"
+        case .extendedSession: "thermometer.high"
+        }
+    }
+
+    var stopsImmediatelyAtSerious: Bool {
+        self != .extendedSession
+    }
+
+    var stopsAtCritical: Bool { true }
+
+    var fairStateGracePeriod: TimeInterval? {
+        self == .earlyProtection ? 20 : nil
+    }
+
+    var resumeRequiresNominalState: Bool {
+        self == .earlyProtection
+    }
+}
+
+enum ThermalResumeStabilityDuration: Int, Codable, CaseIterable, Identifiable {
+    case seconds15 = 15
+    case seconds30 = 30
+    case seconds60 = 60
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .seconds15: "15 ثانية"
+        case .seconds30: "30 ثانية"
+        case .seconds60: "60 ثانية"
+        }
+    }
+}
+
 enum SpatialScanContentMode: String, Codable, CaseIterable, Identifiable {
     case completeRoom
     case architectureOnly
@@ -279,6 +345,9 @@ struct ElectricalPlacementSettings: Codable, Equatable {
     var keepScreenAwakeDuringSpatialScanValue: Bool?
     var spatialScanPerformanceProfileValue: SpatialScanPerformanceProfile?
     var spatialScanContentModeValue: SpatialScanContentMode?
+    var spatialScanThermalProtectionModeValue: SpatialScanThermalProtectionMode?
+    var thermalResumeStabilityDurationValue: ThermalResumeStabilityDuration?
+    var showThermalStateDuringSpatialScanValue: Bool?
 
     var doorSuggestionMinimumMeters: Double {
         get { doorSuggestionMinimumMetersValue ?? 0.20 }
@@ -360,6 +429,21 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         set { spatialScanContentModeValue = newValue }
     }
 
+    var spatialScanThermalProtectionMode: SpatialScanThermalProtectionMode {
+        get { spatialScanThermalProtectionModeValue ?? .balanced }
+        set { spatialScanThermalProtectionModeValue = newValue }
+    }
+
+    var thermalResumeStabilityDuration: ThermalResumeStabilityDuration {
+        get { thermalResumeStabilityDurationValue ?? .seconds30 }
+        set { thermalResumeStabilityDurationValue = newValue }
+    }
+
+    var showThermalStateDuringSpatialScan: Bool {
+        get { showThermalStateDuringSpatialScanValue ?? true }
+        set { showThermalStateDuringSpatialScanValue = newValue }
+    }
+
     static let standard = ElectricalPlacementSettings(
         switchHeightMeters: 1.20,
         socketHeightMeters: 0.50,
@@ -382,7 +466,10 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         windowAirConditionerHeightMetersValue: 1.60,
         keepScreenAwakeDuringSpatialScanValue: true,
         spatialScanPerformanceProfileValue: .balanced,
-        spatialScanContentModeValue: .completeRoom
+        spatialScanContentModeValue: .completeRoom,
+        spatialScanThermalProtectionModeValue: .balanced,
+        thermalResumeStabilityDurationValue: .seconds30,
+        showThermalStateDuringSpatialScanValue: true
     )
 }
 

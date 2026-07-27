@@ -2521,6 +2521,47 @@ private struct ElectricalSettingsView: View {
             .foregroundStyle(.secondary)
         }
 
+        Section("الحماية الحرارية") {
+            Picker(
+                "مستوى الحماية",
+                selection: $settings.spatialScanThermalProtectionMode
+            ) {
+                ForEach(SpatialScanThermalProtectionMode.allCases) { mode in
+                    Label(mode.title, systemImage: mode.systemImage)
+                        .tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Text(settings.spatialScanThermalProtectionMode.subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker(
+                "استقرار الحرارة قبل المتابعة",
+                selection: $settings.thermalResumeStabilityDuration
+            ) {
+                ForEach(ThermalResumeStabilityDuration.allCases) { duration in
+                    Text(duration.title).tag(duration)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Toggle(
+                "إظهار حالة الحرارة أثناء المسح",
+                isOn: $settings.showThermalStateDuringSpatialScan
+            )
+
+            LabeledContent("الحفظ التلقائي قبل الإيقاف", value: "مفعّل دائمًا")
+
+            Text(
+                "لا يمكن تعطيل الحفظ الوقائي أو الإيقاف عند الحالة الحرجة. "
+                    + "التطبيق يعتمد حالات الحرارة التي يحددها iOS لكل جهاز، وليس درجة ثابتة بالسيلسيوس."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
         Section("تأثير الوضع الحالي") {
             LabeledContent(
                 "الفرش داخل المشروع",
@@ -2539,6 +2580,10 @@ private struct ElectricalSettingsView: View {
             LabeledContent(
                 "العرض ثلاثي الأبعاد",
                 value: "\(settings.spatialScanPerformanceProfile.viewerFramesPerSecond) إطار/ث"
+            )
+            LabeledContent(
+                "الحماية الحرارية",
+                value: settings.spatialScanThermalProtectionMode.title
             )
             Text(
                 "وضع الحوائط والفتحات فقط يمنع حفظ ورسم الفرش في المشروع، "
@@ -2884,6 +2929,7 @@ struct RoomWorkflowView: View {
                     model: model,
                     keepScreenAwakeDuringSpatialScan: settings.keepScreenAwakeDuringSpatialScan,
                     scanContentMode: settings.spatialScanContentMode,
+                    showThermalState: settings.showThermalStateDuringSpatialScan,
                     onClose: {
                         model.cancel()
                         onClose()
@@ -2899,6 +2945,7 @@ private struct ScanRoomView: View {
     @ObservedObject var model: RoomCaptureModel
     let keepScreenAwakeDuringSpatialScan: Bool
     let scanContentMode: SpatialScanContentMode
+    let showThermalState: Bool
     let onClose: () -> Void
 
     var body: some View {
@@ -2927,6 +2974,24 @@ private struct ScanRoomView: View {
                     .background(.ultraThinMaterial, in: Capsule())
                 }
                 .padding()
+
+                if showThermalState,
+                   model.phase == .scanning || model.phase == .relocalizing {
+                    HStack {
+                        Spacer()
+                        Label(
+                            "الحرارة: \(model.thermalStateTitle)",
+                            systemImage: thermalStateSystemImage
+                        )
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(thermalStateColor)
+                        .padding(.horizontal, 12)
+                        .frame(height: 36)
+                        .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .padding(.horizontal)
+                    .accessibilityLabel(model.thermalStateMessage)
+                }
 
                 Spacer()
 
@@ -3024,16 +3089,19 @@ private struct ScanRoomView: View {
                 .font(.largeTitle)
                 .foregroundStyle(.orange)
 
-            Text("تم إيقاف المسح وحفظ ما تم")
+            Text(model.thermalCoolingTitle)
                 .font(.headline)
 
             Text(
                 "حالة حرارة الهاتف: \(model.thermalStateTitle). "
-                    + "تم إيقاف الكاميرا لحماية الجهاز ومنع ضياع نتيجة المسح."
+                    + model.thermalCoolingDetail
             )
             .font(.subheadline)
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
+
+            Text("وضع الحماية: \(model.thermalProtectionTitle)")
+                .font(.caption.weight(.semibold))
 
             if model.canResumeAfterCooling {
                 Button {
@@ -3046,8 +3114,20 @@ private struct ScanRoomView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+            } else if model.isCurrentThermalStateAcceptableForResume {
+                ProgressView()
+                    .controlSize(.regular)
+                Text(
+                    "تأكد استقرار الحرارة… متبقٍ \(model.thermalResumeSecondsRemaining) ثانية"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             } else {
-                ProgressView("انتظر حتى تنخفض حرارة الهاتف…")
+                ProgressView(
+                    model.thermalState == .fair
+                        ? "الحماية المبكرة تنتظر عودة الحرارة إلى طبيعية…"
+                        : "انتظر حتى تنخفض حرارة الهاتف…"
+                )
             }
 
             if model.project != nil {
@@ -3069,6 +3149,25 @@ private struct ScanRoomView: View {
             .regularMaterial,
             in: RoundedRectangle(cornerRadius: 16)
         )
+    }
+
+    private var thermalStateSystemImage: String {
+        switch model.thermalState {
+        case .nominal: return "thermometer.low"
+        case .fair: return "thermometer.medium"
+        case .serious, .critical: return "thermometer.high"
+        @unknown default: return "thermometer"
+        }
+    }
+
+    private var thermalStateColor: Color {
+        switch model.thermalState {
+        case .nominal: return .green
+        case .fair: return .yellow
+        case .serious: return .orange
+        case .critical: return .red
+        @unknown default: return .gray
+        }
     }
 
     private func updateIdleTimer(for phase: RoomCaptureModel.Phase) {

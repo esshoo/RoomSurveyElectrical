@@ -23,9 +23,17 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         case thermalSafety
     }
 
+    private enum ThermalPauseContext {
+        case beforeStart
+        case scanningSaved
+        case relocalization
+    }
+
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var project: RoomProject?
     @Published private(set) var thermalState: ProcessInfo.ThermalState
+    @Published private(set) var thermalResumeSecondsRemaining = 0
+    @Published private(set) var isThermallyReadyToResume = false
     @Published private(set) var relocalizationMessage = "وجّه الكاميرا إلى جزء معروف من الغرفة."
 
     let arSession: ARSession
@@ -36,6 +44,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private let destination: ScanDestination?
     private let includeFurniture: Bool
     private let startsFromExistingProject: Bool
+    private let thermalProtectionMode: SpatialScanThermalProtectionMode
+    private let thermalResumeStabilitySeconds: Int
 
     private var latestRoomSnapshot: CapturedRoom?
     private var stopReason: StopReason = .userFinished
@@ -43,11 +53,16 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private var isStartingCapture = false
     private var thermalObserver: NSObjectProtocol?
     private var relocalizationTimeoutTask: Task<Void, Never>?
+    private var fairThermalPauseTask: Task<Void, Never>?
+    private var thermalResumeStabilityTask: Task<Void, Never>?
+    private var thermalPauseContext: ThermalPauseContext = .beforeStart
 
     override init() {
         destination = nil
         includeFurniture = true
         startsFromExistingProject = false
+        thermalProtectionMode = .balanced
+        thermalResumeStabilitySeconds = ThermalResumeStabilityDuration.seconds30.rawValue
         thermalState = ProcessInfo.processInfo.thermalState
         let sharedSession = ARSession()
         arSession = sharedSession
@@ -63,6 +78,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         self.destination = destination
         includeFurniture = settings.spatialScanContentMode.includesFurniture
         startsFromExistingProject = false
+        thermalProtectionMode = settings.spatialScanThermalProtectionMode
+        thermalResumeStabilitySeconds = settings.thermalResumeStabilityDuration.rawValue
         thermalState = ProcessInfo.processInfo.thermalState
         let sharedSession = ARSession()
         arSession = sharedSession
@@ -78,6 +95,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         destination = nil
         includeFurniture = settings.spatialScanContentMode.includesFurniture
         startsFromExistingProject = true
+        thermalProtectionMode = settings.spatialScanThermalProtectionMode
+        thermalResumeStabilitySeconds = settings.thermalResumeStabilityDuration.rawValue
         thermalState = ProcessInfo.processInfo.thermalState
         let sharedSession = ARSession()
         arSession = sharedSession
@@ -91,6 +110,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         destination = nil
         includeFurniture = true
         startsFromExistingProject = false
+        thermalProtectionMode = .balanced
+        thermalResumeStabilitySeconds = ThermalResumeStabilityDuration.seconds30.rawValue
         thermalState = ProcessInfo.processInfo.thermalState
         let sharedSession = ARSession()
         arSession = sharedSession
@@ -104,6 +125,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             NotificationCenter.default.removeObserver(thermalObserver)
         }
         relocalizationTimeoutTask?.cancel()
+        fairThermalPauseTask?.cancel()
+        thermalResumeStabilityTask?.cancel()
     }
 
     nonisolated func encode(with coder: NSCoder) {
@@ -117,7 +140,37 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     }
 
     var canResumeAfterCooling: Bool {
-        thermalState == .nominal || thermalState == .fair
+        isThermallyReadyToResume
+    }
+
+    var isCurrentThermalStateAcceptableForResume: Bool {
+        isResumeThermalStateAcceptable(thermalState)
+    }
+
+    var thermalProtectionTitle: String {
+        thermalProtectionMode.title
+    }
+
+    var thermalCoolingTitle: String {
+        switch thermalPauseContext {
+        case .beforeStart:
+            "تم تأجيل بدء المسح"
+        case .scanningSaved:
+            "تم إيقاف المسح وحفظ ما تم"
+        case .relocalization:
+            "تم إيقاف استعادة المكان مؤقتًا"
+        }
+    }
+
+    var thermalCoolingDetail: String {
+        switch thermalPauseContext {
+        case .beforeStart:
+            "حرارة الهاتف لا تسمح ببدء جلسة آمنة حسب وضع الحماية المختار."
+        case .scanningSaved:
+            "تم إيقاف الكاميرا وحفظ أحدث نتيجة متاحة، مع محاولة حفظ خريطة المكان قبل انتظار التبريد."
+        case .relocalization:
+            "تم إيقاف الكاميرا قبل استكمال المسح. سيُعاد التعرف على المكان بعد استقرار الحرارة."
+        }
     }
 
     var thermalStateTitle: String {
@@ -130,12 +183,39 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         }
     }
 
+    var thermalStateMessage: String {
+        switch thermalState {
+        case .nominal:
+            return "الحرارة طبيعية والمسح يعمل بالإعدادات المختارة."
+        case .fair:
+            if thermalProtectionMode == .earlyProtection {
+                return "الهاتف دافئ. ستتوقف الجلسة وتحفظ تلقائيًا إذا استمرت الحالة."
+            }
+            return "الهاتف دافئ. يستمر المسح مع مراقبة الحرارة."
+        case .serious:
+            if thermalProtectionMode == .extendedSession {
+                return "الحرارة مرتفعة. وضع الجلسة الممتدة يستمر بحذر حتى الحالة الحرجة."
+            }
+            return "الحرارة مرتفعة. جارٍ الحفظ والإيقاف الوقائي."
+        case .critical:
+            return "الحرارة حرجة. يجب إيقاف الكاميرا وانتظار التبريد."
+        @unknown default:
+            return "تعذر تحديد حالة الحرارة."
+        }
+    }
+
     func start() {
         guard isSupported else {
             phase = .failed("هذا الجهاز لا يدعم RoomPlan أو لا يحتوي على LiDAR.")
             return
         }
         guard phase == .idle else { return }
+
+        thermalState = ProcessInfo.processInfo.thermalState
+        guard !mustPauseImmediately(for: thermalState) else {
+            enterCoolingDown(context: .beforeStart)
+            return
+        }
 
         rawRoomData = nil
         latestRoomSnapshot = nil
@@ -152,19 +232,29 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
     func resumeAfterCooling() {
         guard phase == .coolingDown, canResumeAfterCooling else { return }
+        thermalResumeStabilityTask?.cancel()
+        isThermallyReadyToResume = false
+        thermalResumeSecondsRemaining = 0
         rawRoomData = nil
         latestRoomSnapshot = nil
         stopReason = .userFinished
-        beginRelocalization()
+        if project != nil {
+            beginRelocalization()
+        } else {
+            startCaptureSession()
+        }
     }
 
     func acceptSavedPartialResult() {
         guard phase == .coolingDown, project != nil else { return }
+        thermalResumeStabilityTask?.cancel()
         phase = .ready
     }
 
     func cancel() {
         relocalizationTimeoutTask?.cancel()
+        fairThermalPauseTask?.cancel()
+        thermalResumeStabilityTask?.cancel()
         if phase == .scanning || phase == .processing {
             roomCaptureView.captureSession.stop(pauseARSession: true)
         }
@@ -193,24 +283,97 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
     private func handleThermalStateChange() {
         thermalState = ProcessInfo.processInfo.thermalState
+
+        if phase == .coolingDown {
+            beginResumeStabilityMonitoring()
+            return
+        }
+
+        applyThermalPolicy()
+    }
+
+    private func applyThermalPolicy() {
         switch thermalState {
-        case .serious, .critical:
-            if phase == .scanning {
-                stopCapture(reason: .thermalSafety)
-            } else if phase == .relocalizing {
-                relocalizationTimeoutTask?.cancel()
-                arSession.pause()
-                phase = .coolingDown
+        case .nominal:
+            fairThermalPauseTask?.cancel()
+            fairThermalPauseTask = nil
+
+        case .fair:
+            if let gracePeriod = thermalProtectionMode.fairStateGracePeriod {
+                scheduleFairThermalPause(after: gracePeriod)
             }
-        case .nominal, .fair:
-            break
+
+        case .serious:
+            fairThermalPauseTask?.cancel()
+            fairThermalPauseTask = nil
+            if thermalProtectionMode.stopsImmediatelyAtSerious {
+                triggerThermalPause()
+            }
+
+        case .critical:
+            fairThermalPauseTask?.cancel()
+            fairThermalPauseTask = nil
+            triggerThermalPause()
+
         @unknown default:
             break
         }
     }
 
+    private func scheduleFairThermalPause(after delay: TimeInterval) {
+        guard fairThermalPauseTask == nil,
+              phase == .scanning || phase == .relocalizing else { return }
+
+        fairThermalPauseTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self,
+                  !Task.isCancelled,
+                  self.thermalState == .fair,
+                  self.phase == .scanning || self.phase == .relocalizing else {
+                return
+            }
+            self.fairThermalPauseTask = nil
+            self.triggerThermalPause()
+        }
+    }
+
+    private func triggerThermalPause() {
+        switch phase {
+        case .scanning:
+            thermalPauseContext = .scanningSaved
+            stopCapture(reason: .thermalSafety)
+        case .relocalizing:
+            relocalizationTimeoutTask?.cancel()
+            arSession.pause()
+            enterCoolingDown(context: .relocalization)
+        default:
+            break
+        }
+    }
+
+    private func mustPauseImmediately(
+        for state: ProcessInfo.ThermalState
+    ) -> Bool {
+        switch state {
+        case .critical:
+            return true
+        case .serious:
+            return thermalProtectionMode.stopsImmediatelyAtSerious
+        case .nominal, .fair:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
     private func startCaptureSession() {
         guard !isStartingCapture else { return }
+        thermalState = ProcessInfo.processInfo.thermalState
+        guard !mustPauseImmediately(for: thermalState) else {
+            enterCoolingDown(context: project == nil ? .beforeStart : .relocalization)
+            return
+        }
+
         isStartingCapture = true
         relocalizationTimeoutTask?.cancel()
         rawRoomData = nil
@@ -218,6 +381,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         phase = .scanning
         roomCaptureView.captureSession.run(configuration: configuration)
         isStartingCapture = false
+        applyThermalPolicy()
     }
 
     private func stopCapture(reason: StopReason) {
@@ -225,6 +389,55 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         stopReason = reason
         phase = .processing
         roomCaptureView.captureSession.stop(pauseARSession: false)
+    }
+
+    private func enterCoolingDown(context: ThermalPauseContext) {
+        fairThermalPauseTask?.cancel()
+        fairThermalPauseTask = nil
+        relocalizationTimeoutTask?.cancel()
+        thermalPauseContext = context
+        arSession.pause()
+        phase = .coolingDown
+        beginResumeStabilityMonitoring()
+    }
+
+    private func beginResumeStabilityMonitoring() {
+        thermalResumeStabilityTask?.cancel()
+        isThermallyReadyToResume = false
+        thermalResumeSecondsRemaining = thermalResumeStabilitySeconds
+
+        guard isResumeThermalStateAcceptable(thermalState) else { return }
+
+        thermalResumeStabilityTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var remaining = self.thermalResumeStabilitySeconds
+            while remaining > 0 {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled,
+                      self.phase == .coolingDown,
+                      self.isResumeThermalStateAcceptable(self.thermalState) else {
+                    return
+                }
+                remaining -= 1
+                self.thermalResumeSecondsRemaining = remaining
+            }
+            self.isThermallyReadyToResume = true
+        }
+    }
+
+    private func isResumeThermalStateAcceptable(
+        _ state: ProcessInfo.ThermalState
+    ) -> Bool {
+        switch state {
+        case .nominal:
+            return true
+        case .fair:
+            return !thermalProtectionMode.resumeRequiresNominalState
+        case .serious, .critical:
+            return false
+        @unknown default:
+            return false
+        }
     }
 
     private func beginRelocalization() {
@@ -253,6 +466,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 options: [.resetTracking, .removeExistingAnchors]
             )
             scheduleRelocalizationTimeout()
+            applyThermalPolicy()
         } catch {
             phase = .failed(
                 "تعذر تحميل خريطة التتبع المحفوظة: \(error.localizedDescription)"
@@ -397,8 +611,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             case .userFinished:
                 phase = .ready
             case .thermalSafety:
-                arSession.pause()
-                phase = .coolingDown
+                enterCoolingDown(context: .scanningSaved)
             }
         } catch {
             rawRoomData = nil
