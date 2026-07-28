@@ -348,6 +348,8 @@ struct ElectricalPlacementSettings: Codable, Equatable {
     var spatialScanThermalProtectionModeValue: SpatialScanThermalProtectionMode?
     var thermalResumeStabilityDurationValue: ThermalResumeStabilityDuration?
     var showThermalStateDuringSpatialScanValue: Bool?
+    var spatialRelocalizationStrictnessValue: SpatialRelocalizationStrictness?
+    var useOptionalLocationAssistForResumeValue: Bool?
 
     var doorSuggestionMinimumMeters: Double {
         get { doorSuggestionMinimumMetersValue ?? 0.20 }
@@ -444,6 +446,16 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         set { showThermalStateDuringSpatialScanValue = newValue }
     }
 
+    var spatialRelocalizationStrictness: SpatialRelocalizationStrictness {
+        get { spatialRelocalizationStrictnessValue ?? .balanced }
+        set { spatialRelocalizationStrictnessValue = newValue }
+    }
+
+    var useOptionalLocationAssistForResume: Bool {
+        get { useOptionalLocationAssistForResumeValue ?? true }
+        set { useOptionalLocationAssistForResumeValue = newValue }
+    }
+
     static let standard = ElectricalPlacementSettings(
         switchHeightMeters: 1.20,
         socketHeightMeters: 0.50,
@@ -469,7 +481,9 @@ struct ElectricalPlacementSettings: Codable, Equatable {
         spatialScanContentModeValue: .completeRoom,
         spatialScanThermalProtectionModeValue: .balanced,
         thermalResumeStabilityDurationValue: .seconds30,
-        showThermalStateDuringSpatialScanValue: true
+        showThermalStateDuringSpatialScanValue: true,
+        spatialRelocalizationStrictnessValue: .balanced,
+        useOptionalLocationAssistForResumeValue: true
     )
 }
 

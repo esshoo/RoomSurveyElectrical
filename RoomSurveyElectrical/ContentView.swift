@@ -2582,6 +2582,41 @@ struct ElectricalSettingsView: View {
             .foregroundStyle(.secondary)
         }
 
+        Section("استكمال المسح والتعرف على المكان") {
+            Picker(
+                "صرامة التعرف",
+                selection: $settings.spatialRelocalizationStrictness
+            ) {
+                ForEach(SpatialRelocalizationStrictness.allCases) { level in
+                    Text(level.title).tag(level)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Text(settings.spatialRelocalizationStrictness.subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Toggle(
+                "استخدام الموقع والاتجاه كعامل مساعد اختياري",
+                isOn: $settings.useOptionalLocationAssistForResume
+            )
+
+            Text(
+                "يطلب التطبيق إذن الموقع أثناء المسح فقط عند تفعيل هذا الخيار. "
+                    + "يستخدم موقعًا تقريبيًا واتجاه البوصلة لمنع الاستكمال في مكان مختلف، "
+                    + "ولا يعتمد عليهما وحدهما ولا يمنع رفض الإذن من استخدام المسح. "
+                    + "تُحفظ هذه البيانات على الجهاز فقط ولا تُضمّن في حزمة مشاركة المشروع."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            LabeledContent(
+                "المرجع الأساسي",
+                value: "خريطة AR + آخر حائط وأبعاده وفتحاته"
+            )
+        }
+
         Section("تحديث وتحرير المشروع") {
             NavigationLink {
                 ProjectFoundationDefaultsView()
@@ -3038,13 +3073,60 @@ private struct ScanRoomView: View {
                     switch model.phase {
                     case .relocalizing:
                         VStack(spacing: 10) {
-                            ProgressView()
-                                .controlSize(.large)
+                            if let image = model.referenceWallImage {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(height: 132)
+                                    .frame(maxWidth: .infinity)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                    .overlay(alignment: .bottomLeading) {
+                                        Label(
+                                            "طابق هذا الحائط",
+                                            systemImage: "viewfinder"
+                                        )
+                                        .font(.caption.weight(.semibold))
+                                        .padding(8)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                        .padding(8)
+                                    }
+                            }
+
                             Text("التعرف على مكان المسح السابق")
                                 .font(.headline)
+
+                            if !model.referenceWallSummary.isEmpty {
+                                Text(model.referenceWallSummary)
+                                    .font(.caption.weight(.semibold))
+                            }
+
+                            ProgressView(value: model.relocalizationProgress)
+                                .tint(.blue)
+
                             Text(model.relocalizationMessage)
                                 .font(.subheadline)
                                 .multilineTextAlignment(.center)
+                                .foregroundStyle(.secondary)
+
+                            if !model.relocalizationEvidenceMessage.isEmpty {
+                                Text(model.relocalizationEvidenceMessage)
+                                    .font(.caption)
+                                    .multilineTextAlignment(.center)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if !model.locationAssistMessage.isEmpty {
+                                Label(
+                                    model.locationAssistMessage,
+                                    systemImage: "location.north.line.fill"
+                                )
+                                .font(.caption)
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(.secondary)
+                            }
+
+                            Text("صرامة التعرف: \(model.relocalizationStrictnessTitle)")
+                                .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
 
                             Button {
@@ -3187,6 +3269,17 @@ private struct ScanRoomView: View {
                 Text("آخر حفظ: \(savedPauseDate.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            if let quality = model.savedWorldMapQualityTitle {
+                LabeledContent("جودة خريطة المكان", value: quality)
+                    .font(.caption)
+            }
+
+            if !model.referenceWallSummary.isEmpty {
+                Text(model.referenceWallSummary)
+                    .font(.caption.weight(.semibold))
+                    .multilineTextAlignment(.center)
             }
 
             if model.canResumeSavedScan {

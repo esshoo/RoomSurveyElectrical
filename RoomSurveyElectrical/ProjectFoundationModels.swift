@@ -76,6 +76,8 @@ struct ElectricalPlacementOverrides: Codable, Equatable {
     var spatialScanThermalProtectionMode: SpatialScanThermalProtectionMode?
     var thermalResumeStabilityDuration: ThermalResumeStabilityDuration?
     var showThermalStateDuringSpatialScan: Bool?
+    var spatialRelocalizationStrictness: SpatialRelocalizationStrictness?
+    var useOptionalLocationAssistForResume: Bool?
 
     var isEmpty: Bool {
         switchHeightMeters == nil
@@ -103,6 +105,8 @@ struct ElectricalPlacementOverrides: Codable, Equatable {
             && spatialScanThermalProtectionMode == nil
             && thermalResumeStabilityDuration == nil
             && showThermalStateDuringSpatialScan == nil
+            && spatialRelocalizationStrictness == nil
+            && useOptionalLocationAssistForResume == nil
     }
 
     func applying(to base: ElectricalPlacementSettings) -> ElectricalPlacementSettings {
@@ -147,6 +151,12 @@ struct ElectricalPlacementOverrides: Codable, Equatable {
         }
         if let showThermalStateDuringSpatialScan {
             result.showThermalStateDuringSpatialScan = showThermalStateDuringSpatialScan
+        }
+        if let spatialRelocalizationStrictness {
+            result.spatialRelocalizationStrictness = spatialRelocalizationStrictness
+        }
+        if let useOptionalLocationAssistForResume {
+            result.useOptionalLocationAssistForResume = useOptionalLocationAssistForResume
         }
         return result
     }
@@ -204,6 +214,14 @@ struct ElectricalPlacementOverrides: Codable, Equatable {
             showThermalStateDuringSpatialScan: changed(
                 base.showThermalStateDuringSpatialScan,
                 value.showThermalStateDuringSpatialScan
+            ),
+            spatialRelocalizationStrictness: changed(
+                base.spatialRelocalizationStrictness,
+                value.spatialRelocalizationStrictness
+            ),
+            useOptionalLocationAssistForResume: changed(
+                base.useOptionalLocationAssistForResume,
+                value.useOptionalLocationAssistForResume
             )
         )
     }

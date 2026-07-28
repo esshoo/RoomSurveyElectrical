@@ -116,12 +116,19 @@ enum ProjectPackageService {
         var requiresWallPhotoReader = false
 
         for scanReference in project.scans {
-            guard let room = ProjectRepository.load(
+            guard var room = ProjectRepository.load(
                 projectID: scanReference.id
             ) else {
                 throw ProjectPackageError.missingScan(
                     scanReference.name
                 )
+            }
+            // Geographic evidence and the camera reference image are private,
+            // device-local resume aids. Never place them in a portable package.
+            if var continuation = room.scanContinuationState {
+                continuation.geographicReference = nil
+                continuation.referenceImageFile = nil
+                room.scanContinuationState = continuation
             }
             let folder = "scans/\(scanReference.id.uuidString)"
             let projectData = try roomEncoder.encode(room)
