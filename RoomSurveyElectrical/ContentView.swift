@@ -2985,6 +2985,8 @@ private struct ScanRoomView: View {
     let showThermalState: Bool
     let onClose: () -> Void
 
+    @State private var closeAfterSave = false
+
     var body: some View {
         ZStack {
             RoomCaptureRepresentable(captureView: model.roomCaptureView)
@@ -2992,7 +2994,7 @@ private struct ScanRoomView: View {
 
             VStack {
                 HStack {
-                    Button(action: onClose) {
+                    Button(action: requestSafeClose) {
                         Image(systemName: "xmark")
                             .font(.headline)
                             .frame(width: 44, height: 44)
@@ -3044,6 +3046,16 @@ private struct ScanRoomView: View {
                                 .font(.subheadline)
                                 .multilineTextAlignment(.center)
                                 .foregroundStyle(.secondary)
+
+                            Button {
+                                model.pauseRelocalizationManually()
+                            } label: {
+                                Label(
+                                    "إيقاف المحاولة والعودة للجزء المحفوظ",
+                                    systemImage: "pause.circle"
+                                )
+                            }
+                            .buttonStyle(.bordered)
                         }
                         .padding()
                         .frame(maxWidth: .infinity)
@@ -3056,7 +3068,7 @@ private struct ScanRoomView: View {
                         ProgressView(
                             model.thermalState == .serious || model.thermalState == .critical
                                 ? "جارٍ إيقاف الكاميرا وحفظ المسح لحماية الهاتف…"
-                                : "جارٍ تجهيز JSON وUSDZ وحفظ خريطة المكان…"
+                                : "جارٍ حفظ الجزء الحالي وخريطة المكان…"
                         )
                         .padding()
                         .frame(maxWidth: .infinity)
@@ -3068,23 +3080,45 @@ private struct ScanRoomView: View {
                     case .coolingDown:
                         thermalCoolingCard
 
+                    case .paused:
+                        savedPauseCard
+
+                    case .relocalizationFailed:
+                        relocalizationFailureCard
+
                     default:
                         EmptyView()
                     }
 
                     if model.phase == .scanning {
-                        Button {
-                            model.finish()
-                        } label: {
-                            Label(
-                                "إنهاء المسح وتجهيز الغرفة",
-                                systemImage: "checkmark.circle.fill"
-                            )
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                        VStack(spacing: 10) {
+                            Button {
+                                model.pauseAndSave()
+                            } label: {
+                                Label(
+                                    "إيقاف مؤقت وحفظ",
+                                    systemImage: "pause.circle.fill"
+                                )
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+
+                            Button {
+                                model.finish()
+                            } label: {
+                                Label(
+                                    "إنهاء المسح وتجهيز الغرفة",
+                                    systemImage: "checkmark.circle.fill"
+                                )
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        .buttonStyle(.borderedProminent)
                     }
                 }
                 .padding()
@@ -3111,12 +3145,150 @@ private struct ScanRoomView: View {
         }
         .onChange(of: model.phase) { _, newPhase in
             updateIdleTimer(for: newPhase)
+            if closeAfterSave,
+               newPhase == .paused
+                    || newPhase == .ready
+                    || newPhase == .coolingDown
+                    || newPhase == .relocalizationFailed {
+                closeAfterSave = false
+                onClose()
+            }
         }
-        .onChange(of: scenePhase) { _, _ in
+        .onChange(of: scenePhase) { _, newScenePhase in
+            if newScenePhase == .background {
+                model.pauseForApplicationLifecycle()
+            }
             updateIdleTimer(for: model.phase)
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
+        }
+    }
+
+    private var savedPauseCard: some View {
+        VStack(spacing: 12) {
+            Image(systemName: model.savedPauseReason?.systemImage ?? "pause.circle.fill")
+                .font(.largeTitle)
+                .foregroundStyle(.orange)
+
+            Text("تم حفظ المسح وإيقافه مؤقتًا")
+                .font(.headline)
+
+            if let reason = model.savedPauseReason {
+                Text("السبب: \(reason.title)")
+                    .font(.subheadline.weight(.semibold))
+                Text(reason.detail)
+                    .font(.subheadline)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let savedPauseDate = model.savedPauseDate {
+                Text("آخر حفظ: \(savedPauseDate.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if model.canResumeSavedScan {
+                Button {
+                    model.resumeSavedScan()
+                } label: {
+                    Label(
+                        "متابعة المسح من نفس المكان",
+                        systemImage: "play.circle.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Label(
+                    "لا توجد خريطة مكان صالحة للاستكمال الدقيق.",
+                    systemImage: "map.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+
+            Button {
+                model.acceptSavedPartialResult()
+            } label: {
+                Label(
+                    "اعتماد الجزء المحفوظ والانتقال للكهرباء",
+                    systemImage: "checkmark.shield.fill"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
+            Button("إغلاق والعودة للمشروع", action: onClose)
+                .buttonStyle(.borderless)
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 16)
+        )
+    }
+
+    private var relocalizationFailureCard: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "location.slash.fill")
+                .font(.largeTitle)
+                .foregroundStyle(.orange)
+
+            Text("تعذر التعرف على المكان")
+                .font(.headline)
+
+            Text(model.relocalizationFailureMessage)
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+
+            if model.canResumeSavedScan {
+                Button {
+                    model.retryRelocalization()
+                } label: {
+                    Label("إعادة محاولة التعرف", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            Button {
+                model.acceptSavedPartialResult()
+            } label: {
+                Label(
+                    "اعتماد الجزء المحفوظ دون استكمال",
+                    systemImage: "checkmark.shield.fill"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
+            Button("إغلاق والعودة للمشروع", action: onClose)
+                .buttonStyle(.borderless)
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 16)
+        )
+    }
+
+    private func requestSafeClose() {
+        switch model.phase {
+        case .scanning:
+            closeAfterSave = true
+            model.pauseAndSave()
+        case .processing:
+            closeAfterSave = true
+        case .relocalizing:
+            model.pauseRelocalizationManually()
+            onClose()
+        default:
+            onClose()
         }
     }
 

@@ -3,6 +3,7 @@ import Combine
 import Foundation
 import RoomPlan
 import SwiftUI
+import UIKit
 
 @MainActor
 final class RoomCaptureModel: NSObject, ObservableObject,
@@ -11,16 +12,33 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     enum Phase: Equatable {
         case idle
         case relocalizing
+        case relocalizationFailed
         case scanning
         case processing
         case coolingDown
+        case paused
         case ready
         case failed(String)
     }
 
     private enum StopReason {
         case userFinished
+        case manualPause
         case thermalSafety
+        case applicationBackground
+
+        var continuationReason: SpatialScanPauseReason? {
+            switch self {
+            case .userFinished:
+                nil
+            case .manualPause:
+                .manual
+            case .thermalSafety:
+                .thermalSafety
+            case .applicationBackground:
+                .applicationBackground
+            }
+        }
     }
 
     private enum ThermalPauseContext {
@@ -35,6 +53,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     @Published private(set) var thermalResumeSecondsRemaining = 0
     @Published private(set) var isThermallyReadyToResume = false
     @Published private(set) var relocalizationMessage = "وجّه الكاميرا إلى جزء معروف من الغرفة."
+    @Published private(set) var relocalizationFailureMessage = ""
 
     let arSession: ARSession
     let roomCaptureView: RoomCaptureView
@@ -48,6 +67,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private let thermalResumeStabilitySeconds: Int
 
     private var latestRoomSnapshot: CapturedRoom?
+    private var pendingWorldMapTask: Task<ARWorldMap?, Never>?
     private var stopReason: StopReason = .userFinished
     private var isFinalizing = false
     private var isStartingCapture = false
@@ -56,6 +76,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private var fairThermalPauseTask: Task<Void, Never>?
     private var thermalResumeStabilityTask: Task<Void, Never>?
     private var thermalPauseContext: ThermalPauseContext = .beforeStart
+    private var backgroundTaskIdentifier: UIBackgroundTaskIdentifier = .invalid
 
     override init() {
         destination = nil
@@ -127,6 +148,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         relocalizationTimeoutTask?.cancel()
         fairThermalPauseTask?.cancel()
         thermalResumeStabilityTask?.cancel()
+        pendingWorldMapTask?.cancel()
     }
 
     nonisolated func encode(with coder: NSCoder) {
@@ -141,6 +163,19 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
     var canResumeAfterCooling: Bool {
         isThermallyReadyToResume
+    }
+
+    var savedPauseReason: SpatialScanPauseReason? {
+        project?.scanContinuationState?.reason
+    }
+
+    var savedPauseDate: Date? {
+        project?.scanContinuationState?.pausedAt
+    }
+
+    var canResumeSavedScan: Bool {
+        guard let project else { return false }
+        return ProjectRepository.hasWorldMap(project)
     }
 
     var isCurrentThermalStateAcceptableForResume: Bool {
@@ -219,6 +254,9 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
         rawRoomData = nil
         latestRoomSnapshot = nil
+        pendingWorldMapTask?.cancel()
+        pendingWorldMapTask = nil
+        relocalizationFailureMessage = ""
         if startsFromExistingProject {
             beginRelocalization()
         } else {
@@ -230,6 +268,40 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         stopCapture(reason: .userFinished)
     }
 
+    func pauseAndSave() {
+        stopCapture(reason: .manualPause)
+    }
+
+    func pauseForApplicationLifecycle() {
+        switch phase {
+        case .scanning:
+            beginBackgroundSaveTask()
+            stopCapture(reason: .applicationBackground)
+        case .relocalizing:
+            pauseRelocalization(reason: .applicationBackground)
+        default:
+            break
+        }
+    }
+
+    func pauseRelocalizationManually() {
+        guard phase == .relocalizing else { return }
+        pauseRelocalization(reason: .manual)
+    }
+
+    func resumeSavedScan() {
+        guard phase == .paused || phase == .relocalizationFailed,
+              project != nil else { return }
+        relocalizationFailureMessage = ""
+        beginRelocalization()
+    }
+
+    func retryRelocalization() {
+        guard phase == .relocalizationFailed else { return }
+        relocalizationFailureMessage = ""
+        beginRelocalization()
+    }
+
     func resumeAfterCooling() {
         guard phase == .coolingDown, canResumeAfterCooling else { return }
         thermalResumeStabilityTask?.cancel()
@@ -237,6 +309,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         thermalResumeSecondsRemaining = 0
         rawRoomData = nil
         latestRoomSnapshot = nil
+        pendingWorldMapTask?.cancel()
+        pendingWorldMapTask = nil
         stopReason = .userFinished
         if project != nil {
             beginRelocalization()
@@ -246,21 +320,35 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     }
 
     func acceptSavedPartialResult() {
-        guard phase == .coolingDown, project != nil else { return }
+        guard phase == .coolingDown
+                || phase == .paused
+                || phase == .relocalizationFailed,
+              var savedProject = project else { return }
         thermalResumeStabilityTask?.cancel()
-        phase = .ready
+        relocalizationTimeoutTask?.cancel()
+        savedProject.scanContinuationState = nil
+        do {
+            try ProjectRepository.save(savedProject)
+            project = savedProject
+            phase = .ready
+        } catch {
+            phase = .failed("تعذر اعتماد الجزء المحفوظ: \(error.localizedDescription)")
+        }
     }
 
     func cancel() {
         relocalizationTimeoutTask?.cancel()
         fairThermalPauseTask?.cancel()
         thermalResumeStabilityTask?.cancel()
+        pendingWorldMapTask?.cancel()
+        pendingWorldMapTask = nil
         if phase == .scanning || phase == .processing {
             roomCaptureView.captureSession.stop(pauseARSession: true)
         }
         arSession.pause()
         rawRoomData = nil
         latestRoomSnapshot = nil
+        endBackgroundSaveTask()
         if project == nil {
             phase = .idle
         }
@@ -345,6 +433,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         case .relocalizing:
             relocalizationTimeoutTask?.cancel()
             arSession.pause()
+            guard persistContinuationState(reason: .thermalSafety) else { return }
             enterCoolingDown(context: .relocalization)
         default:
             break
@@ -376,8 +465,12 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
         isStartingCapture = true
         relocalizationTimeoutTask?.cancel()
+        stopReason = .userFinished
         rawRoomData = nil
         latestRoomSnapshot = nil
+        pendingWorldMapTask?.cancel()
+        pendingWorldMapTask = nil
+        relocalizationFailureMessage = ""
         phase = .scanning
         roomCaptureView.captureSession.run(configuration: configuration)
         isStartingCapture = false
@@ -387,8 +480,60 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private func stopCapture(reason: StopReason) {
         guard phase == .scanning else { return }
         stopReason = reason
+        pendingWorldMapTask?.cancel()
+        pendingWorldMapTask = Task { @MainActor [weak self] in
+            guard let self else { return nil }
+            return try? await self.currentWorldMap()
+        }
         phase = .processing
         roomCaptureView.captureSession.stop(pauseARSession: false)
+    }
+
+    private func pauseRelocalization(reason: SpatialScanPauseReason) {
+        relocalizationTimeoutTask?.cancel()
+        arSession.pause()
+        guard project != nil else {
+            phase = .idle
+            return
+        }
+        guard persistContinuationState(reason: reason) else { return }
+        phase = .paused
+    }
+
+    @discardableResult
+    private func persistContinuationState(
+        reason: SpatialScanPauseReason
+    ) -> Bool {
+        guard var savedProject = project else { return false }
+        savedProject.scanContinuationState = SpatialScanContinuationState(
+            reason: reason,
+            worldMapCapturedAt: savedProject.scanContinuationState?.worldMapCapturedAt
+        )
+        do {
+            try ProjectRepository.save(savedProject)
+            project = savedProject
+            return true
+        } catch {
+            phase = .failed("تعذر حفظ حالة الاستكمال: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func beginBackgroundSaveTask() {
+        guard backgroundTaskIdentifier == .invalid else { return }
+        backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(
+            withName: "3ERoomElectrical.SaveSpatialScan"
+        ) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.endBackgroundSaveTask()
+            }
+        }
+    }
+
+    private func endBackgroundSaveTask() {
+        guard backgroundTaskIdentifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskIdentifier)
+        backgroundTaskIdentifier = .invalid
     }
 
     private func enterCoolingDown(context: ThermalPauseContext) {
@@ -443,10 +588,10 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private func beginRelocalization() {
         guard let project,
               let worldMapFile = project.worldMapFile else {
-            phase = .failed(
-                "لا توجد خريطة تتبع محفوظة لهذا المسح. يمكن إعادة المسح كنسخة جديدة، "
-                    + "أما الاستكمال الدقيق فيحتاج مشروعًا تم إنشاؤه بالإصدار الحالي."
-            )
+            relocalizationFailureMessage =
+                "لا توجد خريطة تتبع محفوظة لهذا المسح. الجزء المحفوظ لم يُحذف، "
+                    + "ويمكن اعتماده أو إعادة المسح كنسخة جديدة."
+            phase = .relocalizationFailed
             return
         }
 
@@ -468,9 +613,10 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             scheduleRelocalizationTimeout()
             applyThermalPolicy()
         } catch {
-            phase = .failed(
-                "تعذر تحميل خريطة التتبع المحفوظة: \(error.localizedDescription)"
-            )
+            relocalizationFailureMessage =
+                "تعذر تحميل خريطة التتبع المحفوظة: \(error.localizedDescription). "
+                    + "الجزء المحفوظ ما زال موجودًا ويمكن اعتماده دون حذفه."
+            phase = .relocalizationFailed
         }
     }
 
@@ -479,10 +625,11 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         relocalizationTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(35))
             guard let self, self.phase == .relocalizing else { return }
-            self.phase = .failed(
-                "لم يتمكن الهاتف من التعرف على المكان. ارجع إلى الجزء الذي بدأ عنده المسح "
-                    + "ووجّه الكاميرا ببطء، أو أعد المسح كنسخة جديدة."
-            )
+            self.arSession.pause()
+            self.relocalizationFailureMessage =
+                "لم يتمكن الهاتف من التعرف على المكان خلال المهلة. "
+                    + "الجزء المحفوظ لم يُحذف؛ يمكنك إعادة المحاولة أو اعتماده كما هو."
+            self.phase = .relocalizationFailed
         }
     }
 
@@ -564,6 +711,15 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             }
         } else {
             rawRoomData = nil
+            endBackgroundSaveTask()
+            if var savedProject = project {
+                savedProject.scanContinuationState = SpatialScanContinuationState(
+                    reason: .interrupted,
+                    worldMapCapturedAt: savedProject.scanContinuationState?.worldMapCapturedAt
+                )
+                try? ProjectRepository.save(savedProject)
+                project = savedProject
+            }
             phase = .failed(error.localizedDescription)
         }
     }
@@ -571,7 +727,10 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private func finalize(capturedRoom: CapturedRoom) async {
         guard !isFinalizing else { return }
         isFinalizing = true
-        defer { isFinalizing = false }
+        defer {
+            isFinalizing = false
+            endBackgroundSaveTask()
+        }
 
         do {
             var savedProject: RoomProject
@@ -594,14 +753,33 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 }
             }
 
-            if let worldMap = try? await currentWorldMap(),
+            let capturedWorldMap: ARWorldMap?
+            if let pendingWorldMapTask {
+                capturedWorldMap = await pendingWorldMapTask.value
+            } else {
+                capturedWorldMap = try? await currentWorldMap()
+            }
+            pendingWorldMapTask = nil
+            var worldMapCapturedAt: Date?
+            if let capturedWorldMap,
                let fileName = try? ProjectRepository.saveWorldMap(
-                worldMap,
+                capturedWorldMap,
                 projectID: savedProject.id
                ) {
                 savedProject.worldMapFile = fileName
-                try ProjectRepository.save(savedProject)
+                worldMapCapturedAt = Date()
             }
+
+            if let continuationReason = stopReason.continuationReason {
+                savedProject.scanContinuationState = SpatialScanContinuationState(
+                    reason: continuationReason,
+                    worldMapCapturedAt: worldMapCapturedAt
+                        ?? savedProject.scanContinuationState?.worldMapCapturedAt
+                )
+            } else {
+                savedProject.scanContinuationState = nil
+            }
+            try ProjectRepository.save(savedProject)
 
             rawRoomData = nil
             latestRoomSnapshot = nil
@@ -610,11 +788,15 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             switch stopReason {
             case .userFinished:
                 phase = .ready
+            case .manualPause, .applicationBackground:
+                phase = .paused
             case .thermalSafety:
                 enterCoolingDown(context: .scanningSaved)
             }
         } catch {
             rawRoomData = nil
+            pendingWorldMapTask?.cancel()
+            pendingWorldMapTask = nil
             phase = .failed("فشل حفظ نتيجة المسح: \(error.localizedDescription)")
         }
     }

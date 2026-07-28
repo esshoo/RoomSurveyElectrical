@@ -780,6 +780,7 @@ struct RoomProject: Codable, Identifiable, Equatable {
     var wallPhotos: [WallPhotoAsset]? = nil
     var wallPhotoSegments: [WallPhotoSegment]? = nil
     var photographicScanProgress: WallPhotographicScanProgress? = nil
+    var scanContinuationState: SpatialScanContinuationState? = nil
 
     var wallCount: Int { walls.count }
     var doorCount: Int { surfaces.filter { $0.kind == .door }.count }

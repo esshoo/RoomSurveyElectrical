@@ -145,6 +145,11 @@ struct RoomViewerView: View {
                 optionsMenu
             }
         }
+        .safeAreaInset(edge: .top) {
+            if let continuation = project.scanContinuationState {
+                savedScanContinuationBanner(continuation)
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             viewerControls
         }
@@ -435,6 +440,43 @@ struct RoomViewerView: View {
         .background(.ultraThinMaterial)
     }
 
+    private func savedScanContinuationBanner(
+        _ continuation: SpatialScanContinuationState
+    ) -> some View {
+        Button {
+            scanWorkflow = .continueExisting
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: continuation.reason.systemImage)
+                    .font(.title3)
+                    .foregroundStyle(.orange)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("يوجد مسح متوقف قابل للاستكمال")
+                        .font(.subheadline.weight(.semibold))
+                    Text(
+                        "\(continuation.reason.title) • "
+                            + continuation.pausedAt.formatted(
+                                date: .abbreviated,
+                                time: .shortened
+                            )
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+                Image(systemName: "chevron.forward")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
+        }
+        .buttonStyle(.plain)
+    }
+
     private var optionsMenu: some View {
         Menu {
             Button {
@@ -460,17 +502,22 @@ struct RoomViewerView: View {
 
             Section("تحديث المسح") {
                 Button {
-                    guard ProjectRepository.hasWorldMap(project) else {
+                    if project.scanContinuationState == nil,
+                       !ProjectRepository.hasWorldMap(project) {
                         errorMessage =
                             "لا يمكن استكمال هذا المسح بدقة لأنه لا يحتوي على خريطة تتبع محفوظة. "
-                            + "استخدم «إعادة المسح كنسخة جديدة»؛ المسحات الجديدة سيمكن استكمالها لاحقًا."
+                                + "استخدم «إعادة المسح كنسخة جديدة»؛ المسحات الجديدة سيمكن استكمالها لاحقًا."
                         return
                     }
                     scanWorkflow = .continueExisting
                 } label: {
                     Label(
-                        "استكمال أو مسح جزء إضافي",
-                        systemImage: "viewfinder.circle"
+                        project.scanContinuationState == nil
+                            ? "استكمال أو مسح جزء إضافي"
+                            : "متابعة المسح المتوقف",
+                        systemImage: project.scanContinuationState == nil
+                            ? "viewfinder.circle"
+                            : "play.circle.fill"
                     )
                 }
 

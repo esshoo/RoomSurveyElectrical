@@ -345,7 +345,8 @@ enum ProjectRepository {
             wallAppearances: source.wallAppearances,
             wallPhotos: source.wallPhotos,
             wallPhotoSegments: source.wallPhotoSegments,
-            photographicScanProgress: source.photographicScanProgress
+            photographicScanProgress: source.photographicScanProgress,
+            scanContinuationState: source.scanContinuationState
         )
         try save(copy)
         return copy
