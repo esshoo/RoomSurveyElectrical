@@ -3294,7 +3294,7 @@ private struct ScanRoomView: View {
         } message: {
             Text(
                 "ثبّت الهاتف بحيث تتطابق الصورة الشفافة مع الحائط والفتحات. "
-                    + "سيستخدم التطبيق وضع الكاميرا الحالي لمحاذاة الجلسة الجديدة مع المشروع."
+                    + "سيستخدم التطبيق اتجاهًا أفقيًا مرتبطًا بالجاذبية فقط، ثم سيمنع الدمج إذا لم يجد حائطًا مشتركًا مؤكدًا."
             )
         }
     }
@@ -3348,6 +3348,27 @@ private struct ScanRoomView: View {
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.green)
+            }
+
+            if model.hasRecoveredResumeCheckpoint {
+                Button {
+                    model.recoverLatestResumeCheckpoint()
+                } label: {
+                    Label(
+                        "استعادة آخر نقطة حفظ آمنة",
+                        systemImage: "arrow.counterclockwise.circle.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.teal)
+            }
+
+            if !model.spatialMergeSafetyMessage.isEmpty {
+                Text(model.spatialMergeSafetyMessage)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
             }
 
             if model.canResumeSavedScan {
@@ -3498,6 +3519,20 @@ private struct ScanRoomView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
                 .disabled(model.isPreparingManualVisualResume)
+            }
+
+            if model.hasRecoveredResumeCheckpoint {
+                Button {
+                    model.recoverLatestResumeCheckpoint()
+                } label: {
+                    Label(
+                        "استعادة آخر نقطة حفظ آمنة",
+                        systemImage: "arrow.counterclockwise.circle.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.teal)
             }
 
             if model.canResumeSavedScan {

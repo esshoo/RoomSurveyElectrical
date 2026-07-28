@@ -617,7 +617,8 @@ enum ProjectPackageService {
             wallPhotos: source.wallPhotos,
             wallPhotoSegments: source.wallPhotoSegments,
             photographicScanProgress: source.photographicScanProgress,
-            scanContinuationState: source.scanContinuationState
+            scanContinuationState: source.scanContinuationState,
+            snapshotGeometryRevision: source.snapshotGeometryRevision
         )
     }
 

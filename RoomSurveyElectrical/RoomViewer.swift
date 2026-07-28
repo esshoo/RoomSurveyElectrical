@@ -345,7 +345,25 @@ struct RoomViewerView: View {
 
     @ViewBuilder
     private var model3D: some View {
-        if let url = try? ProjectRepository.fileURL(
+        if (project.snapshotGeometryRevision ?? 0) > 0 {
+            SnapshotRoom3DView(
+                project: project,
+                layers: effectiveLayers,
+                focusedWallID: focusedWallID
+            )
+            .ignoresSafeArea(edges: .bottom)
+            .overlay(alignment: .top) {
+                Label(
+                    "3D من نفس هندسة المشروع المستخدمة في 2D",
+                    systemImage: "checkmark.shield.fill"
+                )
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(.top, 12)
+            }
+        } else if let url = try? ProjectRepository.fileURL(
             projectID: project.id,
             fileName: project.usdzFile
         ) {
@@ -1048,6 +1066,9 @@ private struct Plan2DView: View {
                     applyViewTransform(to: &context, size: size)
                     drawPlan(context: &context, size: size)
                 }
+                // Spatial canvas coordinates and gestures must not inherit the
+                // surrounding Arabic RTL layout direction. Text controls remain RTL.
+                .environment(\.layoutDirection, .leftToRight)
                 .contentShape(Rectangle())
                 .gesture(dragGesture)
                 .highPriorityGesture(elementMoveGesture(viewSize: geometry.size))
@@ -4094,6 +4115,7 @@ private struct USDZRoomView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView(frame: .zero)
+        view.semanticContentAttribute = .forceLeftToRight
         view.backgroundColor = .secondarySystemGroupedBackground
         applyPerformanceProfile(to: view)
         view.autoenablesDefaultLighting = true

@@ -77,6 +77,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     @Published private(set) var visualAlignmentConfidence: SpatialVisualAlignmentConfidence = .low
     @Published private(set) var isManualVisualResumeAvailable = false
     @Published private(set) var isPreparingManualVisualResume = false
+    @Published private(set) var hasRecoveredResumeCheckpoint = false
+    @Published private(set) var spatialMergeSafetyMessage = ""
 
     let arSession: ARSession
     let captureHostView: SpatialCaptureHostView
@@ -130,6 +132,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private var liveSessionContinuityAvailable = false
     private var activeIncomingWorldTransform: simd_float4x4?
     private var latestDetectedWallDescription = ""
+    private var lastResumeCheckpointAt = Date.distantPast
     private let resumeAnchorName = "3ERoomElectrical.ResumeReference"
     private let referenceImageFileName = "spatial-resume-reference.jpg"
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
@@ -194,6 +197,9 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         roomCaptureView = nil
         super.init()
         project = existingProject
+        hasRecoveredResumeCheckpoint = ProjectRepository.loadResumeGeometryCheckpoint(
+            projectID: existingProject.id
+        ) != nil
         configureDelegatesAndThermalMonitoring()
     }
 
@@ -418,6 +424,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         pendingReferenceCameraTransform = nil
         pendingGeographicReference = nil
         activeIncomingWorldTransform = nil
+        spatialMergeSafetyMessage = ""
+        lastResumeCheckpointAt = .distantPast
         manualVisualResumeUnlockTask?.cancel()
         isManualVisualResumeAvailable = false
         isPreparingManualVisualResume = false
@@ -504,9 +512,9 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         isPreparingManualVisualResume = true
         phase = .relocalizing
         relocalizationMessage =
-            "ثبّت الهاتف على موضع الصورة. جارٍ إنشاء جلسة جديدة وربطها بالمشروع…"
+            "ثبّت الهاتف على موضع الصورة. ننتظر ثبات التتبع قبل حساب الاتجاه…"
         relocalizationEvidenceMessage =
-            "سيتم استخدام وضع الكاميرا الحالي لمعادلة إحداثيات الجلسة الجديدة مع المسح المحفوظ."
+            "لن تُستخدم زاوية الميل أو الانقلاب من الهاتف؛ المحاذاة ستكون حول محور الجاذبية فقط."
 
         let savedCameraTransform = simd_float4x4(
             columnMajorValues: savedCameraValues
@@ -518,6 +526,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
         let freshConfiguration = ARWorldTrackingConfiguration()
         freshConfiguration.planeDetection = [.horizontal, .vertical]
+        freshConfiguration.worldAlignment = .gravity
         arSession.delegate = self
         arSession.run(
             freshConfiguration,
@@ -526,7 +535,10 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            for _ in 0..<24 {
+            var stableNormalFrames = 0
+            var lastStableCameraTransform: simd_float4x4?
+
+            for _ in 0..<160 {
                 try? await Task.sleep(for: .milliseconds(125))
                 guard !Task.isCancelled,
                       self.phase == .relocalizing else { return }
@@ -535,15 +547,35 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                     continue
                 }
 
-                let newSessionToPreviousWorld = savedCameraTransform
-                    * simd_inverse(frame.camera.transform)
-                self.activeIncomingWorldTransform = previousWorldToProject
-                    * newSessionToPreviousWorld
+                switch frame.camera.trackingState {
+                case .normal:
+                    stableNormalFrames += 1
+                    lastStableCameraTransform = frame.camera.transform
+                    self.relocalizationProgress = min(
+                        Double(stableNormalFrames) / 12.0,
+                        0.95
+                    )
+                default:
+                    stableNormalFrames = 0
+                    lastStableCameraTransform = nil
+                }
+
+                guard stableNormalFrames >= 12,
+                      let currentCamera = lastStableCameraTransform,
+                      let mapping = SpatialCoordinateContract.gravityAlignedMapping(
+                        savedCamera: savedCameraTransform,
+                        currentCamera: currentCamera,
+                        previousWorldToProject: previousWorldToProject
+                      ) else {
+                    continue
+                }
+
+                self.activeIncomingWorldTransform = mapping
                 self.isPreparingManualVisualResume = false
                 self.isManualVisualResumeAvailable = false
                 self.relocalizationProgress = 1
                 self.relocalizationMessage =
-                    "تمت محاذاة الجلسة بصريًا. جارٍ استكمال RoomPlan…"
+                    "تم تثبيت اتجاه الجلسة حول محور الجاذبية. جارٍ بدء RoomPlan…"
                 self.startCaptureSession()
                 return
             }
@@ -551,7 +583,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             self.isPreparingManualVisualResume = false
             self.isManualVisualResumeAvailable = true
             self.relocalizationFailureMessage =
-                "تعذر إنشاء إطار تتبع جديد. حرّك الهاتف ببطء ثم حاول الاستكمال البصري مرة أخرى."
+                "لم يصل تتبع AR إلى حالة مستقرة تسمح بمحاذاة آمنة. حرّك الهاتف ببطء وثبّته على الصورة ثم أعد المحاولة."
             self.phase = .relocalizationFailed
         }
     }
@@ -573,6 +605,41 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         }
     }
 
+    func recoverLatestResumeCheckpoint() {
+        guard let currentProject = project,
+              let checkpoint = ProjectRepository.loadResumeGeometryCheckpoint(
+                projectID: currentProject.id
+              ) else {
+            hasRecoveredResumeCheckpoint = false
+            spatialMergeSafetyMessage = "لا توجد نقطة استرداد محفوظة لهذا المسح."
+            return
+        }
+
+        let outcome = RoomProjectGeometryMerger.recoverCheckpoint(
+            checkpoint,
+            into: currentProject,
+            includeFurniture: includeFurniture
+        )
+        spatialMergeSafetyMessage = outcome.report.message
+        guard outcome.report.accepted else {
+            relocalizationFailureMessage = outcome.report.message
+            phase = .relocalizationFailed
+            return
+        }
+
+        do {
+            try ProjectRepository.save(outcome.project)
+            ProjectRepository.removeResumeGeometryCheckpoint(
+                projectID: currentProject.id
+            )
+            project = outcome.project
+            hasRecoveredResumeCheckpoint = false
+            phase = outcome.project.scanContinuationState == nil ? .ready : .paused
+        } catch {
+            phase = .failed("تعذر حفظ نقطة الاسترداد: \(error.localizedDescription)")
+        }
+    }
+
     func acceptSavedPartialResult() {
         guard phase == .coolingDown
                 || phase == .paused
@@ -589,6 +656,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         savedProject.scanContinuationState = nil
         do {
             try ProjectRepository.save(savedProject)
+            ProjectRepository.removeResumeGeometryCheckpoint(projectID: savedProject.id)
+            hasRecoveredResumeCheckpoint = false
             project = savedProject
             activeIncomingWorldTransform = nil
             isManualVisualResumeAvailable = false
@@ -1084,6 +1153,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         prepareBareSessionForRelocalization()
         let trackingConfiguration = ARWorldTrackingConfiguration()
         trackingConfiguration.planeDetection = [.horizontal, .vertical]
+        trackingConfiguration.worldAlignment = .gravity
 
         var loadedSavedWorldMap = false
         if let worldMapFile = project.worldMapFile,
@@ -1111,7 +1181,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         phase = .relocalizing
         arSession.run(
             trackingConfiguration,
-            options: [.resetTracking, .removeExistingAnchors]
+            options: [.resetTracking]
         )
 
         scheduleManualVisualResumeUnlock(immediate: !loadedSavedWorldMap)
@@ -1207,6 +1277,12 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         }
     }
 
+    nonisolated func sessionShouldAttemptRelocalization(
+        _ session: ARSession
+    ) -> Bool {
+        true
+    }
+
     nonisolated func sessionWasInterrupted(_ session: ARSession) {
         Task { @MainActor [weak self] in
             self?.liveSessionContinuityAvailable = false
@@ -1266,6 +1342,34 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 }
             }
             self.cacheGoodWorldMapIfNeeded()
+            self.saveResumeCheckpointIfNeeded(from: room)
+        }
+    }
+
+    private func saveResumeCheckpointIfNeeded(from room: CapturedRoom) {
+        guard startsFromExistingProject,
+              let project,
+              Date().timeIntervalSince(lastResumeCheckpointAt) >= 5 else {
+            return
+        }
+        let transform = activeIncomingWorldTransform ?? matrix_identity_float4x4
+        guard SpatialCoordinateContract.validateProjectMapping(transform).isSafeRigidTransform else {
+            return
+        }
+        lastResumeCheckpointAt = Date()
+        let checkpoint = RoomProjectGeometryMerger.transformedCandidate(
+            capturedRoom: room,
+            by: transform
+        )
+        do {
+            try ProjectRepository.saveResumeGeometryCheckpoint(
+                checkpoint,
+                projectID: project.id
+            )
+            hasRecoveredResumeCheckpoint = true
+        } catch {
+            // The original project remains untouched. A checkpoint failure must
+            // not interrupt the active RoomPlan session.
         }
     }
 
@@ -1334,13 +1438,35 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         do {
             var savedProject: RoomProject
             if let currentProject = project {
-                savedProject = RoomProjectGeometryMerger.merge(
+                let outcome = RoomProjectGeometryMerger.mergeValidated(
                     capturedRoom: capturedRoom,
                     into: currentProject,
                     includeFurniture: includeFurniture,
-                    incomingWorldTransform: activeIncomingWorldTransform
+                    incomingWorldTransform: activeIncomingWorldTransform,
+                    referenceWall: currentProject.scanContinuationState?.referenceWall,
+                    requiresReferenceWallMatch: startsFromExistingProject
                 )
-                try ProjectRepository.save(savedProject)
+                activeIncomingWorldTransform = outcome.effectiveTransform
+                spatialMergeSafetyMessage = outcome.report.message
+                guard outcome.report.accepted else {
+                    let transform = outcome.effectiveTransform
+                    if SpatialCoordinateContract.validateProjectMapping(transform).isSafeRigidTransform {
+                        let checkpoint = RoomProjectGeometryMerger.transformedCandidate(
+                            capturedRoom: capturedRoom,
+                            by: transform
+                        )
+                        try? ProjectRepository.saveResumeGeometryCheckpoint(
+                            checkpoint,
+                            projectID: currentProject.id
+                        )
+                        hasRecoveredResumeCheckpoint = true
+                    }
+                    relocalizationFailureMessage = outcome.report.message
+                        + " تم إبقاء المشروع السابق دون تغيير، وحُفظ الجزء الجديد كنقطة استرداد منفصلة عند الإمكان."
+                    phase = .relocalizationFailed
+                    return
+                }
+                savedProject = outcome.project
             } else {
                 savedProject = try ProjectRepository.createProject(
                     room: capturedRoom,
@@ -1433,6 +1559,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 savedProject.scanContinuationState = nil
             }
             try ProjectRepository.save(savedProject)
+            ProjectRepository.removeResumeGeometryCheckpoint(projectID: savedProject.id)
+            hasRecoveredResumeCheckpoint = false
 
             rawRoomData = nil
             latestRoomSnapshot = nil
@@ -2090,6 +2218,10 @@ final class SpatialCaptureHostView: UIView {
         relocalizationView = ARSCNView(frame: .zero)
         super.init(frame: .zero)
         backgroundColor = .black
+        // The surrounding SwiftUI is RTL for Arabic text, but camera pixels,
+        // SceneKit and RoomPlan must never inherit a mirrored semantic layout.
+        semanticContentAttribute = .forceLeftToRight
+        relocalizationView.semanticContentAttribute = .forceLeftToRight
         relocalizationView.session = arSession
         relocalizationView.scene = SCNScene()
         relocalizationView.automaticallyUpdatesLighting = true
@@ -2119,6 +2251,7 @@ final class SpatialCaptureHostView: UIView {
     private func installFillingSubview(_ view: UIView) {
         guard view.superview !== self else { return }
         view.removeFromSuperview()
+        view.semanticContentAttribute = .forceLeftToRight
         view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(view)
         NSLayoutConstraint.activate([

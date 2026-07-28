@@ -781,6 +781,10 @@ struct RoomProject: Codable, Identifiable, Equatable {
     var wallPhotoSegments: [WallPhotoSegment]? = nil
     var photographicScanProgress: WallPhotographicScanProgress? = nil
     var scanContinuationState: SpatialScanContinuationState? = nil
+    /// Increments whenever architecture is merged from another RoomPlan
+    /// session. A positive revision tells the 3D viewer to render the app-owned
+    /// snapshots instead of the original, now-stale RoomPlan USDZ envelope.
+    var snapshotGeometryRevision: Int? = nil
 
     var wallCount: Int { walls.count }
     var doorCount: Int { surfaces.filter { $0.kind == .door }.count }

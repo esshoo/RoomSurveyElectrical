@@ -266,6 +266,14 @@ struct SpatialGeographicReference: Codable, Equatable {
     }
 }
 
+struct SpatialResumeGeometryCheckpoint: Codable, Equatable {
+    var createdAt: Date
+    var walls: [WallSnapshot]
+    var surfaces: [SurfaceSnapshot]
+    var floors: [FloorSnapshot]
+    var objects: [RoomObjectSnapshot]
+}
+
 struct SpatialScanContinuationState: Codable, Equatable {
     var reason: SpatialScanPauseReason
     var pausedAt: Date

@@ -190,6 +190,41 @@ enum ProjectRepository {
         )
     }
 
+    private static let resumeGeometryCheckpointFile = "resume-geometry-checkpoint.json"
+
+    static func saveResumeGeometryCheckpoint(
+        _ checkpoint: SpatialResumeGeometryCheckpoint,
+        projectID: UUID
+    ) throws {
+        let projectDirectory = try directory(for: projectID, create: true)
+        let data = try storageEncoder.encode(checkpoint)
+        try data.write(
+            to: projectDirectory.appendingPathComponent(resumeGeometryCheckpointFile),
+            options: .atomic
+        )
+    }
+
+    static func loadResumeGeometryCheckpoint(
+        projectID: UUID
+    ) -> SpatialResumeGeometryCheckpoint? {
+        guard let projectDirectory = try? directory(for: projectID, create: false),
+              let data = try? Data(
+                contentsOf: projectDirectory.appendingPathComponent(
+                    resumeGeometryCheckpointFile
+                )
+              ) else { return nil }
+        return try? decoder.decode(SpatialResumeGeometryCheckpoint.self, from: data)
+    }
+
+    static func removeResumeGeometryCheckpoint(projectID: UUID) {
+        guard let projectDirectory = try? directory(for: projectID, create: false) else {
+            return
+        }
+        try? fileManager.removeItem(
+            at: projectDirectory.appendingPathComponent(resumeGeometryCheckpointFile)
+        )
+    }
+
     static func loadAll() -> [RoomProject] {
         guard let root = try? projectsDirectory,
               let directories = try? fileManager.contentsOfDirectory(
@@ -346,7 +381,8 @@ enum ProjectRepository {
             wallPhotos: source.wallPhotos,
             wallPhotoSegments: source.wallPhotoSegments,
             photographicScanProgress: source.photographicScanProgress,
-            scanContinuationState: source.scanContinuationState
+            scanContinuationState: source.scanContinuationState,
+            snapshotGeometryRevision: source.snapshotGeometryRevision
         )
         try save(copy)
         return copy
