@@ -324,30 +324,54 @@ enum RoomProjectGeometryMerger {
             }
         }
 
-        let best = possibleTransforms
-            .filter { SpatialCoordinateContract.validateProjectMapping($0.0).isSafeRigidTransform }
-            .map { transform, refined -> (simd_float4x4, Bool, Float) in
-                let walls = incomingSnapshots.map {
+        var best: (transform: simd_float4x4, refined: Bool, score: Float)?
+        for (transform, refined) in possibleTransforms {
+            let validation = SpatialCoordinateContract.validateProjectMapping(transform)
+            guard validation.isSafeRigidTransform else { continue }
+
+            var transformedWalls: [WallSnapshot] = []
+            transformedWalls.reserveCapacity(incomingSnapshots.count)
+            for snapshot in incomingSnapshots {
+                transformedWalls.append(
                     WallSnapshot(
-                        id: $0.id,
-                        width: $0.width,
-                        height: $0.height,
-                        matrix: transform * $0.matrix
+                        id: snapshot.id,
+                        width: snapshot.width,
+                        height: snapshot.height,
+                        matrix: transform * snapshot.matrix
                     )
-                }
-                let analysis = analyzeWalls(incoming: walls, existing: source.walls)
-                let referenceDistance = walls.map {
-                    simd_distance(translation(of: $0.matrix), targetCenter)
-                        + abs($0.width - target.width) * 0.3
-                        + abs($0.height - target.height) * 0.3
-                }.min() ?? 50
-                let score = Float(analysis.matchedCount) * 12
-                    - Float(analysis.conflictCount) * 15
-                    - analysis.error
-                    - referenceDistance
-                return (transform, refined, score)
+                )
             }
-            .max(by: { $0.2 < $1.2 })
+
+            let analysis = analyzeWalls(
+                incoming: transformedWalls,
+                existing: source.walls
+            )
+
+            var referenceDistance: Float = 50
+            for wall in transformedWalls {
+                let wallCenter = translation(of: wall.matrix)
+                let centerDistance = simd_distance(wallCenter, targetCenter)
+                let widthPenalty = abs(wall.width - target.width) * Float(0.3)
+                let heightPenalty = abs(wall.height - target.height) * Float(0.3)
+                let candidateDistance = centerDistance + widthPenalty + heightPenalty
+                referenceDistance = min(referenceDistance, candidateDistance)
+            }
+
+            let matchedScore = Float(analysis.matchedCount) * Float(12)
+            let conflictPenalty = Float(analysis.conflictCount) * Float(15)
+            let score = matchedScore
+                - conflictPenalty
+                - analysis.error
+                - referenceDistance
+
+            if let currentBest = best {
+                if score > currentBest.score {
+                    best = (transform: transform, refined: refined, score: score)
+                }
+            } else {
+                best = (transform: transform, refined: refined, score: score)
+            }
+        }
 
         guard let best else {
             return TransformResolution(
@@ -356,8 +380,8 @@ enum RoomProjectGeometryMerger {
             )
         }
         return TransformResolution(
-            transform: best.0,
-            usedReferenceWall: best.1
+            transform: best.transform,
+            usedReferenceWall: best.refined
         )
     }
 
