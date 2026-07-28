@@ -573,6 +573,8 @@ struct ProjectChangeSet: Codable, Identifiable, Equatable {
     var status: ProjectChangeSetStatus
     var changes: [ProjectChangeRecord]
     var recoverySnapshotID: UUID?
+    var targetScanID: UUID?
+    var electricalDesignMode: ElectricalDesignMode?
 
     init(
         id: UUID = UUID(),
@@ -583,7 +585,9 @@ struct ProjectChangeSet: Codable, Identifiable, Equatable {
         updatedAt: Date = Date(),
         status: ProjectChangeSetStatus = .draft,
         changes: [ProjectChangeRecord] = [],
-        recoverySnapshotID: UUID? = nil
+        recoverySnapshotID: UUID? = nil,
+        targetScanID: UUID? = nil,
+        electricalDesignMode: ElectricalDesignMode? = nil
     ) {
         self.id = id
         self.name = name
@@ -594,6 +598,39 @@ struct ProjectChangeSet: Codable, Identifiable, Equatable {
         self.status = status
         self.changes = changes
         self.recoverySnapshotID = recoverySnapshotID
+        self.targetScanID = targetScanID
+        self.electricalDesignMode = electricalDesignMode
+    }
+}
+
+enum ProjectChangePayloadCoder {
+    private static var encoder: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }
+
+    private static var decoder: JSONDecoder {
+        JSONDecoder()
+    }
+
+    static func encode<T: Encodable>(_ value: T) throws -> Data {
+        try encoder.encode(value)
+    }
+
+    static func decode<T: Decodable>(
+        _ type: T.Type,
+        from data: Data?
+    ) throws -> T {
+        guard let data else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: [],
+                    debugDescription: "Missing project change payload."
+                )
+            )
+        }
+        return try decoder.decode(type, from: data)
     }
 }
 
@@ -642,7 +679,7 @@ struct ProjectWorldMapSummary: Equatable {
 
 extension SurveyProject {
     mutating func normalizeFoundation(appDefaults: ProjectAppDefaults) {
-        foundationSchemaVersion = max(foundationSchemaVersion ?? 0, 1)
+        foundationSchemaVersion = max(foundationSchemaVersion ?? 0, 2)
 
         if projectSettings == nil {
             let legacyOverride = ElectricalPlacementOverrides.difference(

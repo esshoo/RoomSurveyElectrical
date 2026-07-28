@@ -184,6 +184,31 @@ struct ProjectFoundationView: View {
             }
 
             Section {
+                NavigationLink {
+                    ElectricalReviewHubView(projectID: projectID)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("جلسات مراجعة الكهرباء")
+                                .font(.headline)
+                            Text("إضافة وتعديل واستبدال وتأكيد وحذف داخل Change Set مرتبط بمسح واحد")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "bolt.badge.checkmark.fill")
+                            .foregroundStyle(.blue)
+                    }
+                }
+            } header: {
+                Text("Build 47 — تحديث العناصر")
+            } footer: {
+                Text(
+                    "لا تُطبق التغييرات على المسح قبل اعتماد الجلسة، وتبقى نقطة الاستعادة متاحة للتراجع الكامل."
+                )
+            }
+
+            Section {
                 LabeledContent(
                     "مصدر الكهرباء والمسح",
                     value: project.projectSettings?.usesInheritedElectricalSettings == false
@@ -345,10 +370,18 @@ struct ProjectFoundationView: View {
                             ),
                             onComplete: {
                                 perform {
-                                    try store.completeChangeSet(
-                                        projectID: projectID,
-                                        changeSetID: changeSet.id
-                                    )
+                                    if changeSet.mode == .elementUpdate,
+                                       changeSet.targetScanID != nil {
+                                        try store.applyElectricalChangeSet(
+                                            projectID: projectID,
+                                            changeSetID: changeSet.id
+                                        )
+                                    } else {
+                                        try store.completeChangeSet(
+                                            projectID: projectID,
+                                            changeSetID: changeSet.id
+                                        )
+                                    }
                                 }
                             },
                             onRevert: {
@@ -361,7 +394,7 @@ struct ProjectFoundationView: View {
                 Text("سجل التعديلات")
             } footer: {
                 Text(
-                    "كل جلسة جديدة تنشئ نقطة استعادة قبل بدايتها. إضافة تفاصيل العناصر داخل الجلسة ستُستخدم بدءًا من Build 47."
+                    "كل جلسة جديدة تنشئ نقطة استعادة قبل بدايتها. جلسات الكهرباء المرتبطة بمسح واحد متاحة الآن في Build 47."
                 )
             }
 
@@ -417,6 +450,8 @@ struct ProjectFoundationView: View {
         switch mode.implementationBuild {
         case 45:
             return "تم تجهيز الأساس في Build 45"
+        case 47:
+            return "متاح الآن داخل كل مسح مستقل"
         default:
             return "الأدوات التنفيذية مخططة لـ Build \(mode.implementationBuild)"
         }
@@ -511,7 +546,7 @@ private struct NewProjectChangeSetSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
-    @State private var mode: ProjectWorkspaceMode = .elementUpdate
+    @State private var mode: ProjectWorkspaceMode = .architecturalUpdate
     @State private var notes = ""
     @State private var errorMessage: String?
 
@@ -523,7 +558,7 @@ private struct NewProjectChangeSetSheet: View {
                 Section("الجلسة") {
                     TextField("اسم الجلسة", text: $name)
                     Picker("النوع", selection: $mode) {
-                        ForEach(ProjectWorkspaceMode.allCases) { mode in
+                        ForEach(ProjectWorkspaceMode.allCases.filter { $0 != .elementUpdate }) { mode in
                             Label(mode.title, systemImage: mode.systemImage)
                                 .tag(mode)
                         }
@@ -542,7 +577,7 @@ private struct NewProjectChangeSetSheet: View {
 
                 Section {
                     Label(
-                        "سيتم إنشاء نقطة استعادة تلقائيًا قبل بدء الجلسة.",
+                        "سيتم إنشاء نقطة استعادة تلقائيًا قبل بدء الجلسة. مراجعة الكهرباء تبدأ من المسار المخصص داخل Build 47.",
                         systemImage: "externaldrive.badge.checkmark"
                     )
                     .font(.caption)

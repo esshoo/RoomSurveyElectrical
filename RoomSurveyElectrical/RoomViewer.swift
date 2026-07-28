@@ -235,10 +235,16 @@ struct RoomViewerView: View {
             switch workflow {
             case .continueExisting:
                 RoomWorkflowView(
-                    existingProject: project,
-                    surveyProjectID: surveyProjectID,
+                    destination: ScanDestination(
+                        surveyProjectID: surveyProjectID,
+                        parentItemID: scanReference?.parentID,
+                        scanName: "جزء مستقل - \(project.name)",
+                        sourceScanID: project.id,
+                        spatialAlignmentState: .independentNeedsAlignment
+                    ),
                     onClose: {
                         scanWorkflow = nil
+                        store.reload()
                         reloadProject()
                     }
                 )
@@ -247,7 +253,9 @@ struct RoomViewerView: View {
                     destination: ScanDestination(
                         surveyProjectID: surveyProjectID,
                         parentItemID: scanReference?.parentID,
-                        scanName: "إعادة مسح - \(project.name)"
+                        scanName: "إعادة مسح مستقلة - \(project.name)",
+                        sourceScanID: project.id,
+                        spatialAlignmentState: .independentNeedsAlignment
                     ),
                     onClose: {
                         scanWorkflow = nil
@@ -470,7 +478,7 @@ struct RoomViewerView: View {
                     .foregroundStyle(.orange)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("يوجد مسح متوقف قابل للاستكمال")
+                    Text("يوجد مسح متوقف؛ سيُحفظ الجزء التالي كمسح مستقل")
                         .font(.subheadline.weight(.semibold))
                     Text(
                         "\(continuation.reason.title) • "
@@ -520,22 +528,13 @@ struct RoomViewerView: View {
 
             Section("تحديث المسح") {
                 Button {
-                    if project.scanContinuationState == nil,
-                       !ProjectRepository.hasWorldMap(project) {
-                        errorMessage =
-                            "لا يمكن استكمال هذا المسح بدقة لأنه لا يحتوي على خريطة تتبع محفوظة. "
-                                + "استخدم «إعادة المسح كنسخة جديدة»؛ المسحات الجديدة سيمكن استكمالها لاحقًا."
-                        return
-                    }
                     scanWorkflow = .continueExisting
                 } label: {
                     Label(
                         project.scanContinuationState == nil
-                            ? "استكمال أو مسح جزء إضافي"
-                            : "متابعة المسح المتوقف",
-                        systemImage: project.scanContinuationState == nil
-                            ? "viewfinder.circle"
-                            : "play.circle.fill"
+                            ? "مسح جزء إضافي كمسح مستقل"
+                            : "متابعة العمل بمسح مستقل جديد",
+                        systemImage: "square.2.layers.3d"
                     )
                 }
 
@@ -543,7 +542,7 @@ struct RoomViewerView: View {
                     scanWorkflow = .rescanAsNew
                 } label: {
                     Label(
-                        "إعادة المسح كنسخة جديدة",
+                        "إعادة المسح كنسخة مستقلة",
                         systemImage: "arrow.clockwise.circle"
                     )
                 }

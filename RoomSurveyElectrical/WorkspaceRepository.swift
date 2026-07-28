@@ -69,6 +69,8 @@ enum WorkspaceRepository {
         case operationNotAllowed
         case recoverySnapshotNotFound
         case changeSetNotFound
+        case scanNotFound
+        case invalidChangeRecord
 
         var errorDescription: String? {
             switch self {
@@ -86,6 +88,10 @@ enum WorkspaceRepository {
                 "نقطة الاستعادة المطلوبة غير موجودة أو لم تعد متاحة."
             case .changeSetNotFound:
                 "جلسة التعديل المطلوبة غير موجودة."
+            case .scanNotFound:
+                "المسح المرتبط بجلسة المراجعة غير موجود."
+            case .invalidChangeRecord:
+                "سجل تعديل العنصر غير صالح أو لا يطابق المسح المحدد."
             }
         }
     }
@@ -221,9 +227,20 @@ enum WorkspaceRepository {
         if let index = project.scans.firstIndex(where: { $0.id == roomProject.id }) {
             project.scans[index].parentID = destination.parentItemID
             project.scans[index].name = roomProject.name
+            if let alignment = destination.spatialAlignmentState {
+                project.scans[index].spatialAlignmentState = alignment
+            }
+            if let sourceScanID = destination.sourceScanID {
+                project.scans[index].sourceScanID = sourceScanID
+            }
         } else {
             project.scans.append(
-                ScanReference(roomProject: roomProject, parentID: destination.parentItemID)
+                ScanReference(
+                    roomProject: roomProject,
+                    parentID: destination.parentItemID,
+                    spatialAlignmentState: destination.spatialAlignmentState,
+                    sourceScanID: destination.sourceScanID
+                )
             )
         }
         project.updatedAt = Date()
@@ -403,12 +420,21 @@ enum WorkspaceRepository {
         projectID: UUID,
         name: String,
         mode: ProjectWorkspaceMode,
-        notes: String?
+        notes: String?,
+        targetScanID: UUID? = nil,
+        electricalDesignMode: ElectricalDesignMode? = nil
     ) throws -> SurveyProject {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { throw RepositoryError.invalidName }
         guard var project = loadStoredProject(projectID: projectID) else {
             throw RepositoryError.projectNotFound
+        }
+        if let targetScanID,
+           !project.scans.contains(where: { $0.id == targetScanID }) {
+            throw RepositoryError.scanNotFound
+        }
+        if mode == .elementUpdate, targetScanID == nil {
+            throw RepositoryError.scanNotFound
         }
 
         let changeSetID = UUID()
@@ -430,7 +456,9 @@ enum WorkspaceRepository {
                 notes: notes?.trimmingCharacters(
                     in: .whitespacesAndNewlines
                 ),
-                recoverySnapshotID: snapshot.id
+                recoverySnapshotID: snapshot.id,
+                targetScanID: targetScanID,
+                electricalDesignMode: electricalDesignMode
             )
         )
         project.changeSets = changeSets
@@ -439,6 +467,204 @@ enum WorkspaceRepository {
         try pruneRecoverySnapshots(in: &project)
         try save(project)
         return project
+    }
+
+    static func beginElectricalReviewSession(
+        projectID: UUID,
+        scanID: UUID,
+        name: String,
+        designMode: ElectricalDesignMode,
+        notes: String?
+    ) throws -> SurveyProject {
+        try beginChangeSet(
+            projectID: projectID,
+            name: name,
+            mode: .elementUpdate,
+            notes: notes,
+            targetScanID: scanID,
+            electricalDesignMode: designMode
+        )
+    }
+
+    static func upsertElectricalChangeRecord(
+        projectID: UUID,
+        changeSetID: UUID,
+        record: ProjectChangeRecord
+    ) throws -> SurveyProject {
+        guard record.entityKind == .electricalElement,
+              let recordScanID = record.scanID,
+              let entityID = record.entityID else {
+            throw RepositoryError.invalidChangeRecord
+        }
+        guard var project = loadStoredProject(projectID: projectID),
+              var changeSets = project.changeSets,
+              let index = changeSets.firstIndex(where: { $0.id == changeSetID }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        guard changeSets[index].status == .draft,
+              changeSets[index].mode == .elementUpdate,
+              changeSets[index].targetScanID == recordScanID else {
+            throw RepositoryError.operationNotAllowed
+        }
+
+        if let existingIndex = changeSets[index].changes.firstIndex(where: {
+            $0.entityKind == .electricalElement
+                && $0.entityID == entityID
+                && $0.scanID == recordScanID
+        }) {
+            var replacement = record
+            replacement.previousState = changeSets[index].changes[existingIndex].previousState
+                ?? record.previousState
+            changeSets[index].changes[existingIndex] = replacement
+        } else {
+            changeSets[index].changes.append(record)
+        }
+        changeSets[index].updatedAt = Date()
+        project.changeSets = changeSets
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func removeElectricalChangeRecord(
+        projectID: UUID,
+        changeSetID: UUID,
+        entityID: UUID
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID),
+              var changeSets = project.changeSets,
+              let index = changeSets.firstIndex(where: { $0.id == changeSetID }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        guard changeSets[index].status == .draft,
+              changeSets[index].mode == .elementUpdate else {
+            throw RepositoryError.operationNotAllowed
+        }
+        changeSets[index].changes.removeAll {
+            $0.entityKind == .electricalElement && $0.entityID == entityID
+        }
+        changeSets[index].updatedAt = Date()
+        project.changeSets = changeSets
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func cancelChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID),
+              var changeSets = project.changeSets,
+              let index = changeSets.firstIndex(where: { $0.id == changeSetID }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        guard changeSets[index].status == .draft else {
+            throw RepositoryError.operationNotAllowed
+        }
+        changeSets[index].status = .cancelled
+        changeSets[index].updatedAt = Date()
+        project.changeSets = changeSets
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func applyElectricalChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws -> SurveyProject {
+        guard var workspace = loadStoredProject(projectID: projectID),
+              var changeSets = workspace.changeSets,
+              let changeSetIndex = changeSets.firstIndex(where: { $0.id == changeSetID }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        let changeSet = changeSets[changeSetIndex]
+        guard changeSet.status == .draft,
+              changeSet.mode == .elementUpdate,
+              let scanID = changeSet.targetScanID,
+              workspace.scans.contains(where: { $0.id == scanID }),
+              var room = ProjectRepository.load(projectID: scanID) else {
+            throw RepositoryError.scanNotFound
+        }
+
+        let originalRoom = room
+        for record in changeSet.changes.sorted(by: { $0.createdAt < $1.createdAt }) {
+            guard record.entityKind == .electricalElement,
+                  record.scanID == scanID,
+                  let entityID = record.entityID else {
+                throw RepositoryError.invalidChangeRecord
+            }
+            switch record.action {
+            case .add:
+                let point = try ProjectChangePayloadCoder.decode(
+                    ElectricalPoint.self,
+                    from: record.newState
+                )
+                guard point.id == entityID,
+                      room.walls.contains(where: { $0.id == point.wallID }),
+                      !room.points.contains(where: { $0.id == entityID }) else {
+                    throw RepositoryError.invalidChangeRecord
+                }
+                room.points.append(point)
+
+            case .modify, .replace:
+                let previous = try ProjectChangePayloadCoder.decode(
+                    ElectricalPoint.self,
+                    from: record.previousState
+                )
+                let point = try ProjectChangePayloadCoder.decode(
+                    ElectricalPoint.self,
+                    from: record.newState
+                )
+                guard point.id == entityID,
+                      previous.id == entityID,
+                      room.walls.contains(where: { $0.id == point.wallID }),
+                      let pointIndex = room.points.firstIndex(where: { $0.id == entityID }),
+                      room.points[pointIndex] == previous else {
+                    throw RepositoryError.invalidChangeRecord
+                }
+                room.points[pointIndex] = point
+
+            case .delete, .markMissing:
+                let previous = try ProjectChangePayloadCoder.decode(
+                    ElectricalPoint.self,
+                    from: record.previousState
+                )
+                guard previous.id == entityID,
+                      let pointIndex = room.points.firstIndex(where: { $0.id == entityID }),
+                      room.points[pointIndex] == previous else {
+                    throw RepositoryError.invalidChangeRecord
+                }
+                room.points.remove(at: pointIndex)
+
+            case .confirmExisting:
+                let previous = try ProjectChangePayloadCoder.decode(
+                    ElectricalPoint.self,
+                    from: record.previousState
+                )
+                guard previous.id == entityID,
+                      room.points.contains(where: { $0 == previous }) else {
+                    throw RepositoryError.invalidChangeRecord
+                }
+            }
+        }
+        room.normalizeElectricalGroups()
+        room.snapshotGeometryRevision = (room.snapshotGeometryRevision ?? 0) + 1
+
+        do {
+            try ProjectRepository.save(room)
+            changeSets[changeSetIndex].status = .applied
+            changeSets[changeSetIndex].updatedAt = Date()
+            workspace.changeSets = changeSets
+            workspace.preferredWorkspaceMode = .elementUpdate
+            workspace.updatedAt = Date()
+            try save(workspace)
+        } catch {
+            try? ProjectRepository.save(originalRoom)
+            throw error
+        }
+        return workspace
     }
 
     static func completeChangeSet(
@@ -702,7 +928,9 @@ enum WorkspaceRepository {
                         roomProject: copiedRoom,
                         parentID: scan.parentID.flatMap { itemIDMap[$0] },
                         isArchived: scan.isArchived,
-                        isIncludedInTakeoff: scan.isIncludedInTakeoff
+                        isIncludedInTakeoff: scan.isIncludedInTakeoff,
+                        spatialAlignmentState: scan.spatialAlignmentState,
+                        sourceScanID: scan.sourceScanID.flatMap { scanIDMap[$0] }
                     )
                 )
             }
@@ -711,6 +939,13 @@ enum WorkspaceRepository {
                 try? ProjectRepository.delete(projectID: scanID)
             }
             throw error
+        }
+
+        for index in copiedScans.indices {
+            let sourceReference = source.scans[index]
+            copiedScans[index].sourceScanID = sourceReference.sourceScanID.flatMap {
+                scanIDMap[$0]
+            }
         }
 
         var copy = SurveyProject(
@@ -828,7 +1063,9 @@ enum WorkspaceRepository {
                     ScanReference(
                         roomProject: copiedRoom,
                         parentID: scan.parentID.flatMap { itemIDMap[$0] },
-                        isIncludedInTakeoff: scan.isIncludedInTakeoff
+                        isIncludedInTakeoff: scan.isIncludedInTakeoff,
+                        spatialAlignmentState: scan.spatialAlignmentState,
+                        sourceScanID: nil
                     )
                 )
             }
@@ -933,7 +1170,9 @@ enum WorkspaceRepository {
             ScanReference(
                 roomProject: copy,
                 parentID: source.parentID,
-                isIncludedInTakeoff: false
+                isIncludedInTakeoff: false,
+                spatialAlignmentState: source.spatialAlignmentState,
+                sourceScanID: source.sourceScanID
             )
         )
         project.updatedAt = Date()
@@ -1428,6 +1667,71 @@ final class ProjectStore: ObservableObject {
             name: name,
             mode: mode,
             notes: notes
+        )
+        reload()
+    }
+
+    func beginElectricalReviewSession(
+        projectID: UUID,
+        scanID: UUID,
+        name: String,
+        designMode: ElectricalDesignMode,
+        notes: String?
+    ) throws {
+        _ = try WorkspaceRepository.beginElectricalReviewSession(
+            projectID: projectID,
+            scanID: scanID,
+            name: name,
+            designMode: designMode,
+            notes: notes
+        )
+        reload()
+    }
+
+    func upsertElectricalChangeRecord(
+        projectID: UUID,
+        changeSetID: UUID,
+        record: ProjectChangeRecord
+    ) throws {
+        _ = try WorkspaceRepository.upsertElectricalChangeRecord(
+            projectID: projectID,
+            changeSetID: changeSetID,
+            record: record
+        )
+        reload()
+    }
+
+    func removeElectricalChangeRecord(
+        projectID: UUID,
+        changeSetID: UUID,
+        entityID: UUID
+    ) throws {
+        _ = try WorkspaceRepository.removeElectricalChangeRecord(
+            projectID: projectID,
+            changeSetID: changeSetID,
+            entityID: entityID
+        )
+        reload()
+    }
+
+    func applyElectricalChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws {
+        _ = try WorkspaceRepository.applyElectricalChangeSet(
+            projectID: projectID,
+            changeSetID: changeSetID
+        )
+        reload()
+    }
+
+    func cancelChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws {
+        _ = try WorkspaceRepository.cancelChangeSet(
+            projectID: projectID,
+            changeSetID: changeSetID
         )
         reload()
     }

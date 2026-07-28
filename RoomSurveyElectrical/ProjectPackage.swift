@@ -511,7 +511,11 @@ enum ProjectPackageService {
                     },
                     isArchived: sourceScan.isArchived,
                     isIncludedInTakeoff:
-                        sourceScan.isIncludedInTakeoff
+                        sourceScan.isIncludedInTakeoff,
+                    spatialAlignmentState: sourceScan.spatialAlignmentState,
+                    sourceScanID: sourceScan.sourceScanID.flatMap {
+                        scanIDMap[$0]
+                    }
                 )
                 reference.name = sourceScan.name
                 return reference
@@ -559,6 +563,7 @@ enum ProjectPackageService {
             importedProject.changeSets = source.changeSets?.map { changeSet in
                 var copied = changeSet
                 copied.recoverySnapshotID = nil
+                copied.targetScanID = changeSet.targetScanID.flatMap { scanIDMap[$0] }
                 copied.changes = copied.changes.map { change in
                     var remappedChange = change
                     remappedChange.scanID = change.scanID.flatMap {

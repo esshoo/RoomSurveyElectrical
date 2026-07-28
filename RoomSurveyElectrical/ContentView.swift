@@ -1159,6 +1159,14 @@ private struct ScanReferenceRow: View {
                 Text(scan.createdAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+        if scan.resolvedSpatialAlignmentState == .independentNeedsAlignment {
+          Label(
+            "مسح مستقل — المحاذاة في Build 49",
+            systemImage: scan.resolvedSpatialAlignmentState.systemImage
+          )
+          .font(.caption2)
+          .foregroundStyle(.orange)
+        }
                 if !scan.includedInTakeoff {
                     Label("مستبعد من الحصر", systemImage: "minus.circle.fill")
                         .font(.caption2)

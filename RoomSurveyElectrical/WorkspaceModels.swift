@@ -514,6 +514,27 @@ struct WorkspaceItem: Codable, Identifiable, Equatable {
     var archived: Bool { isArchived ?? false }
 }
 
+enum ScanSpatialAlignmentState: String, Codable, CaseIterable, Identifiable {
+    case aligned
+    case independentNeedsAlignment
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .aligned: "محاذٍ داخل المشروع"
+        case .independentNeedsAlignment: "مسح مستقل — يحتاج محاذاة في محرر 2D"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .aligned: "checkmark.circle.fill"
+        case .independentNeedsAlignment: "square.2.layers.3d"
+        }
+    }
+}
+
 struct ScanReference: Codable, Identifiable, Equatable {
     let id: UUID
     var parentID: UUID?
@@ -521,12 +542,16 @@ struct ScanReference: Codable, Identifiable, Equatable {
     let createdAt: Date
     var isArchived: Bool?
     var isIncludedInTakeoff: Bool?
+    var spatialAlignmentState: ScanSpatialAlignmentState?
+    var sourceScanID: UUID?
 
     init(
         roomProject: RoomProject,
         parentID: UUID?,
         isArchived: Bool? = nil,
-        isIncludedInTakeoff: Bool? = nil
+        isIncludedInTakeoff: Bool? = nil,
+        spatialAlignmentState: ScanSpatialAlignmentState? = nil,
+        sourceScanID: UUID? = nil
     ) {
         id = roomProject.id
         self.parentID = parentID
@@ -534,10 +559,15 @@ struct ScanReference: Codable, Identifiable, Equatable {
         createdAt = roomProject.createdAt
         self.isArchived = isArchived
         self.isIncludedInTakeoff = isIncludedInTakeoff
+        self.spatialAlignmentState = spatialAlignmentState
+        self.sourceScanID = sourceScanID
     }
 
     var archived: Bool { isArchived ?? false }
     var includedInTakeoff: Bool { isIncludedInTakeoff ?? true }
+    var resolvedSpatialAlignmentState: ScanSpatialAlignmentState {
+        spatialAlignmentState ?? .aligned
+    }
 }
 
 struct SurveyProject: Codable, Identifiable, Equatable {
@@ -572,7 +602,7 @@ struct SurveyProject: Codable, Identifiable, Equatable {
         scans: [ScanReference] = [],
         isImportedArchive: Bool = false,
         isArchived: Bool? = nil,
-        foundationSchemaVersion: Int? = 1,
+        foundationSchemaVersion: Int? = 2,
         projectSettings: ProjectSettings? = nil,
         roomSettings: [RoomSettings]? = nil,
         elementOverrides: [ElementSettingsOverride]? = nil,
@@ -647,10 +677,28 @@ struct SurveyProject: Codable, Identifiable, Equatable {
 }
 
 struct ScanDestination: Identifiable, Equatable {
-    let id = UUID()
+    let id: UUID
     let surveyProjectID: UUID
     let parentItemID: UUID?
     let scanName: String
+    let sourceScanID: UUID?
+    let spatialAlignmentState: ScanSpatialAlignmentState?
+
+    init(
+        id: UUID = UUID(),
+        surveyProjectID: UUID,
+        parentItemID: UUID?,
+        scanName: String,
+        sourceScanID: UUID? = nil,
+        spatialAlignmentState: ScanSpatialAlignmentState? = nil
+    ) {
+        self.id = id
+        self.surveyProjectID = surveyProjectID
+        self.parentItemID = parentItemID
+        self.scanName = scanName
+        self.sourceScanID = sourceScanID
+        self.spatialAlignmentState = spatialAlignmentState
+    }
 }
 
 private extension WorkspaceItemKind {
