@@ -1570,14 +1570,22 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         let normalizedHeading = (heading.truncatingRemainder(dividingBy: 360) + 360)
             .truncatingRemainder(dividingBy: 360)
         switch normalizedHeading {
-        case 22.5..<67.5: "شمال شرقي"
-        case 67.5..<112.5: "شرق"
-        case 112.5..<157.5: "جنوب شرقي"
-        case 157.5..<202.5: "جنوب"
-        case 202.5..<247.5: "جنوب غربي"
-        case 247.5..<292.5: "غرب"
-        case 292.5..<337.5: "شمال غربي"
-        default: "شمال"
+        case 22.5..<67.5:
+            return "شمال شرقي"
+        case 67.5..<112.5:
+            return "شرق"
+        case 112.5..<157.5:
+            return "جنوب شرقي"
+        case 157.5..<202.5:
+            return "جنوب"
+        case 202.5..<247.5:
+            return "جنوب غربي"
+        case 247.5..<292.5:
+            return "غرب"
+        case 292.5..<337.5:
+            return "شمال غربي"
+        default:
+            return "شمال"
         }
     }
 
