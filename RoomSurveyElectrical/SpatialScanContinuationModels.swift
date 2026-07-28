@@ -168,6 +168,49 @@ enum SpatialWorldMapQuality: String, Codable, Equatable {
     }
 }
 
+enum SpatialResumeOverlayMode: String, CaseIterable, Identifiable {
+    case photo
+    case edges
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .photo: "الصورة"
+        case .edges: "الحواف"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .photo: "photo.fill"
+        case .edges: "scribble.variable"
+        }
+    }
+}
+
+enum SpatialVisualAlignmentConfidence: String, Equatable {
+    case low
+    case medium
+    case high
+
+    var title: String {
+        switch self {
+        case .low: "منخفضة"
+        case .medium: "متوسطة"
+        case .high: "مرتفعة"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .low: "exclamationmark.triangle.fill"
+        case .medium: "viewfinder.circle"
+        case .high: "checkmark.circle.fill"
+        }
+    }
+}
+
 struct SpatialOpeningReference: Codable, Equatable {
     var kind: SurfaceSnapshot.Kind
     var centerXRatio: Float
@@ -232,6 +275,14 @@ struct SpatialScanContinuationState: Codable, Equatable {
     var worldMapExtent: [Float]? = nil
     var referenceWall: SpatialWallReference? = nil
     var referenceImageFile: String? = nil
+    /// Camera transform in the coordinate space of the saved ARWorldMap.
+    /// Kept independently from `referenceWall` so visual resume still works
+    /// when RoomPlan has not produced a reliable wall reference yet.
+    var referenceCameraTransform: [Float]? = nil
+    /// Optional transform from the saved ARWorldMap coordinate space into the
+    /// persistent project coordinate space. This is required after a visual
+    /// fallback starts a fresh AR session and aligns it using the saved frame.
+    var worldToProjectTransform: [Float]? = nil
     var geographicReference: SpatialGeographicReference? = nil
     var referenceAnchorName: String? = nil
 
@@ -244,6 +295,8 @@ struct SpatialScanContinuationState: Codable, Equatable {
         worldMapExtent: [Float]? = nil,
         referenceWall: SpatialWallReference? = nil,
         referenceImageFile: String? = nil,
+        referenceCameraTransform: [Float]? = nil,
+        worldToProjectTransform: [Float]? = nil,
         geographicReference: SpatialGeographicReference? = nil,
         referenceAnchorName: String? = nil
     ) {
@@ -255,6 +308,8 @@ struct SpatialScanContinuationState: Codable, Equatable {
         self.worldMapExtent = worldMapExtent
         self.referenceWall = referenceWall
         self.referenceImageFile = referenceImageFile
+        self.referenceCameraTransform = referenceCameraTransform
+        self.worldToProjectTransform = worldToProjectTransform
         self.geographicReference = geographicReference
         self.referenceAnchorName = referenceAnchorName
     }
@@ -262,7 +317,11 @@ struct SpatialScanContinuationState: Codable, Equatable {
 
 extension RoomProject {
     var hasSavedSpatialScanContinuation: Bool {
-        scanContinuationState != nil && worldMapFile != nil
+        guard let state = scanContinuationState else { return false }
+        let hasVisualReference = state.referenceImageFile != nil
+            && (state.referenceCameraTransform?.count == 16
+                || state.referenceWall?.cameraTransform?.count == 16)
+        return worldMapFile != nil || hasVisualReference
     }
 }
 

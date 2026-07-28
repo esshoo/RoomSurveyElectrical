@@ -2990,6 +2990,7 @@ struct RoomWorkflowView: View {
                 ElectricalEditorView(
                     initialProject: project,
                     arSession: model.arSession,
+                    worldToProjectTransform: model.currentWorldToProjectTransform,
                     settings: settings,
                     onClose: {
                         model.arSession.pause()
@@ -3021,11 +3022,45 @@ private struct ScanRoomView: View {
     let onClose: () -> Void
 
     @State private var closeAfterSave = false
+    @State private var showManualVisualResumeConfirmation = false
 
     var body: some View {
         ZStack {
             SpatialCaptureRepresentable(hostView: model.captureHostView)
                 .ignoresSafeArea()
+
+            if (model.phase == .relocalizing
+                    || model.phase == .relocalizationFailed),
+               let overlayImage = model.referenceOverlayImage {
+                Image(uiImage: overlayImage)
+                    .resizable()
+                    .scaledToFill()
+                    .scaleEffect(
+                        x: model.referenceOverlayFlipHorizontal ? -1 : 1,
+                        y: model.referenceOverlayFlipVertical ? -1 : 1
+                    )
+                    .opacity(model.referenceOverlayOpacity)
+                    .blendMode(
+                        model.referenceOverlayMode == .edges ? .screen : .normal
+                    )
+                    .ignoresSafeArea()
+                    .overlay {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 22)
+                                .stroke(.white.opacity(0.75), lineWidth: 2)
+                                .padding(22)
+                            Rectangle()
+                                .fill(.white.opacity(0.72))
+                                .frame(width: 2, height: 42)
+                            Rectangle()
+                                .fill(.white.opacity(0.72))
+                                .frame(width: 42, height: 2)
+                        }
+                        .shadow(color: .black.opacity(0.55), radius: 3)
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
 
             VStack {
                 HStack {
@@ -3050,7 +3085,9 @@ private struct ScanRoomView: View {
                 .padding()
 
                 if showThermalState,
-                   model.phase == .scanning || model.phase == .relocalizing {
+                   model.phase == .scanning
+                    || model.phase == .relocalizing
+                    || model.phase == .relocalizationFailed {
                     HStack {
                         Spacer()
                         Label(
@@ -3073,27 +3110,10 @@ private struct ScanRoomView: View {
                     switch model.phase {
                     case .relocalizing:
                         VStack(spacing: 10) {
-                            if let image = model.referenceWallImage {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(height: 132)
-                                    .frame(maxWidth: .infinity)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    .overlay(alignment: .bottomLeading) {
-                                        Label(
-                                            "طابق هذا الحائط",
-                                            systemImage: "viewfinder"
-                                        )
-                                        .font(.caption.weight(.semibold))
-                                        .padding(8)
-                                        .background(.ultraThinMaterial, in: Capsule())
-                                        .padding(8)
-                                    }
-                            }
-
-                            Text("التعرف على مكان المسح السابق")
+                            Text("مطابقة موضع الاستكمال")
                                 .font(.headline)
+
+                            visualResumeControls
 
                             if !model.referenceWallSummary.isEmpty {
                                 Text(model.referenceWallSummary)
@@ -3128,6 +3148,23 @@ private struct ScanRoomView: View {
                             Text("صرامة التعرف: \(model.relocalizationStrictnessTitle)")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
+
+                            if model.isManualVisualResumeAvailable {
+                                Button {
+                                    showManualVisualResumeConfirmation = true
+                                } label: {
+                                    Label(
+                                        model.isPreparingManualVisualResume
+                                            ? "جارٍ تجهيز الاستكمال…"
+                                            : "استكمال بعد المطابقة البصرية",
+                                        systemImage: "viewfinder.circle.fill"
+                                    )
+                                    .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.green)
+                                .disabled(model.isPreparingManualVisualResume)
+                            }
 
                             Button {
                                 model.pauseRelocalizationManually()
@@ -3245,6 +3282,21 @@ private struct ScanRoomView: View {
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
         }
+        .confirmationDialog(
+            "تأكيد المطابقة البصرية",
+            isPresented: $showManualVisualResumeConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("استكمال المسح من هذا الموضع") {
+                model.resumeFromVisualAlignment()
+            }
+            Button("إلغاء", role: .cancel) {}
+        } message: {
+            Text(
+                "ثبّت الهاتف بحيث تتطابق الصورة الشفافة مع الحائط والفتحات. "
+                    + "سيستخدم التطبيق وضع الكاميرا الحالي لمحاذاة الجلسة الجديدة مع المشروع."
+            )
+        }
     }
 
     private var savedPauseCard: some View {
@@ -3342,6 +3394,79 @@ private struct ScanRoomView: View {
         )
     }
 
+    @ViewBuilder
+    private var visualResumeControls: some View {
+        if model.referenceWallImage != nil {
+            VStack(spacing: 9) {
+                Picker("طريقة عرض المرجع", selection: $model.referenceOverlayMode) {
+                    ForEach(SpatialResumeOverlayMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.systemImage)
+                            .tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                HStack(spacing: 10) {
+                    Image(systemName: "circle.lefthalf.filled")
+                        .foregroundStyle(.secondary)
+                    Slider(
+                        value: $model.referenceOverlayOpacity,
+                        in: 0.12...0.88
+                    )
+                    Text("\(Int((model.referenceOverlayOpacity * 100).rounded()))%")
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 42, alignment: .trailing)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        model.referenceOverlayFlipHorizontal.toggle()
+                    } label: {
+                        Label("قلب أفقي", systemImage: "arrow.left.and.right")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(model.referenceOverlayFlipHorizontal ? .orange : .blue)
+
+                    Button {
+                        model.referenceOverlayFlipVertical.toggle()
+                    } label: {
+                        Label("قلب رأسي", systemImage: "arrow.up.and.down")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(model.referenceOverlayFlipVertical ? .orange : .blue)
+                }
+                .font(.caption)
+
+                Label(
+                    "ثقة المطابقة: \(model.visualAlignmentConfidence.title)",
+                    systemImage: model.visualAlignmentConfidence.systemImage
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(visualAlignmentColor)
+
+                Text(model.visualAlignmentConfidenceMessage)
+                    .font(.caption2)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Label(
+                "لا توجد لقطة مرجعية محفوظة لهذا المسح.",
+                systemImage: "photo.badge.exclamationmark"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+        }
+    }
+
+    private var visualAlignmentColor: Color {
+        switch model.visualAlignmentConfidence {
+        case .low: .orange
+        case .medium: .yellow
+        case .high: .green
+        }
+    }
+
     private var relocalizationFailureCard: some View {
         VStack(spacing: 12) {
             Image(systemName: "location.slash.fill")
@@ -3355,6 +3480,25 @@ private struct ScanRoomView: View {
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
+
+            visualResumeControls
+
+            if model.isManualVisualResumeAvailable {
+                Button {
+                    showManualVisualResumeConfirmation = true
+                } label: {
+                    Label(
+                        model.isPreparingManualVisualResume
+                            ? "جارٍ تجهيز الاستكمال…"
+                            : "استكمال بعد المطابقة البصرية",
+                        systemImage: "viewfinder.circle.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .disabled(model.isPreparingManualVisualResume)
+            }
 
             if model.canResumeSavedScan {
                 Button {

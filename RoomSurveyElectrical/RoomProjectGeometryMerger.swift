@@ -6,35 +6,80 @@ enum RoomProjectGeometryMerger {
     static func merge(
         capturedRoom: CapturedRoom,
         into source: RoomProject,
-        includeFurniture: Bool
+        includeFurniture: Bool,
+        incomingWorldTransform: simd_float4x4? = nil
     ) -> RoomProject {
         var result = source
+        let transform = incomingWorldTransform ?? matrix_identity_float4x4
         result.walls = mergeWalls(
             existing: source.walls,
-            incoming: capturedRoom.walls.map(WallSnapshot.init)
+            incoming: capturedRoom.walls.map {
+                let snapshot = WallSnapshot(surface: $0)
+                return WallSnapshot(
+                    id: snapshot.id,
+                    width: snapshot.width,
+                    height: snapshot.height,
+                    matrix: transform * snapshot.matrix
+                )
+            }
         )
         result.surfaces = mergeSurfaces(
             existing: source.surfaces,
             incoming: capturedRoom.doors.map {
-                SurfaceSnapshot(surface: $0, kind: .door)
+                transformedSurface($0, kind: .door, by: transform)
             } + capturedRoom.windows.map {
-                SurfaceSnapshot(surface: $0, kind: .window)
+                transformedSurface($0, kind: .window, by: transform)
             } + capturedRoom.openings.map {
-                SurfaceSnapshot(surface: $0, kind: .opening)
+                transformedSurface($0, kind: .opening, by: transform)
             }
         )
         result.floors = mergeFloors(
             existing: source.floors ?? [],
-            incoming: capturedRoom.floors.map(FloorSnapshot.init)
+            incoming: capturedRoom.floors.map {
+                let snapshot = FloorSnapshot(surface: $0)
+                return FloorSnapshot(
+                    id: snapshot.id,
+                    width: snapshot.width,
+                    depth: snapshot.depth,
+                    matrix: transform * snapshot.matrix
+                )
+            }
         )
         if includeFurniture {
             result.objects = mergeObjects(
                 existing: source.objects ?? [],
-                incoming: capturedRoom.objects.map(RoomObjectSnapshot.init)
+                incoming: capturedRoom.objects.map {
+                    let snapshot = RoomObjectSnapshot(object: $0)
+                    return RoomObjectSnapshot(
+                        id: snapshot.id,
+                        category: snapshot.category,
+                        width: snapshot.width,
+                        height: snapshot.height,
+                        depth: snapshot.depth,
+                        matrix: transform * snapshot.matrix
+                    )
+                }
             )
         }
         result.normalizeWallPhotoMetadata()
         return result
+    }
+
+    private static func transformedSurface(
+        _ surface: CapturedRoom.Surface,
+        kind: SurfaceSnapshot.Kind,
+        by transform: simd_float4x4
+    ) -> SurfaceSnapshot {
+        let snapshot = SurfaceSnapshot(surface: surface, kind: kind)
+        return SurfaceSnapshot(
+            id: snapshot.id,
+            kind: snapshot.kind,
+            width: snapshot.width,
+            height: snapshot.height,
+            matrix: transform * snapshot.matrix,
+            colorHex: snapshot.colorHex,
+            isManuallyAdded: snapshot.isManuallyAdded
+        )
     }
 
     private static func mergeWalls(

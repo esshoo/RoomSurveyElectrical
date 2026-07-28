@@ -67,8 +67,16 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     @Published private(set) var relocalizationEvidenceMessage = ""
     @Published private(set) var relocalizationProgress: Double = 0
     @Published private(set) var referenceWallImage: UIImage?
+    @Published private(set) var referenceWallEdgeImage: UIImage?
     @Published private(set) var referenceWallSummary = ""
     @Published private(set) var locationAssistMessage = ""
+    @Published var referenceOverlayOpacity: Double = 0.48
+    @Published var referenceOverlayMode: SpatialResumeOverlayMode = .photo
+    @Published var referenceOverlayFlipHorizontal = false
+    @Published var referenceOverlayFlipVertical = false
+    @Published private(set) var visualAlignmentConfidence: SpatialVisualAlignmentConfidence = .low
+    @Published private(set) var isManualVisualResumeAvailable = false
+    @Published private(set) var isPreparingManualVisualResume = false
 
     let arSession: ARSession
     let captureHostView: SpatialCaptureHostView
@@ -92,6 +100,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private var isStartingCapture = false
     private var thermalObserver: NSObjectProtocol?
     private var relocalizationTimeoutTask: Task<Void, Never>?
+    private var manualVisualResumeUnlockTask: Task<Void, Never>?
     private var fairThermalPauseTask: Task<Void, Never>?
     private var thermalResumeStabilityTask: Task<Void, Never>?
     private var thermalPauseContext: ThermalPauseContext = .beforeStart
@@ -103,6 +112,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private var lastReferencePairCapturedAt: Date = .distantPast
     private var pendingWallReference: SpatialWallReference?
     private var pendingReferenceImageData: Data?
+    private var pendingReferenceCameraTransform: [Float]?
     private var pendingGeographicReference: SpatialGeographicReference?
     private var cachedGoodWorldMap: ARWorldMap?
     private var cachedGoodWorldMapCapturedAt: Date?
@@ -118,10 +128,16 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private var latestLocationPass = true
     private var isCompletingRelocalization = false
     private var liveSessionContinuityAvailable = false
+    private var activeIncomingWorldTransform: simd_float4x4?
     private var latestDetectedWallDescription = ""
     private let resumeAnchorName = "3ERoomElectrical.ResumeReference"
     private let referenceImageFileName = "spatial-resume-reference.jpg"
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
+
+    private var savedReferenceCameraTransformValues: [Float]? {
+        project?.scanContinuationState?.referenceCameraTransform
+            ?? project?.scanContinuationState?.referenceWall?.cameraTransform
+    }
 
     override init() {
         destination = nil
@@ -203,6 +219,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             NotificationCenter.default.removeObserver(thermalObserver)
         }
         relocalizationTimeoutTask?.cancel()
+        manualVisualResumeUnlockTask?.cancel()
         fairThermalPauseTask?.cancel()
         thermalResumeStabilityTask?.cancel()
         pendingWorldMapTask?.cancel()
@@ -233,17 +250,26 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
     var canResumeSavedScan: Bool {
         guard let project else { return false }
-        return canResumeUsingLiveSession || ProjectRepository.hasWorldMap(project)
+        let continuation = project.scanContinuationState
+        let hasVisualReference = continuation?.referenceImageFile != nil
+            && savedReferenceCameraTransformValues?.count == 16
+        return canResumeUsingLiveSession
+            || ProjectRepository.hasWorldMap(project)
+            || hasVisualReference
     }
 
     var isLiveSessionResumeAvailable: Bool {
         canResumeUsingLiveSession
     }
 
+    var currentWorldToProjectTransform: simd_float4x4? {
+        activeIncomingWorldTransform
+    }
+
     var resumeSavedScanTitle: String {
         canResumeUsingLiveSession
             ? "متابعة فورًا بنفس جلسة المسح"
-            : "التعرف على المكان واستكمال المسح"
+            : "مطابقة آخر لقطة واستكمال المسح"
     }
 
     var isCurrentThermalStateAcceptableForResume: Bool {
@@ -273,6 +299,36 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             )
         }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+
+    var referenceOverlayImage: UIImage? {
+        switch referenceOverlayMode {
+        case .photo:
+            return referenceWallImage
+        case .edges:
+            return referenceWallEdgeImage ?? referenceWallImage
+        }
+    }
+
+    var canUseVisualResume: Bool {
+        guard let state = project?.scanContinuationState,
+              state.referenceImageFile != nil,
+              savedReferenceCameraTransformValues?.count == 16,
+              arSession.currentFrame != nil else {
+            return false
+        }
+        return phase == .relocalizing || phase == .relocalizationFailed
+    }
+
+    var visualAlignmentConfidenceMessage: String {
+        switch visualAlignmentConfidence {
+        case .low:
+            return "طابق الصورة بدقة مع الحائط والفتحات قبل المتابعة."
+        case .medium:
+            return "الصورة والاتجاه متقاربان؛ ثبّت الهاتف قبل المتابعة."
+        case .high:
+            return "المؤشرات الحالية قوية، ويمكن المتابعة بعد التأكد البصري."
+        }
     }
 
     var thermalProtectionTitle: String {
@@ -359,7 +415,19 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         pendingWorldMapTask = nil
         pendingWallReference = nil
         pendingReferenceImageData = nil
+        pendingReferenceCameraTransform = nil
         pendingGeographicReference = nil
+        activeIncomingWorldTransform = nil
+        manualVisualResumeUnlockTask?.cancel()
+        isManualVisualResumeAvailable = false
+        isPreparingManualVisualResume = false
+        visualAlignmentConfidence = .low
+        referenceOverlayOpacity = 0.48
+        referenceOverlayMode = .photo
+        referenceOverlayFlipHorizontal = false
+        referenceOverlayFlipVertical = false
+        referenceWallImage = nil
+        referenceWallEdgeImage = nil
         relocalizationFailureMessage = ""
         relocalizationEvidenceMessage = ""
         relocalizationProgress = 0
@@ -386,7 +454,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         case .scanning:
             beginBackgroundSaveTask()
             stopCapture(reason: .applicationBackground)
-        case .relocalizing:
+        case .relocalizing, .relocalizationFailed:
             pauseRelocalization(reason: .applicationBackground)
         default:
             break
@@ -419,6 +487,75 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         beginRelocalization()
     }
 
+    func resumeFromVisualAlignment() {
+        guard phase == .relocalizing || phase == .relocalizationFailed,
+              !isPreparingManualVisualResume,
+              isManualVisualResumeAvailable,
+              let continuation = project?.scanContinuationState,
+              let savedCameraValues = savedReferenceCameraTransformValues,
+              savedCameraValues.count == 16 else {
+            relocalizationFailureMessage =
+                "لا توجد لقطة وبيانات كاميرا كافية لتنفيذ الاستكمال البصري بأمان."
+            return
+        }
+
+        relocalizationTimeoutTask?.cancel()
+        manualVisualResumeUnlockTask?.cancel()
+        isPreparingManualVisualResume = true
+        phase = .relocalizing
+        relocalizationMessage =
+            "ثبّت الهاتف على موضع الصورة. جارٍ إنشاء جلسة جديدة وربطها بالمشروع…"
+        relocalizationEvidenceMessage =
+            "سيتم استخدام وضع الكاميرا الحالي لمعادلة إحداثيات الجلسة الجديدة مع المسح المحفوظ."
+
+        let savedCameraTransform = simd_float4x4(
+            columnMajorValues: savedCameraValues
+        )
+        let previousWorldToProject = continuation.worldToProjectTransform.map {
+            simd_float4x4(columnMajorValues: $0)
+        } ?? matrix_identity_float4x4
+        let previousTimestamp = arSession.currentFrame?.timestamp ?? 0
+
+        let freshConfiguration = ARWorldTrackingConfiguration()
+        freshConfiguration.planeDetection = [.horizontal, .vertical]
+        arSession.delegate = self
+        arSession.run(
+            freshConfiguration,
+            options: [.resetTracking, .removeExistingAnchors]
+        )
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for _ in 0..<24 {
+                try? await Task.sleep(for: .milliseconds(125))
+                guard !Task.isCancelled,
+                      self.phase == .relocalizing else { return }
+                guard let frame = self.arSession.currentFrame,
+                      frame.timestamp > previousTimestamp + 0.01 else {
+                    continue
+                }
+
+                let newSessionToPreviousWorld = savedCameraTransform
+                    * simd_inverse(frame.camera.transform)
+                self.activeIncomingWorldTransform = previousWorldToProject
+                    * newSessionToPreviousWorld
+                self.isPreparingManualVisualResume = false
+                self.isManualVisualResumeAvailable = false
+                self.relocalizationProgress = 1
+                self.relocalizationMessage =
+                    "تمت محاذاة الجلسة بصريًا. جارٍ استكمال RoomPlan…"
+                self.startCaptureSession()
+                return
+            }
+
+            self.isPreparingManualVisualResume = false
+            self.isManualVisualResumeAvailable = true
+            self.relocalizationFailureMessage =
+                "تعذر إنشاء إطار تتبع جديد. حرّك الهاتف ببطء ثم حاول الاستكمال البصري مرة أخرى."
+            self.phase = .relocalizationFailed
+        }
+    }
+
     func resumeAfterCooling() {
         guard phase == .coolingDown, canResumeAfterCooling else { return }
         thermalResumeStabilityTask?.cancel()
@@ -444,6 +581,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         liveSessionContinuityAvailable = false
         thermalResumeStabilityTask?.cancel()
         relocalizationTimeoutTask?.cancel()
+        manualVisualResumeUnlockTask?.cancel()
         ProjectRepository.removeAsset(
             projectID: savedProject.id,
             fileName: savedProject.scanContinuationState?.referenceImageFile
@@ -452,6 +590,11 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         do {
             try ProjectRepository.save(savedProject)
             project = savedProject
+            activeIncomingWorldTransform = nil
+            isManualVisualResumeAvailable = false
+            isPreparingManualVisualResume = false
+            referenceWallImage = nil
+            referenceWallEdgeImage = nil
             phase = .ready
         } catch {
             phase = .failed("تعذر اعتماد الجزء المحفوظ: \(error.localizedDescription)")
@@ -461,6 +604,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     func cancel() {
         liveSessionContinuityAvailable = false
         relocalizationTimeoutTask?.cancel()
+        manualVisualResumeUnlockTask?.cancel()
         fairThermalPauseTask?.cancel()
         thermalResumeStabilityTask?.cancel()
         pendingWorldMapTask?.cancel()
@@ -479,6 +623,10 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         latestWallReference = nil
         latestWallReferenceImageData = nil
         latestWallReferenceGeographicReference = nil
+        pendingReferenceCameraTransform = nil
+        activeIncomingWorldTransform = nil
+        isManualVisualResumeAvailable = false
+        isPreparingManualVisualResume = false
         endBackgroundSaveTask()
         if project == nil {
             phase = .idle
@@ -539,14 +687,18 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
     private func scheduleFairThermalPause(after delay: TimeInterval) {
         guard fairThermalPauseTask == nil,
-              phase == .scanning || phase == .relocalizing else { return }
+              phase == .scanning
+                || phase == .relocalizing
+                || phase == .relocalizationFailed else { return }
 
         fairThermalPauseTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self,
                   !Task.isCancelled,
                   self.thermalState == .fair,
-                  self.phase == .scanning || self.phase == .relocalizing else {
+                  self.phase == .scanning
+                    || self.phase == .relocalizing
+                    || self.phase == .relocalizationFailed else {
                 return
             }
             self.fairThermalPauseTask = nil
@@ -559,7 +711,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         case .scanning:
             thermalPauseContext = .scanningSaved
             stopCapture(reason: .thermalSafety)
-        case .relocalizing:
+        case .relocalizing, .relocalizationFailed:
             relocalizationTimeoutTask?.cancel()
             arSession.pause()
             guard persistContinuationState(reason: .thermalSafety) else { return }
@@ -594,6 +746,9 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
         isStartingCapture = true
         relocalizationTimeoutTask?.cancel()
+        manualVisualResumeUnlockTask?.cancel()
+        isManualVisualResumeAvailable = false
+        isPreparingManualVisualResume = false
         stopReason = .userFinished
         rawRoomData = nil
         latestRoomSnapshot = nil
@@ -668,20 +823,22 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         let currentWallReference = latestRoomSnapshot.flatMap {
             makeWallReference(from: $0, frame: frame)
         }
-        if let currentWallReference,
-           let currentImageData = captureReferenceImageData(from: frame) {
-            pendingWallReference = currentWallReference
+        pendingWallReference = currentWallReference ?? latestWallReference
+
+        // Always keep the final camera frame, even if RoomPlan has not emitted
+        // a reliable wall yet. The frame is the visual fallback reference and
+        // the camera transform is what lets a fresh AR session be aligned back
+        // into the persistent project coordinate space.
+        if let currentImageData = captureReferenceImageData(from: frame) {
             pendingReferenceImageData = currentImageData
-            pendingGeographicReference = referenceSensor.snapshot()
+            pendingReferenceCameraTransform = frame?.camera.transform.columnMajorValues
+                ?? currentWallReference?.cameraTransform
         } else {
-            // Keep the most recent wall/image pair captured while RoomPlan was
-            // actively updating. This avoids saving an unrelated image if the
-            // user looks away from the last wall immediately before pausing.
-            pendingWallReference = latestWallReference
             pendingReferenceImageData = latestWallReferenceImageData
-            pendingGeographicReference = latestWallReferenceGeographicReference
-                ?? referenceSensor.snapshot()
+            pendingReferenceCameraTransform = latestWallReference?.cameraTransform
         }
+        pendingGeographicReference = referenceSensor.snapshot()
+            ?? latestWallReferenceGeographicReference
 
         pendingWorldMapTask?.cancel()
         let fallbackMap = cachedGoodWorldMap
@@ -748,6 +905,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private func pauseRelocalization(reason: SpatialScanPauseReason) {
         liveSessionContinuityAvailable = false
         relocalizationTimeoutTask?.cancel()
+        manualVisualResumeUnlockTask?.cancel()
         arSession.pause()
         guard project != nil else {
             phase = .idle
@@ -799,6 +957,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         fairThermalPauseTask?.cancel()
         fairThermalPauseTask = nil
         relocalizationTimeoutTask?.cancel()
+        manualVisualResumeUnlockTask?.cancel()
         thermalPauseContext = context
         arSession.pause()
         phase = .coolingDown
@@ -880,70 +1039,113 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
     private func beginRelocalization() {
         liveSessionContinuityAvailable = false
-        guard let project,
-              let worldMapFile = project.worldMapFile else {
-            relocalizationFailureMessage =
-                "لا توجد خريطة تتبع محفوظة لهذا المسح. الجزء المحفوظ لم يُحذف، "
-                    + "ويمكن اعتماده أو إعادة المسح كنسخة جديدة."
+        guard let project else {
+            relocalizationFailureMessage = "لا يوجد مشروع محفوظ للاستكمال."
             phase = .relocalizationFailed
             return
         }
 
-        do {
-            let worldMap = try ProjectRepository.loadWorldMap(
-                projectID: project.id,
-                fileName: worldMapFile
-            )
-            let continuation = project.scanContinuationState
-            referenceWallSummary = continuationReferenceSummary(continuation)
-            referenceWallImage = loadReferenceImage(
-                projectID: project.id,
-                fileName: continuation?.referenceImageFile
-            )
-            referenceSensor.start(
-                enabled: useOptionalLocationAssist,
-                requestPermission: true
-            )
-            referenceAnchorRestored = continuation?.referenceAnchorName == nil
-            stableTrackingFrameCount = 0
-            stableWallMatchFrameCount = 0
-            latestWallMatchScore = 0
-            lastWallMatchUpdateAt = .distantPast
-            latestHeadingPass = true
-            latestLocationPass = true
-            relocalizationProgress = 0
-            relocalizationEvidenceMessage = savedWorldMapDetail.map {
-                "جارٍ البحث عن آخر حائط مسجل. • \($0)"
-            } ?? "جارٍ البحث عن آخر حائط مسجل."
-            locationAssistMessage = locationAssistDescription(
-                savedReference: continuation?.geographicReference,
-                currentReference: referenceSensor.snapshot()
-            )
+        let continuation = project.scanContinuationState
+        referenceWallSummary = continuationReferenceSummary(continuation)
+        referenceWallImage = loadReferenceImage(
+            projectID: project.id,
+            fileName: continuation?.referenceImageFile
+        )
+        referenceWallEdgeImage = referenceWallImage.flatMap {
+            makeReferenceEdgeImage(from: $0)
+        }
+        referenceSensor.start(
+            enabled: useOptionalLocationAssist,
+            requestPermission: true
+        )
+        referenceAnchorRestored = continuation?.referenceAnchorName == nil
+        stableTrackingFrameCount = 0
+        stableWallMatchFrameCount = 0
+        latestWallMatchScore = 0
+        lastWallMatchUpdateAt = .distantPast
+        latestHeadingPass = true
+        latestLocationPass = true
+        relocalizationProgress = 0
+        visualAlignmentConfidence = .low
+        isCompletingRelocalization = false
+        isPreparingManualVisualResume = false
+        isManualVisualResumeAvailable = false
+        activeIncomingWorldTransform = continuation?.worldToProjectTransform.map {
+            simd_float4x4(columnMajorValues: $0)
+        }
+        relocalizationEvidenceMessage = savedWorldMapDetail.map {
+            "جارٍ البحث عن آخر حائط مسجل. • \($0)"
+        } ?? "استخدم الصورة الشفافة لمطابقة آخر موضع توقف."
+        locationAssistMessage = locationAssistDescription(
+            savedReference: continuation?.geographicReference,
+            currentReference: referenceSensor.snapshot()
+        )
 
-            // Relocalize the bare ARSession first. RoomCaptureView is created
-            // only after ARKit reports normal tracking, matching Apple's
-            // documented multi-room workflow and preventing RoomPlan from
-            // taking ownership of the session before the map is restored.
-            prepareBareSessionForRelocalization()
-            let configuration = ARWorldTrackingConfiguration()
-            configuration.initialWorldMap = worldMap
-            configuration.planeDetection = [.horizontal, .vertical]
-            arSession.delegate = self
-            relocalizationMessage = continuation?.referenceWall == nil
-                ? "وجّه الكاميرا إلى الحائط أو الباب الذي سبق مسحه."
-                : "وجّه الكاميرا إلى آخر حائط تم مسحه وطابق الصورة والأبعاد."
-            phase = .relocalizing
-            arSession.run(
-                configuration,
-                options: [.resetTracking, .removeExistingAnchors]
-            )
-            scheduleRelocalizationTimeout()
-            applyThermalPolicy()
-        } catch {
+        prepareBareSessionForRelocalization()
+        let trackingConfiguration = ARWorldTrackingConfiguration()
+        trackingConfiguration.planeDetection = [.horizontal, .vertical]
+
+        var loadedSavedWorldMap = false
+        if let worldMapFile = project.worldMapFile,
+           let worldMap = try? ProjectRepository.loadWorldMap(
+            projectID: project.id,
+            fileName: worldMapFile
+           ) {
+            trackingConfiguration.initialWorldMap = worldMap
+            loadedSavedWorldMap = true
+        }
+
+        let hasVisualFallback = referenceWallImage != nil
+            && savedReferenceCameraTransformValues?.count == 16
+        guard loadedSavedWorldMap || hasVisualFallback else {
             relocalizationFailureMessage =
-                "تعذر تحميل خريطة التتبع المحفوظة: \(error.localizedDescription). "
-                    + "الجزء المحفوظ ما زال موجودًا ويمكن اعتماده دون حذفه."
+                "لا توجد خريطة AR أو لقطة كاميرا صالحة للاستكمال. الجزء المحفوظ ما زال موجودًا."
             phase = .relocalizationFailed
+            return
+        }
+
+        arSession.delegate = self
+        relocalizationMessage = loadedSavedWorldMap
+            ? "طابق الصورة الشفافة مع آخر حائط بينما يحاول التطبيق استعادة خريطة المكان."
+            : "لا توجد خريطة AR صالحة؛ طابق الصورة الشفافة ثم استخدم الاستكمال البصري."
+        phase = .relocalizing
+        arSession.run(
+            trackingConfiguration,
+            options: [.resetTracking, .removeExistingAnchors]
+        )
+
+        scheduleManualVisualResumeUnlock(immediate: !loadedSavedWorldMap)
+        if loadedSavedWorldMap {
+            scheduleRelocalizationTimeout()
+        }
+        applyThermalPolicy()
+    }
+
+    private func scheduleManualVisualResumeUnlock(immediate: Bool) {
+        manualVisualResumeUnlockTask?.cancel()
+        guard referenceWallImage != nil,
+              savedReferenceCameraTransformValues?.count == 16 else {
+            isManualVisualResumeAvailable = false
+            return
+        }
+
+        if immediate {
+            isManualVisualResumeAvailable = true
+            return
+        }
+
+        let delay: Int
+        switch relocalizationStrictness {
+        case .strict: delay = 15
+        case .balanced: delay = 8
+        case .flexible: delay = 3
+        }
+        manualVisualResumeUnlockTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self,
+                  !Task.isCancelled,
+                  self.phase == .relocalizing else { return }
+            self.isManualVisualResumeAvailable = true
         }
     }
 
@@ -953,11 +1155,12 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         relocalizationTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(timeout))
             guard let self, self.phase == .relocalizing else { return }
-            self.arSession.pause()
+            self.isManualVisualResumeAvailable = self.referenceWallImage != nil
+                && self.savedReferenceCameraTransformValues?.count == 16
             self.relocalizationFailureMessage =
                 "لم يكتمل تطابق خريطة المكان وآخر حائط خلال \(timeout) ثانية. "
-                    + "الجزء المحفوظ لم يُحذف. جرّب نفس زاوية الصورة المرجعية، "
-                    + "أو خفّض صرامة التعرف من الإعدادات ثم أعد المحاولة."
+                    + "الكاميرا ما زالت تعمل: طابق الصورة الشفافة مع الواقع ثم "
+                    + "استخدم الاستكمال البصري، أو أعد محاولة التعرف التلقائي."
             self.phase = .relocalizationFailed
         }
     }
@@ -998,6 +1201,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             guard let self else { return }
             if self.phase == .relocalizing {
                 self.evaluateRelocalizationEvidence(frame: frame)
+            } else if self.phase == .relocalizationFailed {
+                self.updateVisualAlignmentConfidence(frame: frame)
             }
         }
     }
@@ -1132,7 +1337,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 savedProject = RoomProjectGeometryMerger.merge(
                     capturedRoom: capturedRoom,
                     into: currentProject,
-                    includeFurniture: includeFurniture
+                    includeFurniture: includeFurniture,
+                    incomingWorldTransform: activeIncomingWorldTransform
                 )
                 try ProjectRepository.save(savedProject)
             } else {
@@ -1210,6 +1416,11 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                     referenceWall: pendingWallReference
                         ?? savedProject.scanContinuationState?.referenceWall,
                     referenceImageFile: referenceImageFile,
+                    referenceCameraTransform: pendingReferenceCameraTransform
+                        ?? pendingWallReference?.cameraTransform
+                        ?? savedProject.scanContinuationState?.referenceCameraTransform,
+                    worldToProjectTransform: activeIncomingWorldTransform?.columnMajorValues
+                        ?? savedProject.scanContinuationState?.worldToProjectTransform,
                     geographicReference: pendingGeographicReference
                         ?? savedProject.scanContinuationState?.geographicReference,
                     referenceAnchorName: resumeAnchorName
@@ -1230,8 +1441,9 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             latestWallReferenceGeographicReference = nil
             pendingWallReference = nil
             pendingReferenceImageData = nil
+            pendingReferenceCameraTransform = nil
             pendingGeographicReference = nil
-                project = savedProject
+            project = savedProject
             referenceWallSummary = continuationReferenceSummary(
                 savedProject.scanContinuationState
             )
@@ -1421,6 +1633,32 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 fileName: fileName
               ) else { return nil }
         return UIImage(contentsOfFile: url.path)
+    }
+
+    private func makeReferenceEdgeImage(from image: UIImage) -> UIImage? {
+        guard let source = CIImage(image: image) else { return nil }
+        let edges = source
+            .applyingFilter(
+                "CIEdges",
+                parameters: [kCIInputIntensityKey: 7.0]
+            )
+            .applyingFilter(
+                "CIColorControls",
+                parameters: [
+                    kCIInputSaturationKey: 0,
+                    kCIInputContrastKey: 1.8,
+                    kCIInputBrightnessKey: 0.10
+                ]
+            )
+        guard let cgImage = imageContext.createCGImage(
+            edges,
+            from: source.extent
+        ) else { return nil }
+        return UIImage(
+            cgImage: cgImage,
+            scale: image.scale,
+            orientation: image.imageOrientation
+        )
     }
 
     private func handleRelocalizationAnchors(_ anchors: [ARAnchor]) {
@@ -1632,6 +1870,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             evidence.append(latestDetectedWallDescription)
         }
         relocalizationEvidenceMessage = evidence.joined(separator: " • ")
+        updateVisualAlignmentConfidence(frame: frame)
 
         let canContinue: Bool
         let stableTrackingFallback = stableTrackingFrameCount >= max(required * 3, 18)
@@ -1664,6 +1903,27 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             try? await Task.sleep(for: .milliseconds(550))
             guard let self, self.phase == .relocalizing else { return }
             self.startCaptureSession()
+        }
+    }
+
+    private func updateVisualAlignmentConfidence(frame: ARFrame) {
+        let trackingNormal: Bool
+        switch frame.camera.trackingState {
+        case .normal:
+            trackingNormal = true
+        default:
+            trackingNormal = false
+        }
+
+        if trackingNormal,
+           latestWallMatchScore >= 0.62,
+           latestLocationPass,
+           latestHeadingPass {
+            visualAlignmentConfidence = .high
+        } else if trackingNormal || latestWallMatchScore >= 0.35 {
+            visualAlignmentConfidence = .medium
+        } else {
+            visualAlignmentConfidence = .low
         }
     }
 

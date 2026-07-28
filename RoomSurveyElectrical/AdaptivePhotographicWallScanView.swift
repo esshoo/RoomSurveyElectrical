@@ -51,6 +51,7 @@ private struct AdaptivePhotoScanGuidance: Equatable {
 struct AdaptivePhotographicWallScanView: View {
     @Binding var project: RoomProject
     let arSession: ARSession
+    let worldToProjectTransform: simd_float4x4?
     let performanceProfile: SpatialScanPerformanceProfile
     let targetSegmentIDs: Set<UUID>?
     let onProjectChanged: () -> Void
@@ -65,6 +66,7 @@ struct AdaptivePhotographicWallScanView: View {
     init(
         project: Binding<RoomProject>,
         arSession: ARSession,
+        worldToProjectTransform: simd_float4x4? = nil,
         performanceProfile: SpatialScanPerformanceProfile,
         targetSegmentIDs: Set<UUID>? = nil,
         onProjectChanged: @escaping () -> Void,
@@ -72,6 +74,7 @@ struct AdaptivePhotographicWallScanView: View {
     ) {
         _project = project
         self.arSession = arSession
+        self.worldToProjectTransform = worldToProjectTransform
         self.performanceProfile = performanceProfile
         self.targetSegmentIDs = targetSegmentIDs
         self.onProjectChanged = onProjectChanged
@@ -83,6 +86,7 @@ struct AdaptivePhotographicWallScanView: View {
             AdaptivePhotographicWallScanARView(
                 project: project,
                 arSession: arSession,
+                worldToProjectTransform: worldToProjectTransform,
                 performanceProfile: performanceProfile,
                 targetSegmentIDs: targetSegmentIDs,
                 autoCaptureEnabled: autoCaptureEnabled,
@@ -492,6 +496,7 @@ private struct PhotoScanEdgePulse: View {
 private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
     var project: RoomProject
     let arSession: ARSession
+    let worldToProjectTransform: simd_float4x4?
     let performanceProfile: SpatialScanPerformanceProfile
     let targetSegmentIDs: Set<UUID>?
     let autoCaptureEnabled: Bool
@@ -646,6 +651,7 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
             guideRoot.removeFromParentNode()
             guideRoot = SCNNode()
             guideRoot.name = "adaptive-photographic-wall-grid"
+            guideRoot.simdTransform = projectToSessionTransform
             sceneView.scene.rootNode.addChildNode(guideRoot)
 
             for wall in parent.project.walls {
@@ -832,7 +838,11 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
                 guard let wall = wallsByID[segment.wallID] else { continue }
                 let worldCorners = segmentWorldCorners(segment: segment, wall: wall)
                 let projected3D = worldCorners.map {
-                    sceneView.projectPoint(SCNVector3($0.x, $0.y, $0.z))
+                    let sessionPoint = projectToSessionTransform
+                        * SIMD4<Float>($0.x, $0.y, $0.z, 1)
+                    return sceneView.projectPoint(
+                        SCNVector3(sessionPoint.x, sessionPoint.y, sessionPoint.z)
+                    )
                 }
                 guard projected3D.allSatisfy({ $0.z > 0 && $0.z < 1 }) else {
                     continue
@@ -855,7 +865,7 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
                 let facing = wallFacing(
                     segment: segment,
                     wall: wall,
-                    cameraTransform: frame.camera.transform
+                    cameraTransform: worldToProjectTransform * frame.camera.transform
                 )
                 guard facing >= 0.30 else { continue }
                 let center = CGPoint(x: bounds.midX, y: bounds.midY)
@@ -1045,12 +1055,13 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
                     SIMD4<Float>(segment.centerX, segment.centerY, 0.006, 1)
                 )
                 let cameraSpace = simd_mul(
-                    simd_inverse(frame.camera.transform),
+                    simd_inverse(worldToProjectTransform * frame.camera.transform),
                     center4
                 )
                 guard cameraSpace.z < -0.04 else { return nil }
+                let sessionCenter = projectToSessionTransform * center4
                 let projected = sceneView.projectPoint(
-                    SCNVector3(center4.x, center4.y, center4.z)
+                    SCNVector3(sessionCenter.x, sessionCenter.y, sessionCenter.z)
                 )
                 let point = CGPoint(x: CGFloat(projected.x), y: CGFloat(projected.y))
                 let distance = Float(hypot(point.x - screenCenter.x, point.y - screenCenter.y))
@@ -1244,6 +1255,14 @@ private struct AdaptivePhotographicWallScanARView: UIViewRepresentable {
                 simd_distance(previousPosition, currentPosition),
                 1 - max(min(simd_dot(previousForward, currentForward), 1), -1)
             )
+        }
+
+        private var worldToProjectTransform: simd_float4x4 {
+            parent.worldToProjectTransform ?? matrix_identity_float4x4
+        }
+
+        private var projectToSessionTransform: simd_float4x4 {
+            simd_inverse(worldToProjectTransform)
         }
 
         private func addBorder(

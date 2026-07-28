@@ -16,12 +16,14 @@ struct ElectricalEditorView: View {
     @State private var cameraWorkspaceMode: CameraWorkspaceMode = .electrical
 
     let arSession: ARSession
+    let worldToProjectTransform: simd_float4x4?
     let settings: ElectricalPlacementSettings
     let onClose: () -> Void
 
     init(
         initialProject: RoomProject,
         arSession: ARSession,
+        worldToProjectTransform: simd_float4x4? = nil,
         settings: ElectricalPlacementSettings,
         onClose: @escaping () -> Void
     ) {
@@ -29,6 +31,7 @@ struct ElectricalEditorView: View {
         preparedProject.electricalSettings = settings
         _project = State(initialValue: preparedProject)
         self.arSession = arSession
+        self.worldToProjectTransform = worldToProjectTransform
         self.settings = settings
         self.onClose = onClose
     }
@@ -40,6 +43,7 @@ struct ElectricalEditorView: View {
                 ElectricalARView(
                     project: project,
                     arSession: arSession,
+                    worldToProjectTransform: worldToProjectTransform,
                     onWallTapped: { pendingTap = $0 },
                     onCeilingTapped: { pendingCeilingTap = $0 }
                 )
@@ -66,6 +70,7 @@ struct ElectricalEditorView: View {
                 AdaptivePhotographicWallScanView(
                     project: $project,
                     arSession: arSession,
+                    worldToProjectTransform: worldToProjectTransform,
                     performanceProfile: settings.spatialScanPerformanceProfile,
                     onProjectChanged: persistProject,
                     onClose: returnToElectricalMode

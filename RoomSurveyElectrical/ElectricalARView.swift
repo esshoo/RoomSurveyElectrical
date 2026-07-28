@@ -14,6 +14,7 @@ struct CeilingTap: Identifiable {
 struct ElectricalARView: UIViewRepresentable {
     var project: RoomProject
     let arSession: ARSession
+    let worldToProjectTransform: simd_float4x4?
     let onWallTapped: (WallTap) -> Void
     let onCeilingTapped: (CeilingTap) -> Void
 
@@ -44,6 +45,7 @@ struct ElectricalARView: UIViewRepresentable {
 
     func updateUIView(_ uiView: ARSCNView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.buildCapturedSurfaces()
         context.coordinator.renderPoints()
         context.coordinator.renderCeilingLights()
     }
@@ -78,6 +80,7 @@ struct ElectricalARView: UIViewRepresentable {
 
             let root = SCNNode()
             root.name = wallRootName
+            applyProjectRootTransform(root)
             sceneView.scene.rootNode.addChildNode(root)
 
             for wall in parent.project.walls {
@@ -116,6 +119,7 @@ struct ElectricalARView: UIViewRepresentable {
 
             let root = SCNNode()
             root.name = ceilingRootName
+            applyProjectRootTransform(root)
             sceneView.scene.rootNode.addChildNode(root)
 
             let ceilingHeight = parent.project.walls.map {
@@ -244,6 +248,7 @@ struct ElectricalARView: UIViewRepresentable {
 
             let root = SCNNode()
             root.name = ceilingLightRootName
+            applyProjectRootTransform(root)
             sceneView.scene.rootNode.addChildNode(root)
 
             for light in parent.project.ceilingLights ?? [] {
@@ -307,7 +312,7 @@ struct ElectricalARView: UIViewRepresentable {
 
             for hit in results {
                 if ceilingNode(from: hit.node) != nil {
-                    let world = hit.worldCoordinates
+                    let world = projectPosition(from: hit.worldCoordinates)
                     parent.onCeilingTapped(
                         CeilingTap(worldPosition: [world.x, world.y, world.z])
                     )
@@ -320,7 +325,7 @@ struct ElectricalARView: UIViewRepresentable {
                     uuidString: String(name.dropFirst(wallPrefix.count))
                    ) {
                     let local = wallNode.convertPosition(hit.worldCoordinates, from: nil)
-                    let world = hit.worldCoordinates
+                    let world = projectPosition(from: hit.worldCoordinates)
                     parent.onWallTapped(
                         WallTap(
                             wallID: wallID,
@@ -332,6 +337,24 @@ struct ElectricalARView: UIViewRepresentable {
                     return
                 }
             }
+        }
+
+        private func applyProjectRootTransform(_ root: SCNNode) {
+            let worldToProject = parent.worldToProjectTransform
+                ?? matrix_identity_float4x4
+            root.simdTransform = simd_inverse(worldToProject)
+        }
+
+        private func projectPosition(from sessionPosition: SCNVector3) -> SIMD3<Float> {
+            let worldToProject = parent.worldToProjectTransform
+                ?? matrix_identity_float4x4
+            let project = worldToProject * SIMD4<Float>(
+                sessionPosition.x,
+                sessionPosition.y,
+                sessionPosition.z,
+                1
+            )
+            return SIMD3(project.x, project.y, project.z)
         }
 
         private func wallNode(from node: SCNNode) -> SCNNode? {
