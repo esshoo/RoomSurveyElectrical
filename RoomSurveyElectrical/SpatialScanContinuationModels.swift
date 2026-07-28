@@ -338,7 +338,7 @@ final class SpatialReferenceSensor: NSObject, CLLocationManagerDelegate {
         latestHeading = newHeading
     }
 
-    func locationManager(
+    nonisolated func locationManager(
         _ manager: CLLocationManager,
         didFailWithError error: Error
     ) {

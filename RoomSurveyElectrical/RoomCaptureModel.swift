@@ -1070,11 +1070,16 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     ) -> SpatialWorldMapQuality {
         guard let status else { return .notAvailable }
         switch status {
-        case .notAvailable: .notAvailable
-        case .limited: .limited
-        case .extending: .extending
-        case .mapped: .mapped
-        @unknown default: .limited
+        case .notAvailable:
+            return SpatialWorldMapQuality.notAvailable
+        case .limited:
+            return SpatialWorldMapQuality.limited
+        case .extending:
+            return SpatialWorldMapQuality.extending
+        case .mapped:
+            return SpatialWorldMapQuality.mapped
+        @unknown default:
+            return SpatialWorldMapQuality.limited
         }
     }
 
