@@ -538,6 +538,14 @@ struct SurveyProject: Codable, Identifiable, Equatable {
     var scans: [ScanReference]
     var isImportedArchive: Bool
     var isArchived: Bool?
+    var foundationSchemaVersion: Int?
+    var projectSettings: ProjectSettings?
+    var roomSettings: [RoomSettings]?
+    var elementOverrides: [ElementSettingsOverride]?
+    var layerStates: [ProjectLayerState]?
+    var changeSets: [ProjectChangeSet]?
+    var recoverySnapshots: [RecoverySnapshotMetadata]?
+    var preferredWorkspaceMode: ProjectWorkspaceMode?
 
     init(
         id: UUID = UUID(),
@@ -549,7 +557,15 @@ struct SurveyProject: Codable, Identifiable, Equatable {
         items: [WorkspaceItem] = [],
         scans: [ScanReference] = [],
         isImportedArchive: Bool = false,
-        isArchived: Bool? = nil
+        isArchived: Bool? = nil,
+        foundationSchemaVersion: Int? = 1,
+        projectSettings: ProjectSettings? = nil,
+        roomSettings: [RoomSettings]? = nil,
+        elementOverrides: [ElementSettingsOverride]? = nil,
+        layerStates: [ProjectLayerState]? = nil,
+        changeSets: [ProjectChangeSet]? = nil,
+        recoverySnapshots: [RecoverySnapshotMetadata]? = nil,
+        preferredWorkspaceMode: ProjectWorkspaceMode? = .presentation
     ) {
         formatVersion = 1
         self.id = id
@@ -562,6 +578,14 @@ struct SurveyProject: Codable, Identifiable, Equatable {
         self.scans = scans
         self.isImportedArchive = isImportedArchive
         self.isArchived = isArchived
+        self.foundationSchemaVersion = foundationSchemaVersion
+        self.projectSettings = projectSettings
+        self.roomSettings = roomSettings
+        self.elementOverrides = elementOverrides
+        self.layerStates = layerStates
+        self.changeSets = changeSets
+        self.recoverySnapshots = recoverySnapshots
+        self.preferredWorkspaceMode = preferredWorkspaceMode
     }
 
     var roomCount: Int {

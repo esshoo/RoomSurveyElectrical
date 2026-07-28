@@ -2,19 +2,61 @@ import Combine
 import Foundation
 
 enum GlobalSettingsRepository {
-    private static let key = "3ERoomElectrical.globalElectricalSettings.v1"
+    private static let legacyElectricalKey =
+        "3ERoomElectrical.globalElectricalSettings.v1"
+    private static let appDefaultsKey =
+        "3ERoomElectrical.projectAppDefaults.v1"
+
+    static func loadAppDefaults() -> ProjectAppDefaults {
+        if let data = UserDefaults.standard.data(forKey: appDefaultsKey),
+           let defaults = try? JSONDecoder().decode(
+               ProjectAppDefaults.self,
+               from: data
+           ) {
+            return ProjectAppDefaults(
+                electrical: defaults.electrical,
+                recoveryPolicy: defaults.recoveryPolicy,
+                layerStates: defaults.layerStates
+            )
+        }
+
+        if let data = UserDefaults.standard.data(forKey: legacyElectricalKey),
+           let settings = try? JSONDecoder().decode(
+               ElectricalPlacementSettings.self,
+               from: data
+           ) {
+            return ProjectAppDefaults(electrical: settings)
+        }
+
+        return .standard
+    }
+
+    static func saveAppDefaults(_ defaults: ProjectAppDefaults) {
+        let normalized = ProjectAppDefaults(
+            electrical: defaults.electrical,
+            recoveryPolicy: defaults.recoveryPolicy,
+            layerStates: defaults.layerStates
+        )
+        guard let data = try? JSONEncoder().encode(normalized) else { return }
+        UserDefaults.standard.set(data, forKey: appDefaultsKey)
+        saveLegacyElectrical(normalized.electrical)
+    }
 
     static func load() -> ElectricalPlacementSettings {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let settings = try? JSONDecoder().decode(ElectricalPlacementSettings.self, from: data) else {
-            return .standard
-        }
-        return settings
+        loadAppDefaults().electrical
     }
 
     static func save(_ settings: ElectricalPlacementSettings) {
+        var defaults = loadAppDefaults()
+        defaults.electrical = settings
+        saveAppDefaults(defaults)
+    }
+
+    private static func saveLegacyElectrical(
+        _ settings: ElectricalPlacementSettings
+    ) {
         guard let data = try? JSONEncoder().encode(settings) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+        UserDefaults.standard.set(data, forKey: legacyElectricalKey)
     }
 }
 
@@ -25,6 +67,8 @@ enum WorkspaceRepository {
         case invalidName
         case invalidDestination
         case operationNotAllowed
+        case recoverySnapshotNotFound
+        case changeSetNotFound
 
         var errorDescription: String? {
             switch self {
@@ -37,7 +81,11 @@ enum WorkspaceRepository {
             case .invalidDestination:
                 "لا يمكن النقل إلى المكان المحدد."
             case .operationNotAllowed:
-                "يجب أرشفة العنصر قبل حذفه نهائيًا."
+                "لا يمكن تنفيذ العملية في الحالة الحالية."
+            case .recoverySnapshotNotFound:
+                "نقطة الاستعادة المطلوبة غير موجودة أو لم تعد متاحة."
+            case .changeSetNotFound:
+                "جلسة التعديل المطلوبة غير موجودة."
             }
         }
     }
@@ -55,6 +103,34 @@ enum WorkspaceRepository {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
+    }
+
+    private static var recoveryRoomEncoder: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: "Infinity",
+            negativeInfinity: "-Infinity",
+            nan: "NaN"
+        )
+        return encoder
+    }
+
+    private static var recoveryRoomDecoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "Infinity",
+            negativeInfinity: "-Infinity",
+            nan: "NaN"
+        )
+        return decoder
+    }
+
+    private struct RecoveryPayload {
+        let project: SurveyProject
+        let rooms: [RoomProject]
     }
 
     private static var projectsDirectory: URL {
@@ -76,7 +152,14 @@ enum WorkspaceRepository {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { throw RepositoryError.invalidName }
 
-        let project = SurveyProject(name: cleanName, kind: kind, settings: settings)
+        var project = SurveyProject(
+            name: cleanName,
+            kind: kind,
+            settings: settings
+        )
+        project.normalizeFoundation(
+            appDefaults: GlobalSettingsRepository.loadAppDefaults()
+        )
         try save(project)
         return project
     }
@@ -92,9 +175,19 @@ enum WorkspaceRepository {
     }
 
     static func save(_ project: SurveyProject) throws {
-        let directory = try directory(for: project.id, create: true)
-        let data = try encoder.encode(project)
-        try data.write(to: directory.appendingPathComponent("workspace.json"), options: .atomic)
+        var normalizedProject = project
+        normalizedProject.normalizeFoundation(
+            appDefaults: GlobalSettingsRepository.loadAppDefaults()
+        )
+        let directory = try directory(
+            for: normalizedProject.id,
+            create: true
+        )
+        let data = try encoder.encode(normalizedProject)
+        try data.write(
+            to: directory.appendingPathComponent("workspace.json"),
+            options: .atomic
+        )
     }
 
     static func addItem(
@@ -145,10 +238,419 @@ enum WorkspaceRepository {
         guard var project = loadStoredProject(projectID: projectID) else {
             throw RepositoryError.projectNotFound
         }
-        project.settings = settings
+        let appDefaults = GlobalSettingsRepository.loadAppDefaults()
+        let override = ElectricalPlacementOverrides.difference(
+            from: appDefaults.electrical,
+            to: settings
+        )
+        var projectSettings = project.projectSettings ?? ProjectSettings()
+        projectSettings.electrical = override.isEmpty ? nil : override
+        project.projectSettings = projectSettings
+        project.settings = SettingsInheritanceEngine.electrical(
+            appDefaults: appDefaults,
+            project: projectSettings
+        )
         project.updatedAt = Date()
         try save(project)
         return project
+    }
+
+    static func resetProjectElectricalSettings(
+        projectID: UUID
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        let appDefaults = GlobalSettingsRepository.loadAppDefaults()
+        var projectSettings = project.projectSettings ?? ProjectSettings()
+        projectSettings.electrical = nil
+        project.projectSettings = projectSettings
+        project.settings = appDefaults.electrical
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func updateLayerState(
+        projectID: UUID,
+        kind: ProjectLayerKind,
+        isVisible: Bool? = nil,
+        isLocked: Bool? = nil,
+        opacity: Double? = nil
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        var states = ProjectLayerState.normalized(
+            project.layerStates ?? ProjectLayerState.standardStates
+        )
+        guard let index = states.firstIndex(where: { $0.kind == kind }) else {
+            throw RepositoryError.projectNotFound
+        }
+        if let isVisible { states[index].isVisible = isVisible }
+        if let isLocked { states[index].isLocked = isLocked }
+        if let opacity {
+            states[index].opacity = min(max(opacity, 0), 1)
+        }
+        project.layerStates = states
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func updateRoomSettings(
+        projectID: UUID,
+        settings: RoomSettings
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID),
+              project.scans.contains(where: { $0.id == settings.id }) else {
+            throw RepositoryError.projectNotFound
+        }
+        var roomSettings = project.roomSettings ?? []
+        if let index = roomSettings.firstIndex(where: {
+            $0.id == settings.id
+        }) {
+            roomSettings[index] = settings
+        } else {
+            roomSettings.append(settings)
+        }
+        project.roomSettings = roomSettings
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func removeRoomSettings(
+        projectID: UUID,
+        scanID: UUID
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        project.roomSettings?.removeAll { $0.id == scanID }
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func updateElementOverride(
+        projectID: UUID,
+        override: ElementSettingsOverride
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        if let scanID = override.scanID,
+           !project.scans.contains(where: { $0.id == scanID }) {
+            throw RepositoryError.projectNotFound
+        }
+        var overrides = project.elementOverrides ?? []
+        if let index = overrides.firstIndex(where: {
+            $0.id == override.id
+        }) {
+            overrides[index] = override
+        } else {
+            overrides.append(override)
+        }
+        project.elementOverrides = overrides
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func removeElementOverride(
+        projectID: UUID,
+        overrideID: UUID
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        project.elementOverrides?.removeAll { $0.id == overrideID }
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func effectiveElectricalSettings(
+        projectID: UUID,
+        scanID: UUID? = nil,
+        elementID: UUID? = nil
+    ) throws -> ElectricalPlacementSettings {
+        guard let project = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        return project.effectiveElectricalSettings(
+            appDefaults: GlobalSettingsRepository.loadAppDefaults(),
+            scanID: scanID,
+            elementID: elementID
+        )
+    }
+
+    static func setPreferredWorkspaceMode(
+        projectID: UUID,
+        mode: ProjectWorkspaceMode
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        project.preferredWorkspaceMode = mode
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func beginChangeSet(
+        projectID: UUID,
+        name: String,
+        mode: ProjectWorkspaceMode,
+        notes: String?
+    ) throws -> SurveyProject {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else { throw RepositoryError.invalidName }
+        guard var project = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+
+        let changeSetID = UUID()
+        let snapshot = try writeRecoverySnapshot(
+            project,
+            reason: "قبل جلسة: \(cleanName)",
+            linkedChangeSetID: changeSetID
+        )
+        var snapshots = project.recoverySnapshots ?? []
+        snapshots.append(snapshot)
+        project.recoverySnapshots = snapshots
+
+        var changeSets = project.changeSets ?? []
+        changeSets.append(
+            ProjectChangeSet(
+                id: changeSetID,
+                name: cleanName,
+                mode: mode,
+                notes: notes?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ),
+                recoverySnapshotID: snapshot.id
+            )
+        )
+        project.changeSets = changeSets
+        project.preferredWorkspaceMode = mode
+        project.updatedAt = Date()
+        try pruneRecoverySnapshots(in: &project)
+        try save(project)
+        return project
+    }
+
+    static func completeChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID),
+              var changeSets = project.changeSets,
+              let index = changeSets.firstIndex(where: {
+                  $0.id == changeSetID
+              }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        guard changeSets[index].status == .draft else {
+            throw RepositoryError.operationNotAllowed
+        }
+        changeSets[index].status = .applied
+        changeSets[index].updatedAt = Date()
+        project.changeSets = changeSets
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func appendChangeRecord(
+        projectID: UUID,
+        changeSetID: UUID,
+        record: ProjectChangeRecord
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID),
+              var changeSets = project.changeSets,
+              let index = changeSets.firstIndex(where: {
+                  $0.id == changeSetID
+              }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        guard changeSets[index].status == .draft else {
+            throw RepositoryError.operationNotAllowed
+        }
+        changeSets[index].changes.append(record)
+        changeSets[index].updatedAt = Date()
+        project.changeSets = changeSets
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func revertChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws -> SurveyProject {
+        guard let current = loadStoredProject(projectID: projectID),
+              let target = current.changeSets?.first(where: {
+                  $0.id == changeSetID
+              }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        guard target.status == .applied || target.status == .draft,
+              let snapshotID = target.recoverySnapshotID else {
+            throw RepositoryError.operationNotAllowed
+        }
+
+        let laterActiveChangeExists = (current.changeSets ?? []).contains {
+            $0.createdAt > target.createdAt
+                && ($0.status == .draft || $0.status == .applied)
+        }
+        guard !laterActiveChangeExists else {
+            throw RepositoryError.operationNotAllowed
+        }
+
+        let recoveryPayload = try loadRecoveryPayload(
+            projectID: projectID,
+            snapshotID: snapshotID,
+            metadata: current.recoverySnapshots ?? []
+        )
+        var restored = recoveryPayload.project
+        let safetySnapshot = try writeRecoverySnapshot(
+            current,
+            reason: "قبل التراجع عن: \(target.name)",
+            linkedChangeSetID: changeSetID
+        )
+
+        var history = current.changeSets ?? []
+        guard let targetIndex = history.firstIndex(where: {
+            $0.id == changeSetID
+        }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        history[targetIndex].status = .reverted
+        history[targetIndex].updatedAt = Date()
+
+        restored.changeSets = history
+        restored.recoverySnapshots = mergeSnapshots(
+            current.recoverySnapshots ?? [],
+            [safetySnapshot]
+        )
+        restored.preferredWorkspaceMode = .history
+        restored.updatedAt = Date()
+        restored.normalizeFoundation(
+            appDefaults: GlobalSettingsRepository.loadAppDefaults()
+        )
+        try pruneRecoverySnapshots(in: &restored)
+        try restoreRooms(recoveryPayload.rooms)
+        try save(restored)
+        return restored
+    }
+
+    static func createRecoverySnapshot(
+        projectID: UUID,
+        reason: String
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        let cleanReason = reason.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let snapshot = try writeRecoverySnapshot(
+            project,
+            reason: cleanReason.isEmpty ? "نقطة استعادة يدوية" : cleanReason,
+            linkedChangeSetID: nil
+        )
+        var snapshots = project.recoverySnapshots ?? []
+        snapshots.append(snapshot)
+        project.recoverySnapshots = snapshots
+        project.updatedAt = Date()
+        try pruneRecoverySnapshots(in: &project)
+        try save(project)
+        return project
+    }
+
+    static func restoreRecoverySnapshot(
+        projectID: UUID,
+        snapshotID: UUID
+    ) throws -> SurveyProject {
+        guard let current = loadStoredProject(projectID: projectID) else {
+            throw RepositoryError.projectNotFound
+        }
+        guard let targetMetadata = current.recoverySnapshots?.first(where: {
+            $0.id == snapshotID
+        }) else {
+            throw RepositoryError.recoverySnapshotNotFound
+        }
+
+        let recoveryPayload = try loadRecoveryPayload(
+            projectID: projectID,
+            snapshotID: snapshotID,
+            metadata: current.recoverySnapshots ?? []
+        )
+        var restored = recoveryPayload.project
+        let safetySnapshot = try writeRecoverySnapshot(
+            current,
+            reason: "قبل استعادة: \(targetMetadata.reason)",
+            linkedChangeSetID: nil
+        )
+        var history = current.changeSets ?? []
+        history.append(
+            ProjectChangeSet(
+                name: "استعادة: \(targetMetadata.reason)",
+                mode: .history,
+                notes: "تمت استعادة نقطة محفوظة بتاريخ \(targetMetadata.createdAt.formatted()).",
+                status: .applied,
+                recoverySnapshotID: safetySnapshot.id
+            )
+        )
+        restored.changeSets = history
+        restored.recoverySnapshots = mergeSnapshots(
+            current.recoverySnapshots ?? [],
+            [safetySnapshot]
+        )
+        restored.preferredWorkspaceMode = .history
+        restored.updatedAt = Date()
+        restored.normalizeFoundation(
+            appDefaults: GlobalSettingsRepository.loadAppDefaults()
+        )
+        try pruneRecoverySnapshots(in: &restored)
+        try restoreRooms(recoveryPayload.rooms)
+        try save(restored)
+        return restored
+    }
+
+    static func worldMapSummary(
+        for project: SurveyProject
+    ) -> ProjectWorldMapSummary {
+        let scans = project.scans.map { scan in
+            guard let roomProject = ProjectRepository.load(
+                projectID: scan.id
+            ),
+            ProjectRepository.hasWorldMap(roomProject),
+            let fileName = roomProject.worldMapFile,
+            let fileURL = try? ProjectRepository.fileURL(
+                projectID: roomProject.id,
+                fileName: fileName
+            ) else {
+                return ProjectWorldMapScanStatus(
+                    id: scan.id,
+                    scanName: scan.name,
+                    isAvailable: false,
+                    savedAt: nil
+                )
+            }
+            let savedAt = try? fileURL.resourceValues(
+                forKeys: [.contentModificationDateKey]
+            ).contentModificationDate
+            return ProjectWorldMapScanStatus(
+                id: scan.id,
+                scanName: scan.name,
+                isAvailable: true,
+                savedAt: savedAt
+            )
+        }
+        return ProjectWorldMapSummary(scans: scans)
     }
 
     static func renameProject(projectID: UUID, name: String) throws -> SurveyProject {
@@ -185,6 +687,7 @@ enum WorkspaceRepository {
         }
 
         var copiedScanIDs: [UUID] = []
+        var scanIDMap: [UUID: UUID] = [:]
         var copiedScans: [ScanReference] = []
         do {
             for scan in source.scans {
@@ -193,6 +696,7 @@ enum WorkspaceRepository {
                     name: scan.name
                 )
                 copiedScanIDs.append(copiedRoom.id)
+                scanIDMap[scan.id] = copiedRoom.id
                 copiedScans.append(
                     ScanReference(
                         roomProject: copiedRoom,
@@ -209,12 +713,40 @@ enum WorkspaceRepository {
             throw error
         }
 
-        let copy = SurveyProject(
+        var copy = SurveyProject(
             name: "نسخة من \(source.name)",
             kind: source.kind,
             settings: source.settings,
             items: copiedItems,
-            scans: copiedScans
+            scans: copiedScans,
+            projectSettings: source.projectSettings,
+            layerStates: source.layerStates,
+            preferredWorkspaceMode: source.preferredWorkspaceMode
+        )
+        copy.roomSettings = source.roomSettings?.compactMap { setting in
+            guard let copiedID = scanIDMap[setting.id] else { return nil }
+            return RoomSettings(
+                id: copiedID,
+                displayName: setting.displayName,
+                electrical: setting.electrical,
+                ceilingHeightMeters: setting.ceilingHeightMeters,
+                wallThicknessMeters: setting.wallThicknessMeters
+            )
+        }
+        copy.elementOverrides = source.elementOverrides?.map { override in
+            ElementSettingsOverride(
+                id: override.id,
+                scanID: override.scanID.flatMap { scanIDMap[$0] },
+                elementID: override.elementID,
+                electrical: override.electrical,
+                isVisible: override.isVisible,
+                isLocked: override.isLocked
+            )
+        }
+        copy.changeSets = []
+        copy.recoverySnapshots = []
+        copy.normalizeFoundation(
+            appDefaults: GlobalSettingsRepository.loadAppDefaults()
         )
         try save(copy)
         return copy
@@ -473,6 +1005,215 @@ enum WorkspaceRepository {
         return project
     }
 
+    private static func recoveryDirectory(
+        for projectID: UUID,
+        create: Bool
+    ) throws -> URL {
+        let url = try directory(
+            for: projectID,
+            create: create
+        ).appendingPathComponent("recovery", isDirectory: true)
+        if create {
+            try fileManager.createDirectory(
+                at: url,
+                withIntermediateDirectories: true
+            )
+        } else if !fileManager.fileExists(atPath: url.path) {
+            throw RepositoryError.recoverySnapshotNotFound
+        }
+        return url
+    }
+
+    private static func writeRecoverySnapshot(
+        _ project: SurveyProject,
+        reason: String,
+        linkedChangeSetID: UUID?
+    ) throws -> RecoverySnapshotMetadata {
+        let snapshotID = UUID()
+        let folderName = "snapshot-\(snapshotID.uuidString)"
+        let root = try recoveryDirectory(
+            for: project.id,
+            create: true
+        )
+        let snapshotDirectory = root.appendingPathComponent(
+            folderName,
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: snapshotDirectory,
+            withIntermediateDirectories: true
+        )
+
+        do {
+            let workspaceData = try encoder.encode(project)
+            try workspaceData.write(
+                to: snapshotDirectory.appendingPathComponent("workspace.json"),
+                options: .atomic
+            )
+
+            let scansDirectory = snapshotDirectory.appendingPathComponent(
+                "scans",
+                isDirectory: true
+            )
+            try fileManager.createDirectory(
+                at: scansDirectory,
+                withIntermediateDirectories: true
+            )
+
+            var byteCount = workspaceData.count
+            var scanCount = 0
+            for scan in project.scans {
+                guard let room = ProjectRepository.load(projectID: scan.id) else {
+                    throw RepositoryError.projectNotFound
+                }
+                let roomData = try recoveryRoomEncoder.encode(room)
+                try roomData.write(
+                    to: scansDirectory.appendingPathComponent(
+                        "\(scan.id.uuidString).json"
+                    ),
+                    options: .atomic
+                )
+                byteCount += roomData.count
+                scanCount += 1
+            }
+
+            return RecoverySnapshotMetadata(
+                id: snapshotID,
+                createdAt: Date(),
+                reason: reason,
+                fileName: folderName,
+                linkedChangeSetID: linkedChangeSetID,
+                byteCount: byteCount,
+                scanCount: scanCount
+            )
+        } catch {
+            try? fileManager.removeItem(at: snapshotDirectory)
+            throw error
+        }
+    }
+
+    private static func loadRecoveryPayload(
+        projectID: UUID,
+        snapshotID: UUID,
+        metadata: [RecoverySnapshotMetadata]
+    ) throws -> RecoveryPayload {
+        guard let record = metadata.first(where: { $0.id == snapshotID }) else {
+            throw RepositoryError.recoverySnapshotNotFound
+        }
+        let root = try recoveryDirectory(
+            for: projectID,
+            create: false
+        )
+        let snapshotDirectory = root.appendingPathComponent(
+            record.fileName,
+            isDirectory: true
+        )
+        let workspaceURL = snapshotDirectory.appendingPathComponent(
+            "workspace.json"
+        )
+        guard fileManager.fileExists(atPath: workspaceURL.path),
+              let workspaceData = try? Data(contentsOf: workspaceURL),
+              let project = try? decoder.decode(
+                  SurveyProject.self,
+                  from: workspaceData
+              ),
+              project.id == projectID else {
+            throw RepositoryError.recoverySnapshotNotFound
+        }
+
+        let scansDirectory = snapshotDirectory.appendingPathComponent(
+            "scans",
+            isDirectory: true
+        )
+        var rooms: [RoomProject] = []
+        if let files = try? fileManager.contentsOfDirectory(
+            at: scansDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for file in files where file.pathExtension.lowercased() == "json" {
+                guard let data = try? Data(contentsOf: file),
+                      let room = try? recoveryRoomDecoder.decode(
+                          RoomProject.self,
+                          from: data
+                      ),
+                      project.scans.contains(where: { $0.id == room.id }) else {
+                    throw RepositoryError.recoverySnapshotNotFound
+                }
+                rooms.append(room)
+            }
+        }
+        guard Set(rooms.map(\.id)) == Set(project.scans.map(\.id)) else {
+            throw RepositoryError.recoverySnapshotNotFound
+        }
+        return RecoveryPayload(project: project, rooms: rooms)
+    }
+
+    private static func restoreRooms(_ rooms: [RoomProject]) throws {
+        for room in rooms {
+            try ProjectRepository.save(room)
+        }
+    }
+
+    private static func mergeSnapshots(
+        _ first: [RecoverySnapshotMetadata],
+        _ second: [RecoverySnapshotMetadata]
+    ) -> [RecoverySnapshotMetadata] {
+        var byID: [UUID: RecoverySnapshotMetadata] = [:]
+        for snapshot in first + second {
+            byID[snapshot.id] = snapshot
+        }
+        return byID.values.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private static func pruneRecoverySnapshots(
+        in project: inout SurveyProject
+    ) throws {
+        let appDefaults = GlobalSettingsRepository.loadAppDefaults()
+        let policy = SettingsInheritanceEngine.recoveryPolicy(
+            appDefaults: appDefaults,
+            project: project.projectSettings
+        )
+        let maximumCount = max(3, min(policy.maximumSnapshotCount, 50))
+        let snapshots = (project.recoverySnapshots ?? [])
+            .sorted { $0.createdAt > $1.createdAt }
+        guard snapshots.count > maximumCount else {
+            project.recoverySnapshots = snapshots
+            return
+        }
+
+        var protectedSnapshotIDs: Set<UUID> = []
+        for changeSet in project.changeSets ?? []
+            where changeSet.status == .draft
+                || changeSet.status == .applied {
+            if let snapshotID = changeSet.recoverySnapshotID {
+                protectedSnapshotIDs.insert(snapshotID)
+            }
+        }
+        var kept: [RecoverySnapshotMetadata] = []
+        var removed: [RecoverySnapshotMetadata] = []
+        for snapshot in snapshots {
+            if protectedSnapshotIDs.contains(snapshot.id)
+                || kept.count < maximumCount {
+                kept.append(snapshot)
+            } else {
+                removed.append(snapshot)
+            }
+        }
+        project.recoverySnapshots = kept
+
+        if let directory = try? recoveryDirectory(
+            for: project.id,
+            create: false
+        ) {
+            for snapshot in removed {
+                try? fileManager.removeItem(
+                    at: directory.appendingPathComponent(snapshot.fileName)
+                )
+            }
+        }
+    }
+
     private static func loadStoredProjects() -> [SurveyProject] {
         guard let root = try? projectsDirectory,
               let directories = try? fileManager.contentsOfDirectory(
@@ -483,19 +1224,47 @@ enum WorkspaceRepository {
             return []
         }
 
+        let appDefaults = GlobalSettingsRepository.loadAppDefaults()
         return directories.compactMap { directory in
             let url = directory.appendingPathComponent("workspace.json")
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return try? decoder.decode(SurveyProject.self, from: data)
+            guard let data = try? Data(contentsOf: url),
+                  var project = try? decoder.decode(
+                      SurveyProject.self,
+                      from: data
+                  ) else {
+                return nil
+            }
+            let original = project
+            project.normalizeFoundation(appDefaults: appDefaults)
+            if project != original {
+                try? save(project)
+            }
+            return project
         }
     }
 
     private static func loadStoredProject(projectID: UUID) -> SurveyProject? {
-        guard let directory = try? directory(for: projectID, create: false),
-              let data = try? Data(contentsOf: directory.appendingPathComponent("workspace.json")) else {
+        guard let directory = try? directory(
+            for: projectID,
+            create: false
+        ),
+        let data = try? Data(
+            contentsOf: directory.appendingPathComponent("workspace.json")
+        ),
+        var project = try? decoder.decode(
+            SurveyProject.self,
+            from: data
+        ) else {
             return nil
         }
-        return try? decoder.decode(SurveyProject.self, from: data)
+        let original = project
+        project.normalizeFoundation(
+            appDefaults: GlobalSettingsRepository.loadAppDefaults()
+        )
+        if project != original {
+            try? save(project)
+        }
+        return project
     }
 
     private static func importUnlinkedLegacyScans(
@@ -609,6 +1378,100 @@ final class ProjectStore: ObservableObject {
         _ = try WorkspaceRepository.updateSettings(
             projectID: projectID,
             settings: settings
+        )
+        reload()
+    }
+
+    func resetProjectElectricalSettings(projectID: UUID) throws {
+        _ = try WorkspaceRepository.resetProjectElectricalSettings(
+            projectID: projectID
+        )
+        reload()
+    }
+
+    func updateLayerState(
+        projectID: UUID,
+        kind: ProjectLayerKind,
+        isVisible: Bool? = nil,
+        isLocked: Bool? = nil,
+        opacity: Double? = nil
+    ) throws {
+        _ = try WorkspaceRepository.updateLayerState(
+            projectID: projectID,
+            kind: kind,
+            isVisible: isVisible,
+            isLocked: isLocked,
+            opacity: opacity
+        )
+        reload()
+    }
+
+    func setPreferredWorkspaceMode(
+        projectID: UUID,
+        mode: ProjectWorkspaceMode
+    ) throws {
+        _ = try WorkspaceRepository.setPreferredWorkspaceMode(
+            projectID: projectID,
+            mode: mode
+        )
+        reload()
+    }
+
+    func beginChangeSet(
+        projectID: UUID,
+        name: String,
+        mode: ProjectWorkspaceMode,
+        notes: String?
+    ) throws {
+        _ = try WorkspaceRepository.beginChangeSet(
+            projectID: projectID,
+            name: name,
+            mode: mode,
+            notes: notes
+        )
+        reload()
+    }
+
+    func completeChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws {
+        _ = try WorkspaceRepository.completeChangeSet(
+            projectID: projectID,
+            changeSetID: changeSetID
+        )
+        reload()
+    }
+
+    func revertChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws {
+        _ = try WorkspaceRepository.revertChangeSet(
+            projectID: projectID,
+            changeSetID: changeSetID
+        )
+        reload()
+    }
+
+    func createRecoverySnapshot(
+        projectID: UUID,
+        reason: String
+    ) throws {
+        _ = try WorkspaceRepository.createRecoverySnapshot(
+            projectID: projectID,
+            reason: reason
+        )
+        reload()
+    }
+
+    func restoreRecoverySnapshot(
+        projectID: UUID,
+        snapshotID: UUID
+    ) throws {
+        _ = try WorkspaceRepository.restoreRecoverySnapshot(
+            projectID: projectID,
+            snapshotID: snapshotID
         )
         reload()
     }

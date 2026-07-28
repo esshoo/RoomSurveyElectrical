@@ -275,6 +275,7 @@ struct RoomViewerView: View {
         .onAppear {
             store.reload()
             reloadProject()
+            applyWorkspaceLayerVisibility()
         }
     }
 
@@ -284,15 +285,57 @@ struct RoomViewerView: View {
 
     private var effectiveLayers: ViewerLayerVisibility {
         var resolved = layers
+        let originalScanVisible = workspaceLayerVisible(.originalScan)
+        resolved.floor = resolved.floor && originalScanVisible
+        resolved.walls = resolved.walls && originalScanVisible
+        resolved.openings = resolved.openings && originalScanVisible
+        resolved.furniture = resolved.furniture
+            && workspaceLayerVisible(.furnitureAndDesign)
+        resolved.electrical = resolved.electrical
+            && (
+                workspaceLayerVisible(.existingElectrical)
+                    || workspaceLayerVisible(.proposedElectrical)
+            )
+        resolved.ceilingLighting = resolved.ceilingLighting
+            && workspaceLayerVisible(.ceilingLighting)
+        resolved.wallPhotos = resolved.wallPhotos
+            && workspaceLayerVisible(.photosAndMaterials)
+        resolved.dimensions = resolved.dimensions
+            && workspaceLayerVisible(.dimensionsAndAnnotations)
+        resolved.electricalDimensions = resolved.electricalDimensions
+            && workspaceLayerVisible(.dimensionsAndAnnotations)
+
         if project.objects?.isEmpty != false {
             resolved.furniture = false
         }
-        if layers.wallPhotos,
+        if resolved.wallPhotos,
            project.hasCapturedWallPhotoAppearance,
            !project.showsFurnitureWithWallPhotos {
             resolved.furniture = false
         }
         return resolved
+    }
+
+    private func workspaceLayerVisible(_ kind: ProjectLayerKind) -> Bool {
+        store.project(id: surveyProjectID)?.layerState(kind).isVisible ?? true
+    }
+
+    private func workspaceLayerLocked(_ kind: ProjectLayerKind) -> Bool {
+        store.project(id: surveyProjectID)?.layerState(kind).isLocked ?? false
+    }
+
+    private func applyWorkspaceLayerVisibility() {
+        let originalScanVisible = workspaceLayerVisible(.originalScan)
+        layers.floor = originalScanVisible
+        layers.walls = originalScanVisible
+        layers.openings = originalScanVisible
+        layers.furniture = workspaceLayerVisible(.furnitureAndDesign)
+        layers.electrical = workspaceLayerVisible(.existingElectrical)
+            || workspaceLayerVisible(.proposedElectrical)
+        layers.ceilingLighting = workspaceLayerVisible(.ceilingLighting)
+        layers.wallPhotos = workspaceLayerVisible(.photosAndMaterials)
+        layers.dimensions = workspaceLayerVisible(.dimensionsAndAnnotations)
+        layers.electricalDimensions = false
     }
 
     @ViewBuilder
@@ -341,31 +384,43 @@ struct RoomViewerView: View {
                 Toggle(isOn: $layers.floor) {
                     Label("الأرضية", systemImage: "square.fill")
                 }
+                .disabled(workspaceLayerLocked(.originalScan))
                 Toggle(isOn: $layers.walls) {
                     Label("الحوائط", systemImage: "rectangle.split.3x1.fill")
                 }
+                .disabled(workspaceLayerLocked(.originalScan))
                 Toggle(isOn: $layers.openings) {
                     Label("الأبواب والشبابيك", systemImage: "door.left.hand.open")
                 }
+                .disabled(workspaceLayerLocked(.originalScan))
                 Toggle(isOn: $layers.furniture) {
                     Label("الأثاث", systemImage: "chair.lounge.fill")
                 }
+                .disabled(workspaceLayerLocked(.furnitureAndDesign))
                 Toggle(isOn: $layers.electrical) {
                     Label("الكهرباء", systemImage: "bolt.circle.fill")
                 }
+                .disabled(
+                    workspaceLayerLocked(.existingElectrical)
+                        || workspaceLayerLocked(.proposedElectrical)
+                )
                 Toggle(isOn: $layers.ceilingLighting) {
                     Label("إضاءة السقف", systemImage: "light.recessed")
                 }
+                .disabled(workspaceLayerLocked(.ceilingLighting))
                 Toggle(isOn: $layers.wallPhotos) {
                     Label("صور وألوان الجدران", systemImage: "photo.on.rectangle")
                 }
+                .disabled(workspaceLayerLocked(.photosAndMaterials))
                 if mode == .plan2D {
                     Toggle(isOn: $layers.dimensions) {
                         Label("الأبعاد", systemImage: "ruler.fill")
                     }
+                    .disabled(workspaceLayerLocked(.dimensionsAndAnnotations))
                     Toggle(isOn: $layers.electricalDimensions) {
                         Label("أبعاد الكهرباء", systemImage: "ruler")
                     }
+                    .disabled(workspaceLayerLocked(.dimensionsAndAnnotations))
                 }
             } label: {
                 Image(systemName: "square.3.layers.3d")

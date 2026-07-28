@@ -92,7 +92,18 @@ enum ProjectPackageService {
             throw ProjectPackageError.projectNotFound
         }
 
-        let workspaceData = try packageEncoder.encode(project)
+        var packageProject = project
+        // Recovery payloads are local, potentially large, and are not part of
+        // the portable .3eroom contract in Build 45. Keep the audit history,
+        // but clear links that would point to files unavailable after import.
+        packageProject.recoverySnapshots = []
+        packageProject.changeSets = packageProject.changeSets?.map { changeSet in
+            var portable = changeSet
+            portable.recoverySnapshotID = nil
+            return portable
+        }
+
+        let workspaceData = try packageEncoder.encode(packageProject)
         let workspaceRecord = fileRecord(
             path: "project/workspace.json",
             fileName: "workspace.json",
@@ -498,7 +509,7 @@ enum ProjectPackageService {
                 reference.name = sourceScan.name
                 return reference
             }
-            let importedProject = SurveyProject(
+            var importedProject = SurveyProject(
                 id: targetID,
                 name: targetName,
                 kind: source.kind,
@@ -508,7 +519,51 @@ enum ProjectPackageService {
                 items: importedItems,
                 scans: importedScans,
                 isImportedArchive: source.isImportedArchive,
-                isArchived: source.isArchived
+                isArchived: source.isArchived,
+                foundationSchemaVersion: source.foundationSchemaVersion,
+                projectSettings: source.projectSettings,
+                layerStates: source.layerStates,
+                preferredWorkspaceMode: source.preferredWorkspaceMode
+            )
+            importedProject.roomSettings = source.roomSettings?.compactMap {
+                setting in
+                guard let mappedScanID = scanIDMap[setting.id] else {
+                    return nil
+                }
+                return RoomSettings(
+                    id: mappedScanID,
+                    displayName: setting.displayName,
+                    electrical: setting.electrical,
+                    ceilingHeightMeters: setting.ceilingHeightMeters,
+                    wallThicknessMeters: setting.wallThicknessMeters
+                )
+            }
+            importedProject.elementOverrides = source.elementOverrides?.map {
+                override in
+                ElementSettingsOverride(
+                    id: override.id,
+                    scanID: override.scanID.flatMap { scanIDMap[$0] },
+                    elementID: override.elementID,
+                    electrical: override.electrical,
+                    isVisible: override.isVisible,
+                    isLocked: override.isLocked
+                )
+            }
+            importedProject.changeSets = source.changeSets?.map { changeSet in
+                var copied = changeSet
+                copied.recoverySnapshotID = nil
+                copied.changes = copied.changes.map { change in
+                    var remappedChange = change
+                    remappedChange.scanID = change.scanID.flatMap {
+                        scanIDMap[$0]
+                    }
+                    return remappedChange
+                }
+                return copied
+            }
+            importedProject.recoverySnapshots = []
+            importedProject.normalizeFoundation(
+                appDefaults: GlobalSettingsRepository.loadAppDefaults()
             )
             try WorkspaceRepository.save(importedProject)
 

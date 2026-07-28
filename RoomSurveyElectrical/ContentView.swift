@@ -772,6 +772,26 @@ struct ProjectBrowserView: View {
                 .padding(.vertical, 6)
             }
 
+            if parentItemID == nil {
+                Section("تحديث وتحرير المشروع") {
+                    NavigationLink {
+                        ProjectFoundationView(projectID: projectID)
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("مركز تحديث المشروع")
+                                Text("الإعدادات الموروثة والطبقات وسجل التعديلات ونقاط الاستعادة")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "square.3.layers.3d")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+            }
+
             Section("الحصر والتصدير") {
                 NavigationLink {
                     ProjectTakeoffView(
@@ -2299,7 +2319,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     }
 }
 
-private struct ElectricalSettingsView: View {
+struct ElectricalSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var settings: ElectricalPlacementSettings
     @State private var selectedCategory: SettingsCategory = .general
@@ -2557,6 +2577,23 @@ private struct ElectricalSettingsView: View {
             Text(
                 "لا يمكن تعطيل الحفظ الوقائي أو الإيقاف عند الحالة الحرجة. "
                     + "التطبيق يعتمد حالات الحرارة التي يحددها iOS لكل جهاز، وليس درجة ثابتة بالسيلسيوس."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        Section("تحديث وتحرير المشروع") {
+            NavigationLink {
+                ProjectFoundationDefaultsView()
+            } label: {
+                Label(
+                    "إعدادات الطبقات ونقاط الاستعادة",
+                    systemImage: "square.3.layers.3d"
+                )
+            }
+
+            Text(
+                "تحدد القيم الافتراضية للمشروعات الجديدة، بينما يمكن لكل مشروع أو غرفة أو عنصر استخدام إعدادات مخصصة."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
