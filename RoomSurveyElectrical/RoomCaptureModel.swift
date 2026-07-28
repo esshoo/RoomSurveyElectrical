@@ -114,6 +114,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private var latestHeadingPass = true
     private var latestLocationPass = true
     private var isCompletingRelocalization = false
+    private var liveSessionContinuityAvailable = false
     private var latestDetectedWallDescription = ""
     private let resumeAnchorName = "3ERoomElectrical.ResumeReference"
     private let referenceImageFileName = "spatial-resume-reference.jpg"
@@ -225,7 +226,17 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
     var canResumeSavedScan: Bool {
         guard let project else { return false }
-        return ProjectRepository.hasWorldMap(project)
+        return canResumeUsingLiveSession || ProjectRepository.hasWorldMap(project)
+    }
+
+    var isLiveSessionResumeAvailable: Bool {
+        canResumeUsingLiveSession
+    }
+
+    var resumeSavedScanTitle: String {
+        canResumeUsingLiveSession
+            ? "متابعة فورًا بنفس جلسة المسح"
+            : "التعرف على المكان واستكمال المسح"
     }
 
     var isCurrentThermalStateAcceptableForResume: Bool {
@@ -345,6 +356,9 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     }
 
     func pauseForApplicationLifecycle() {
+        // Once the app leaves the foreground, iOS may interrupt the camera and
+        // the live AR coordinate space can no longer be assumed continuous.
+        liveSessionContinuityAvailable = false
         switch phase {
         case .scanning:
             beginBackgroundSaveTask()
@@ -365,7 +379,15 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         guard phase == .paused || phase == .relocalizationFailed,
               project != nil else { return }
         relocalizationFailureMessage = ""
-        beginRelocalization()
+
+        // A manual pause intentionally stops RoomPlan without pausing the
+        // underlying ARSession. If this model and session are still alive, the
+        // original coordinate system is already valid and must not be reset.
+        if canResumeUsingLiveSession {
+            resumeUsingLiveSession()
+        } else {
+            beginRelocalization()
+        }
     }
 
     func retryRelocalization() {
@@ -396,6 +418,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 || phase == .paused
                 || phase == .relocalizationFailed,
               var savedProject = project else { return }
+        liveSessionContinuityAvailable = false
         thermalResumeStabilityTask?.cancel()
         relocalizationTimeoutTask?.cancel()
         ProjectRepository.removeAsset(
@@ -413,6 +436,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     }
 
     func cancel() {
+        liveSessionContinuityAvailable = false
         relocalizationTimeoutTask?.cancel()
         fairThermalPauseTask?.cancel()
         thermalResumeStabilityTask?.cancel()
@@ -574,6 +598,16 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         guard phase == .scanning else { return }
         stopReason = reason
 
+        // Manual pause keeps the same ARSession running (see stop below with
+        // pauseARSession: false), so immediate resume can continue directly.
+        // Background and thermal pauses must use the persisted ARWorldMap path.
+        switch reason {
+        case .manualPause:
+            liveSessionContinuityAvailable = arSession.currentFrame != nil
+        case .userFinished, .thermalSafety, .applicationBackground:
+            liveSessionContinuityAvailable = false
+        }
+
         let frame = arSession.currentFrame
         let currentWallReference = latestRoomSnapshot.flatMap {
             makeWallReference(from: $0, frame: frame)
@@ -641,6 +675,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     }
 
     private func pauseRelocalization(reason: SpatialScanPauseReason) {
+        liveSessionContinuityAvailable = false
         relocalizationTimeoutTask?.cancel()
         arSession.pause()
         guard project != nil else {
@@ -689,6 +724,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     }
 
     private func enterCoolingDown(context: ThermalPauseContext) {
+        liveSessionContinuityAvailable = false
         fairThermalPauseTask?.cancel()
         fairThermalPauseTask = nil
         relocalizationTimeoutTask?.cancel()
@@ -737,7 +773,42 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         }
     }
 
+    private var canResumeUsingLiveSession: Bool {
+        guard liveSessionContinuityAvailable,
+              project?.scanContinuationState?.reason == .manual,
+              let frame = arSession.currentFrame else { return false }
+
+        switch frame.camera.trackingState {
+        case .normal:
+            return true
+        case .limited(.relocalizing), .limited(.initializing), .notAvailable:
+            return false
+        case .limited(.excessiveMotion), .limited(.insufficientFeatures):
+            // The coordinate space is still the same live session. RoomPlan can
+            // resume and tracking can recover as the user moves the device.
+            return true
+        @unknown default:
+            return false
+        }
+    }
+
+    private func resumeUsingLiveSession() {
+        guard canResumeUsingLiveSession else {
+            beginRelocalization()
+            return
+        }
+
+        relocalizationTimeoutTask?.cancel()
+        relocalizationFailureMessage = ""
+        relocalizationEvidenceMessage =
+            "تم الحفاظ على جلسة AR الأصلية؛ لا حاجة لإعادة التعرف على المكان."
+        relocalizationProgress = 1
+        liveSessionContinuityAvailable = false
+        startCaptureSession()
+    }
+
     private func beginRelocalization() {
+        liveSessionContinuityAvailable = false
         guard let project,
               let worldMapFile = project.worldMapFile else {
             relocalizationFailureMessage =
@@ -850,6 +921,29 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             if self.phase == .relocalizing {
                 self.evaluateRelocalizationEvidence(frame: frame)
             }
+        }
+    }
+
+    nonisolated func sessionWasInterrupted(_ session: ARSession) {
+        Task { @MainActor [weak self] in
+            self?.liveSessionContinuityAvailable = false
+        }
+    }
+
+    nonisolated func sessionInterruptionEnded(_ session: ARSession) {
+        Task { @MainActor [weak self] in
+            // Do not silently mark continuity as valid again. A saved world map
+            // must re-establish the coordinate system after an interruption.
+            self?.liveSessionContinuityAvailable = false
+        }
+    }
+
+    nonisolated func session(
+        _ session: ARSession,
+        didFailWithError error: Error
+    ) {
+        Task { @MainActor [weak self] in
+            self?.liveSessionContinuityAvailable = false
         }
     }
 
@@ -1058,6 +1152,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 enterCoolingDown(context: .scanningSaved)
             }
         } catch {
+            liveSessionContinuityAvailable = false
             rawRoomData = nil
             pendingWorldMapTask?.cancel()
             pendingWorldMapTask = nil
@@ -1446,15 +1541,26 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         relocalizationEvidenceMessage = evidence.joined(separator: " • ")
 
         let canContinue: Bool
+        let stableTrackingFallback = stableTrackingFrameCount >= max(required * 3, 18)
         switch relocalizationStrictness {
         case .strict:
-            canContinue = trackingReady && wallReady && anchorReady && geographyReady
+            // ARKit returning to normal is the authoritative proof that the
+            // saved coordinate space has been restored. Strict mode also asks
+            // for either the saved anchor or the reference wall, plus reliable
+            // geographic evidence when it exists.
+            canContinue = trackingReady
+                && (wallReady || anchorReady)
+                && geographyReady
         case .balanced:
-            canContinue = trackingReady && wallReady && anchorReady && geographyReady
+            // Plane anchors and the custom anchor are supporting evidence only;
+            // they can appear late or be regenerated differently by ARKit.
+            // Sustained normal tracking is therefore an accepted fallback.
+            canContinue = trackingReady
+                && (wallReady || anchorReady || stableTrackingFallback)
         case .flexible:
-            // In flexible mode the optional geographic evidence never blocks
-            // a valid AR/wall match. It remains visible as a warning only.
-            canContinue = trackingReady && (wallReady || anchorReady)
+            // A normal tracking state after loading initialWorldMap already
+            // means ARKit reconciled the saved world coordinate system.
+            canContinue = trackingReady
         }
 
         guard canContinue, !isCompletingRelocalization else { return }

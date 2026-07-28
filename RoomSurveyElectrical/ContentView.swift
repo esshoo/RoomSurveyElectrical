@@ -3282,13 +3282,25 @@ private struct ScanRoomView: View {
                     .multilineTextAlignment(.center)
             }
 
+            if model.isLiveSessionResumeAvailable {
+                Label(
+                    "جلسة AR الأصلية ما زالت مستمرة؛ سيتم الاستكمال مباشرة دون إعادة التعرف.",
+                    systemImage: "link.circle.fill"
+                )
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.green)
+            }
+
             if model.canResumeSavedScan {
                 Button {
                     model.resumeSavedScan()
                 } label: {
                     Label(
-                        "متابعة المسح من نفس المكان",
-                        systemImage: "play.circle.fill"
+                        model.resumeSavedScanTitle,
+                        systemImage: model.isLiveSessionResumeAvailable
+                            ? "play.circle.fill"
+                            : "viewfinder.circle"
                     )
                     .frame(maxWidth: .infinity)
                 }
