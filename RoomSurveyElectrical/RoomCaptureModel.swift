@@ -713,8 +713,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 if lhs.quality.reliabilityRank != rhs.quality.reliabilityRank {
                     return lhs.quality.reliabilityRank < rhs.quality.reliabilityRank
                 }
-                return lhs.map.rawFeaturePoints.count
-                    < rhs.map.rawFeaturePoints.count
+                return lhs.map.rawFeaturePoints.points.count
+                    < rhs.map.rawFeaturePoints.points.count
             }) else { return nil }
             let selectedMap = selected.map
             let selectedQuality = selected.quality
@@ -732,7 +732,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 worldMap: selectedMap,
                 quality: selectedQuality,
                 capturedAt: capturedAt,
-                featurePointCount: selectedMap.rawFeaturePoints.count,
+                featurePointCount: selectedMap.rawFeaturePoints.points.count,
                 extent: [extent.x, extent.y, extent.z]
             )
         }
@@ -1160,7 +1160,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                         worldMap: current,
                         quality: currentQuality,
                         capturedAt: Date(),
-                        featurePointCount: current.rawFeaturePoints.count,
+                        featurePointCount: current.rawFeaturePoints.points.count,
                         extent: [extent.x, extent.y, extent.z]
                     )
                 } else {
