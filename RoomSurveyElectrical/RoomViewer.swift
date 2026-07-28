@@ -2971,7 +2971,8 @@ private struct Plan2DView: View {
                     drawWallPhotoRibbon(
                         image,
                         in: localRect,
-                        context: localContext
+                        context: localContext,
+                        appearance: appearance
                     )
                 } else {
                     localContext.fill(
@@ -2992,7 +2993,8 @@ private struct Plan2DView: View {
     private func drawWallPhotoRibbon(
         _ image: UIImage,
         in targetRect: CGRect,
-        context: GraphicsContext
+        context: GraphicsContext,
+        appearance: WallAppearance
     ) {
         let imageWidth = max(image.size.width, 1)
         let imageHeight = max(image.size.height, 1)
@@ -3020,6 +3022,12 @@ private struct Plan2DView: View {
 
         var imageContext = context
         imageContext.clip(to: Path(targetRect))
+        imageContext.translateBy(x: targetRect.midX, y: targetRect.midY)
+        imageContext.scaleBy(
+            x: appearance.flipsPhotoHorizontally ? -1 : 1,
+            y: appearance.flipsPhotoVertically ? -1 : 1
+        )
+        imageContext.translateBy(x: -targetRect.midX, y: -targetRect.midY)
         imageContext.draw(Image(uiImage: image), in: drawRect)
     }
 
@@ -4208,7 +4216,8 @@ private struct USDZRoomView: UIViewRepresentable {
 
                 for geometry in appearanceGeometries(
                     for: wall,
-                    material: material
+                    material: material,
+                    appearance: appearance
                 ) {
                     let node = SCNNode(geometry: geometry)
                     node.renderingOrder = -2
@@ -4220,7 +4229,8 @@ private struct USDZRoomView: UIViewRepresentable {
 
         private func appearanceGeometries(
             for wall: WallSnapshot,
-            material: SCNMaterial
+            material: SCNMaterial,
+            appearance: WallAppearance
         ) -> [SCNGeometry] {
             let openings = wallOpeningRectangles(for: wall)
             var xCuts: [Float] = [-wall.width / 2, wall.width / 2]
@@ -4258,7 +4268,8 @@ private struct USDZRoomView: UIViewRepresentable {
                             maxX: maxX,
                             minY: minY,
                             maxY: maxY,
-                            material: material
+                            material: material,
+                            appearance: appearance
                         )
                     )
                 }
@@ -4272,7 +4283,8 @@ private struct USDZRoomView: UIViewRepresentable {
             maxX: Float,
             minY: Float,
             maxY: Float,
-            material: SCNMaterial
+            material: SCNMaterial,
+            appearance: WallAppearance
         ) -> SCNGeometry {
             let depth: Float = 0.006
             let vertices = [
@@ -4282,11 +4294,17 @@ private struct USDZRoomView: UIViewRepresentable {
                 SCNVector3(minX, maxY, depth)
             ]
             func textureCoordinate(x: Float, y: Float) -> CGPoint {
-                let u = CGFloat((x + wall.width / 2) / max(wall.width, 0.001))
+                let baseU = CGFloat(
+                    (x + wall.width / 2) / max(wall.width, 0.001)
+                )
                 let normalizedY = CGFloat(
                     (y + wall.height / 2) / max(wall.height, 0.001)
                 )
-                return CGPoint(x: u, y: 1 - normalizedY)
+                let baseV = 1 - normalizedY
+                return CGPoint(
+                    x: appearance.flipsPhotoHorizontally ? 1 - baseU : baseU,
+                    y: appearance.flipsPhotoVertically ? 1 - baseV : baseV
+                )
             }
             let textureCoordinates = [
                 textureCoordinate(x: minX, y: minY),

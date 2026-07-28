@@ -410,7 +410,10 @@ private struct GLBRoomBuilder {
         for (wallIndex, wall) in record.project.walls.enumerated() {
             guard let appearance = record.project.wallAppearance(for: wall.id),
                   appearance.visualMode != .defaultMaterial,
-                  let geometry = wallOverlayGeometry(for: wall) else {
+                  let geometry = wallOverlayGeometry(
+                    for: wall,
+                    appearance: appearance
+                  ) else {
                 continue
             }
 
@@ -465,7 +468,8 @@ private struct GLBRoomBuilder {
     }
 
     private func wallOverlayGeometry(
-        for wall: WallSnapshot
+        for wall: WallSnapshot,
+        appearance: WallAppearance
     ) -> GLBRawGeometry? {
         let openings = wallOpeningRectangles(for: wall)
         var xCuts: [Float] = [-wall.width / 2, wall.width / 2]
@@ -516,14 +520,14 @@ private struct GLBRoomBuilder {
                 }
                 textureCoordinates.append(
                     contentsOf: [
-                        textureU(x: minX, wall: wall),
-                        textureV(y: minY, wall: wall),
-                        textureU(x: maxX, wall: wall),
-                        textureV(y: minY, wall: wall),
-                        textureU(x: maxX, wall: wall),
-                        textureV(y: maxY, wall: wall),
-                        textureU(x: minX, wall: wall),
-                        textureV(y: maxY, wall: wall)
+                        textureU(x: minX, wall: wall, appearance: appearance),
+                        textureV(y: minY, wall: wall, appearance: appearance),
+                        textureU(x: maxX, wall: wall, appearance: appearance),
+                        textureV(y: minY, wall: wall, appearance: appearance),
+                        textureU(x: maxX, wall: wall, appearance: appearance),
+                        textureV(y: maxY, wall: wall, appearance: appearance),
+                        textureU(x: minX, wall: wall, appearance: appearance),
+                        textureV(y: maxY, wall: wall, appearance: appearance)
                     ]
                 )
                 indices.append(contentsOf: [
@@ -560,13 +564,26 @@ private struct GLBRoomBuilder {
         }
     }
 
-    private func textureU(x: Float, wall: WallSnapshot) -> Float {
-        min(max((x + wall.width / 2) / max(wall.width, 0.001), 0), 1)
+    private func textureU(
+        x: Float,
+        wall: WallSnapshot,
+        appearance: WallAppearance
+    ) -> Float {
+        let value = min(
+            max((x + wall.width / 2) / max(wall.width, 0.001), 0),
+            1
+        )
+        return appearance.flipsPhotoHorizontally ? 1 - value : value
     }
 
-    private func textureV(y: Float, wall: WallSnapshot) -> Float {
+    private func textureV(
+        y: Float,
+        wall: WallSnapshot,
+        appearance: WallAppearance
+    ) -> Float {
         let normalized = (y + wall.height / 2) / max(wall.height, 0.001)
-        return min(max(1 - normalized, 0), 1)
+        let value = min(max(1 - normalized, 0), 1)
+        return appearance.flipsPhotoVertically ? 1 - value : value
     }
 
     private func uniqueSorted(_ values: [Float]) -> [Float] {

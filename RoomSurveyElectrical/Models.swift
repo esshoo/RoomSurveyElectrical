@@ -721,6 +721,21 @@ struct WallAppearance: Codable, Identifiable, Equatable {
     var solidColorHex: String
     var opacity: Float
     var primaryPhotoID: UUID?
+    var flipsPhotoHorizontallyValue: Bool?
+    var flipsPhotoVerticallyValue: Bool?
+
+    /// Maps RoomPlan wall-local coordinates into the stored wall photo.
+    /// Existing projects default to the horizontal correction that fixes the
+    /// known left/right inversion without rewriting their original images.
+    var flipsPhotoHorizontally: Bool {
+        get { flipsPhotoHorizontallyValue ?? true }
+        set { flipsPhotoHorizontallyValue = newValue }
+    }
+
+    var flipsPhotoVertically: Bool {
+        get { flipsPhotoVerticallyValue ?? false }
+        set { flipsPhotoVerticallyValue = newValue }
+    }
 
     init(
         id: UUID = UUID(),
@@ -729,7 +744,9 @@ struct WallAppearance: Codable, Identifiable, Equatable {
         visualMode: WallVisualMode = .defaultMaterial,
         solidColorHex: String = "#D9D9DE",
         opacity: Float = 1,
-        primaryPhotoID: UUID? = nil
+        primaryPhotoID: UUID? = nil,
+        flipsPhotoHorizontallyValue: Bool? = true,
+        flipsPhotoVerticallyValue: Bool? = nil
     ) {
         self.id = id
         self.wallID = wallID
@@ -738,6 +755,8 @@ struct WallAppearance: Codable, Identifiable, Equatable {
         self.solidColorHex = solidColorHex
         self.opacity = min(max(opacity, 0.10), 1)
         self.primaryPhotoID = primaryPhotoID
+        self.flipsPhotoHorizontallyValue = flipsPhotoHorizontallyValue
+        self.flipsPhotoVerticallyValue = flipsPhotoVerticallyValue
     }
 }
 

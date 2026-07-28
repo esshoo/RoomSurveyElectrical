@@ -419,6 +419,8 @@ private struct WallPhotoDetailView: View {
     @State private var opacity: Double
     @State private var pickerItem: PhotosPickerItem?
     @State private var selectedPhotoID: UUID?
+    @State private var flipsPhotoHorizontally: Bool
+    @State private var flipsPhotoVertically: Bool
     @State private var isImporting = false
     @State private var isRebuildingComposite = false
     @State private var errorMessage: String?
@@ -469,6 +471,8 @@ private struct WallPhotoDetailView: View {
         )
         _opacity = State(initialValue: Double(appearance.opacity))
         _selectedPhotoID = State(initialValue: appearance.primaryPhotoID ?? photos.first?.id)
+        _flipsPhotoHorizontally = State(initialValue: appearance.flipsPhotoHorizontally)
+        _flipsPhotoVertically = State(initialValue: appearance.flipsPhotoVertically)
     }
 
     var body: some View {
@@ -496,6 +500,31 @@ private struct WallPhotoDetailView: View {
                         "المقاس",
                         value: String(format: "%.2f × %.2f م", wall.width, wall.height)
                     )
+
+                    Toggle(
+                        "قلب أفقي",
+                        isOn: $flipsPhotoHorizontally
+                    )
+                    Toggle(
+                        "قلب رأسي",
+                        isOn: $flipsPhotoVertically
+                    )
+                    Button {
+                        flipsPhotoHorizontally = true
+                        flipsPhotoVertically = false
+                    } label: {
+                        Label(
+                            "استعادة التصحيح التلقائي",
+                            systemImage: "wand.and.rays"
+                        )
+                    }
+                    Text(
+                        "القلب يغيّر ربط مواضع الفتحات والكهرباء والفرش بالصورة فقط، "
+                            + "ولا يعدّل صورة الحائط الأصلية أو بيانات المسح."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                     Button {
                         saveAppearance()
                         onOpenWall2D()
@@ -761,6 +790,8 @@ private struct WallPhotoDetailView: View {
         updated.solidColorHex = selectedColor.wallPhotoHexValue
         updated.opacity = Float(opacity)
         updated.primaryPhotoID = selectedPhotoID
+        updated.flipsPhotoHorizontally = flipsPhotoHorizontally
+        updated.flipsPhotoVertically = flipsPhotoVertically
         return updated
     }
 
@@ -1046,10 +1077,13 @@ struct WallElevationPreview: View {
         _ point: ElectricalPoint,
         size: CGSize
     ) -> some View {
-        let x = CGFloat((point.localX + wall.width / 2) / max(wall.width, 0.01))
-            * size.width
+        let normalizedX = CGFloat(
+            (point.localX + wall.width / 2) / max(wall.width, 0.01)
+        )
+        let x = mappedX(normalizedX) * size.width
         let height = point.heightFromFloor
-        let y = size.height - CGFloat(height / max(wall.height, 0.01)) * size.height
+        let normalizedY = 1 - CGFloat(height / max(wall.height, 0.01))
+        let y = mappedY(normalizedY) * size.height
         let fallback: UIColor = point.status == .existing ? .systemGreen : .systemOrange
         let color = Color(uiColor: wallPhotoUIColor(hex: point.colorHex, fallback: fallback))
         return Image(systemName: point.type.systemImage)
@@ -1074,20 +1108,36 @@ struct WallElevationPreview: View {
         height: Float,
         size: CGSize
     ) -> CGRect {
-        let left = CGFloat((centerX - width / 2 + wall.width / 2) / max(wall.width, 0.01))
-            * size.width
-        let right = CGFloat((centerX + width / 2 + wall.width / 2) / max(wall.width, 0.01))
-            * size.width
-        let bottom = CGFloat((centerY - height / 2 + wall.height / 2) / max(wall.height, 0.01))
-            * size.height
-        let top = CGFloat((centerY + height / 2 + wall.height / 2) / max(wall.height, 0.01))
-            * size.height
-        return CGRect(
-            x: left,
-            y: size.height - top,
-            width: max(right - left, 2),
-            height: max(top - bottom, 2)
+        let normalizedLeft = CGFloat(
+            (centerX - width / 2 + wall.width / 2) / max(wall.width, 0.01)
         )
+        let normalizedRight = CGFloat(
+            (centerX + width / 2 + wall.width / 2) / max(wall.width, 0.01)
+        )
+        let normalizedTop = 1 - CGFloat(
+            (centerY + height / 2 + wall.height / 2) / max(wall.height, 0.01)
+        )
+        let normalizedBottom = 1 - CGFloat(
+            (centerY - height / 2 + wall.height / 2) / max(wall.height, 0.01)
+        )
+        let mappedLeft = mappedX(normalizedLeft) * size.width
+        let mappedRight = mappedX(normalizedRight) * size.width
+        let mappedTop = mappedY(normalizedTop) * size.height
+        let mappedBottom = mappedY(normalizedBottom) * size.height
+        return CGRect(
+            x: min(mappedLeft, mappedRight),
+            y: min(mappedTop, mappedBottom),
+            width: max(abs(mappedRight - mappedLeft), 2),
+            height: max(abs(mappedBottom - mappedTop), 2)
+        )
+    }
+
+    private func mappedX(_ value: CGFloat) -> CGFloat {
+        appearance.flipsPhotoHorizontally ? 1 - value : value
+    }
+
+    private func mappedY(_ value: CGFloat) -> CGFloat {
+        appearance.flipsPhotoVertically ? 1 - value : value
     }
 }
 
