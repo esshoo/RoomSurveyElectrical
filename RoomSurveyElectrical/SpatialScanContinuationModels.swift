@@ -157,6 +157,15 @@ enum SpatialWorldMapQuality: String, Codable, Equatable {
     var isSuitableForResume: Bool {
         self == .extending || self == .mapped
     }
+
+    var reliabilityRank: Int {
+        switch self {
+        case .notAvailable: 0
+        case .limited: 1
+        case .extending: 2
+        case .mapped: 3
+        }
+    }
 }
 
 struct SpatialOpeningReference: Codable, Equatable {
@@ -219,6 +228,8 @@ struct SpatialScanContinuationState: Codable, Equatable {
     var pausedAt: Date
     var worldMapCapturedAt: Date?
     var worldMapQuality: SpatialWorldMapQuality? = nil
+    var worldMapFeaturePointCount: Int? = nil
+    var worldMapExtent: [Float]? = nil
     var referenceWall: SpatialWallReference? = nil
     var referenceImageFile: String? = nil
     var geographicReference: SpatialGeographicReference? = nil
@@ -229,6 +240,8 @@ struct SpatialScanContinuationState: Codable, Equatable {
         pausedAt: Date = Date(),
         worldMapCapturedAt: Date? = nil,
         worldMapQuality: SpatialWorldMapQuality? = nil,
+        worldMapFeaturePointCount: Int? = nil,
+        worldMapExtent: [Float]? = nil,
         referenceWall: SpatialWallReference? = nil,
         referenceImageFile: String? = nil,
         geographicReference: SpatialGeographicReference? = nil,
@@ -238,6 +251,8 @@ struct SpatialScanContinuationState: Codable, Equatable {
         self.pausedAt = pausedAt
         self.worldMapCapturedAt = worldMapCapturedAt
         self.worldMapQuality = worldMapQuality
+        self.worldMapFeaturePointCount = worldMapFeaturePointCount
+        self.worldMapExtent = worldMapExtent
         self.referenceWall = referenceWall
         self.referenceImageFile = referenceImageFile
         self.geographicReference = geographicReference

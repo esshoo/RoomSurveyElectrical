@@ -3,6 +3,7 @@ import Combine
 import CoreImage
 import Foundation
 import RoomPlan
+import SceneKit
 import SwiftUI
 import UIKit
 
@@ -52,6 +53,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         var worldMap: ARWorldMap
         var quality: SpatialWorldMapQuality
         var capturedAt: Date
+        var featurePointCount: Int
+        var extent: [Float]
     }
 
     @Published private(set) var phase: Phase = .idle
@@ -68,7 +71,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     @Published private(set) var locationAssistMessage = ""
 
     let arSession: ARSession
-    let roomCaptureView: RoomCaptureView
+    let captureHostView: SpatialCaptureHostView
+    private var roomCaptureView: RoomCaptureView?
 
     private let configuration = RoomCaptureSession.Configuration()
     private var rawRoomData: CapturedRoomData?
@@ -100,7 +104,6 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     private var pendingWallReference: SpatialWallReference?
     private var pendingReferenceImageData: Data?
     private var pendingGeographicReference: SpatialGeographicReference?
-    private var pendingWorldMapQuality: SpatialWorldMapQuality?
     private var cachedGoodWorldMap: ARWorldMap?
     private var cachedGoodWorldMapCapturedAt: Date?
     private var cachedGoodWorldMapQuality: SpatialWorldMapQuality?
@@ -131,7 +134,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         thermalState = ProcessInfo.processInfo.thermalState
         let sharedSession = ARSession()
         arSession = sharedSession
-        roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
+        captureHostView = SpatialCaptureHostView(arSession: sharedSession)
+        roomCaptureView = nil
         super.init()
         configureDelegatesAndThermalMonitoring()
     }
@@ -150,7 +154,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         thermalState = ProcessInfo.processInfo.thermalState
         let sharedSession = ARSession()
         arSession = sharedSession
-        roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
+        captureHostView = SpatialCaptureHostView(arSession: sharedSession)
+        roomCaptureView = nil
         super.init()
         configureDelegatesAndThermalMonitoring()
     }
@@ -169,7 +174,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         thermalState = ProcessInfo.processInfo.thermalState
         let sharedSession = ARSession()
         arSession = sharedSession
-        roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
+        captureHostView = SpatialCaptureHostView(arSession: sharedSession)
+        roomCaptureView = nil
         super.init()
         project = existingProject
         configureDelegatesAndThermalMonitoring()
@@ -186,7 +192,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         thermalState = ProcessInfo.processInfo.thermalState
         let sharedSession = ARSession()
         arSession = sharedSession
-        roomCaptureView = RoomCaptureView(frame: .zero, arSession: sharedSession)
+        captureHostView = SpatialCaptureHostView(arSession: sharedSession)
+        roomCaptureView = nil
         super.init()
         configureDelegatesAndThermalMonitoring()
     }
@@ -249,6 +256,23 @@ final class RoomCaptureModel: NSObject, ObservableObject,
 
     var savedWorldMapQualityTitle: String? {
         project?.scanContinuationState?.worldMapQuality?.title
+    }
+
+    var savedWorldMapDetail: String? {
+        guard let state = project?.scanContinuationState else { return nil }
+        var parts: [String] = []
+        if let count = state.worldMapFeaturePointCount {
+            parts.append("نقاط الخريطة: \(count)")
+        }
+        if let extent = state.worldMapExtent, extent.count == 3 {
+            parts.append(
+                String(
+                    format: "المدى: %.1f × %.1f × %.1f م",
+                    extent[0], extent[1], extent[2]
+                )
+            )
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 
     var thermalProtectionTitle: String {
@@ -336,7 +360,6 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         pendingWallReference = nil
         pendingReferenceImageData = nil
         pendingGeographicReference = nil
-        pendingWorldMapQuality = nil
         relocalizationFailureMessage = ""
         relocalizationEvidenceMessage = ""
         relocalizationProgress = 0
@@ -444,7 +467,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         pendingWorldMapTask = nil
         worldMapCacheTask?.cancel()
         worldMapCacheTask = nil
-        if phase == .scanning || phase == .processing {
+        if phase == .scanning || phase == .processing,
+           let roomCaptureView {
             roomCaptureView.captureSession.stop(pauseARSession: true)
             roomCaptureSessionIsRunning = false
         }
@@ -462,8 +486,6 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     }
 
     private func configureDelegatesAndThermalMonitoring() {
-        roomCaptureView.delegate = self
-        roomCaptureView.captureSession.delegate = self
         _ = ProcessInfo.processInfo.thermalState
         thermalObserver = NotificationCenter.default.addObserver(
             forName: ProcessInfo.thermalStateDidChangeNotification,
@@ -587,11 +609,45 @@ final class RoomCaptureModel: NSObject, ObservableObject,
         isCompletingRelocalization = false
         phase = .scanning
         if !roomCaptureSessionIsRunning {
-            roomCaptureView.captureSession.run(configuration: configuration)
+            let captureView = prepareRoomCaptureViewForCurrentSession()
+            captureView.captureSession.run(configuration: configuration)
             roomCaptureSessionIsRunning = true
         }
         isStartingCapture = false
         applyThermalPolicy()
+    }
+
+    private func prepareRoomCaptureViewForCurrentSession() -> RoomCaptureView {
+        if let roomCaptureView {
+            captureHostView.showCaptureView(roomCaptureView)
+            return roomCaptureView
+        }
+
+        // Apple requires a custom ARSession to be running before it is handed
+        // to RoomPlan. For a restored scan the session is already relocalized;
+        // for a brand-new scan start a normal world-tracking session first.
+        if arSession.currentFrame == nil {
+            let baseConfiguration = ARWorldTrackingConfiguration()
+            baseConfiguration.planeDetection = [.horizontal, .vertical]
+            arSession.run(baseConfiguration, options: [])
+        }
+
+        let captureView = RoomCaptureView(frame: .zero, arSession: arSession)
+        captureView.delegate = self
+        captureView.captureSession.delegate = self
+        roomCaptureView = captureView
+        captureHostView.showCaptureView(captureView)
+        return captureView
+    }
+
+    private func prepareBareSessionForRelocalization() {
+        if let roomCaptureView, roomCaptureSessionIsRunning {
+            roomCaptureView.captureSession.stop(pauseARSession: true)
+        }
+        roomCaptureSessionIsRunning = false
+        roomCaptureView = nil
+        captureHostView.showRelocalizationPreview()
+        arSession.delegate = self
     }
 
     private func stopCapture(reason: StopReason) {
@@ -626,7 +682,6 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             pendingGeographicReference = latestWallReferenceGeographicReference
                 ?? referenceSensor.snapshot()
         }
-        pendingWorldMapQuality = worldMapQuality(for: frame?.worldMappingStatus)
 
         pendingWorldMapTask?.cancel()
         let fallbackMap = cachedGoodWorldMap
@@ -641,20 +696,29 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             )
             let currentMap = try? await self.currentWorldMap()
 
-            var selectedMap: ARWorldMap?
-            var selectedQuality = currentQuality
-            var capturedAt = Date()
+            var candidates: [(map: ARWorldMap, quality: SpatialWorldMapQuality, date: Date)] = []
             if currentQuality.isSuitableForResume, let currentMap {
-                selectedMap = currentMap
-            } else if let fallbackMap, let fallbackQuality {
-                selectedMap = fallbackMap
-                selectedQuality = fallbackQuality
-                capturedAt = fallbackDate ?? Date()
-            } else {
-                selectedMap = currentMap
+                candidates.append((currentMap, currentQuality, Date()))
+            }
+            if let fallbackMap,
+               let fallbackQuality,
+               fallbackQuality.isSuitableForResume {
+                candidates.append((fallbackMap, fallbackQuality, fallbackDate ?? Date()))
             }
 
-            guard let selectedMap else { return nil }
+            // Never persist a limited/not-available map as resumable. When two
+            // suitable snapshots exist, prefer mapped over extending and then
+            // the map with the richer feature cloud.
+            guard let selected = candidates.max(by: { lhs, rhs in
+                if lhs.quality.reliabilityRank != rhs.quality.reliabilityRank {
+                    return lhs.quality.reliabilityRank < rhs.quality.reliabilityRank
+                }
+                return lhs.map.rawFeaturePoints.count
+                    < rhs.map.rawFeaturePoints.count
+            }) else { return nil }
+            let selectedMap = selected.map
+            let selectedQuality = selected.quality
+            let capturedAt = selected.date
             if let anchorTransform {
                 var anchors = selectedMap.anchors
                 anchors.removeAll { $0.name == self.resumeAnchorName }
@@ -663,13 +727,20 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 )
                 selectedMap.anchors = anchors
             }
+            let extent = selectedMap.extent
             return WorldMapCapture(
                 worldMap: selectedMap,
                 quality: selectedQuality,
-                capturedAt: capturedAt
+                capturedAt: capturedAt,
+                featurePointCount: selectedMap.rawFeaturePoints.count,
+                extent: [extent.x, extent.y, extent.z]
             )
         }
         phase = .processing
+        guard let roomCaptureView else {
+            phase = .failed("تعذر الوصول إلى جلسة RoomPlan الحالية لحفظ المسح.")
+            return
+        }
         roomCaptureView.captureSession.stop(pauseARSession: false)
         roomCaptureSessionIsRunning = false
     }
@@ -841,12 +912,19 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             latestHeadingPass = true
             latestLocationPass = true
             relocalizationProgress = 0
-            relocalizationEvidenceMessage = "جارٍ البحث عن آخر حائط مسجل."
+            relocalizationEvidenceMessage = savedWorldMapDetail.map {
+                "جارٍ البحث عن آخر حائط مسجل. • \($0)"
+            } ?? "جارٍ البحث عن آخر حائط مسجل."
             locationAssistMessage = locationAssistDescription(
                 savedReference: continuation?.geographicReference,
                 currentReference: referenceSensor.snapshot()
             )
 
+            // Relocalize the bare ARSession first. RoomCaptureView is created
+            // only after ARKit reports normal tracking, matching Apple's
+            // documented multi-room workflow and preventing RoomPlan from
+            // taking ownership of the session before the map is restored.
+            prepareBareSessionForRelocalization()
             let configuration = ARWorldTrackingConfiguration()
             configuration.initialWorldMap = worldMap
             configuration.planeDetection = [.horizontal, .vertical]
@@ -1073,19 +1151,29 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             if let pendingWorldMapTask {
                 capturedWorldMap = await pendingWorldMapTask.value
             } else if let current = try? await currentWorldMap() {
-                capturedWorldMap = WorldMapCapture(
-                    worldMap: current,
-                    quality: worldMapQuality(
-                        for: arSession.currentFrame?.worldMappingStatus
-                    ),
-                    capturedAt: Date()
+                let currentQuality = worldMapQuality(
+                    for: arSession.currentFrame?.worldMappingStatus
                 )
+                if currentQuality.isSuitableForResume {
+                    let extent = current.extent
+                    capturedWorldMap = WorldMapCapture(
+                        worldMap: current,
+                        quality: currentQuality,
+                        capturedAt: Date(),
+                        featurePointCount: current.rawFeaturePoints.count,
+                        extent: [extent.x, extent.y, extent.z]
+                    )
+                } else {
+                    capturedWorldMap = nil
+                }
             } else {
                 capturedWorldMap = nil
             }
             pendingWorldMapTask = nil
             var worldMapCapturedAt: Date?
-            var resolvedWorldMapQuality = pendingWorldMapQuality
+            var resolvedWorldMapQuality = savedProject.scanContinuationState?.worldMapQuality
+            var worldMapFeaturePointCount = savedProject.scanContinuationState?.worldMapFeaturePointCount
+            var worldMapExtent = savedProject.scanContinuationState?.worldMapExtent
             if let capturedWorldMap,
                let fileName = try? ProjectRepository.saveWorldMap(
                 capturedWorldMap.worldMap,
@@ -1094,6 +1182,8 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                 savedProject.worldMapFile = fileName
                 worldMapCapturedAt = capturedWorldMap.capturedAt
                 resolvedWorldMapQuality = capturedWorldMap.quality
+                worldMapFeaturePointCount = capturedWorldMap.featurePointCount
+                worldMapExtent = capturedWorldMap.extent
             }
 
             var referenceImageFile = savedProject.scanContinuationState?.referenceImageFile
@@ -1113,6 +1203,10 @@ final class RoomCaptureModel: NSObject, ObservableObject,
                         ?? savedProject.scanContinuationState?.worldMapCapturedAt,
                     worldMapQuality: resolvedWorldMapQuality
                         ?? savedProject.scanContinuationState?.worldMapQuality,
+                    worldMapFeaturePointCount: worldMapFeaturePointCount
+                        ?? savedProject.scanContinuationState?.worldMapFeaturePointCount,
+                    worldMapExtent: worldMapExtent
+                        ?? savedProject.scanContinuationState?.worldMapExtent,
                     referenceWall: pendingWallReference
                         ?? savedProject.scanContinuationState?.referenceWall,
                     referenceImageFile: referenceImageFile,
@@ -1137,8 +1231,7 @@ final class RoomCaptureModel: NSObject, ObservableObject,
             pendingWallReference = nil
             pendingReferenceImageData = nil
             pendingGeographicReference = nil
-            pendingWorldMapQuality = nil
-            project = savedProject
+                project = savedProject
             referenceWallSummary = continuationReferenceSummary(
                 savedProject.scanContinuationState
             )
@@ -1726,12 +1819,63 @@ final class RoomCaptureModel: NSObject, ObservableObject,
     }
 }
 
-struct RoomCaptureRepresentable: UIViewRepresentable {
-    let captureView: RoomCaptureView
+@MainActor
+final class SpatialCaptureHostView: UIView {
+    private let arSession: ARSession
+    private let relocalizationView: ARSCNView
+    private weak var activeCaptureView: RoomCaptureView?
 
-    func makeUIView(context: Context) -> RoomCaptureView {
-        captureView
+    init(arSession: ARSession) {
+        self.arSession = arSession
+        relocalizationView = ARSCNView(frame: .zero)
+        super.init(frame: .zero)
+        backgroundColor = .black
+        relocalizationView.session = arSession
+        relocalizationView.scene = SCNScene()
+        relocalizationView.automaticallyUpdatesLighting = true
+        showRelocalizationPreview()
     }
 
-    func updateUIView(_ uiView: RoomCaptureView, context: Context) {}
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func showRelocalizationPreview() {
+        activeCaptureView?.removeFromSuperview()
+        activeCaptureView = nil
+        installFillingSubview(relocalizationView)
+    }
+
+    func showCaptureView(_ captureView: RoomCaptureView) {
+        guard activeCaptureView !== captureView || captureView.superview !== self else {
+            return
+        }
+        relocalizationView.removeFromSuperview()
+        activeCaptureView?.removeFromSuperview()
+        activeCaptureView = captureView
+        installFillingSubview(captureView)
+    }
+
+    private func installFillingSubview(_ view: UIView) {
+        guard view.superview !== self else { return }
+        view.removeFromSuperview()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: trailingAnchor),
+            view.topAnchor.constraint(equalTo: topAnchor),
+            view.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+}
+
+struct SpatialCaptureRepresentable: UIViewRepresentable {
+    let hostView: SpatialCaptureHostView
+
+    func makeUIView(context: Context) -> SpatialCaptureHostView {
+        hostView
+    }
+
+    func updateUIView(_ uiView: SpatialCaptureHostView, context: Context) {}
 }

@@ -3024,7 +3024,7 @@ private struct ScanRoomView: View {
 
     var body: some View {
         ZStack {
-            RoomCaptureRepresentable(captureView: model.roomCaptureView)
+            SpatialCaptureRepresentable(hostView: model.captureHostView)
                 .ignoresSafeArea()
 
             VStack {
@@ -3274,6 +3274,12 @@ private struct ScanRoomView: View {
             if let quality = model.savedWorldMapQualityTitle {
                 LabeledContent("جودة خريطة المكان", value: quality)
                     .font(.caption)
+            }
+
+            if let detail = model.savedWorldMapDetail {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             if !model.referenceWallSummary.isEmpty {
