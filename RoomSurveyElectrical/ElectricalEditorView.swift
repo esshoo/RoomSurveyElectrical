@@ -40,22 +40,20 @@ struct ElectricalEditorView: View {
         ZStack {
             switch cameraWorkspaceMode {
             case .electrical:
-                ElectricalARView(
-                    project: project,
-                    arSession: arSession,
-                    worldToProjectTransform: worldToProjectTransform,
-                    onWallTapped: { pendingTap = $0 },
-                    onCeilingTapped: { pendingCeilingTap = $0 }
-                )
-                .ignoresSafeArea()
+                GeometryReader { geometry in
+                    ZStack {
+                        ElectricalARView(
+                            project: project,
+                            arSession: arSession,
+                            worldToProjectTransform: worldToProjectTransform,
+                            onWallTapped: { pendingTap = $0 },
+                            onCeilingTapped: { pendingCeilingTap = $0 }
+                        )
+                        .ignoresSafeArea()
 
-                VStack(spacing: 12) {
-                    topBar
-                    Spacer()
-                    instructionCard
-                    actionBar
+                        electricalChrome(size: geometry.size)
+                    }
                 }
-                .padding()
 
             case .transitioning:
                 Color.black
@@ -125,7 +123,29 @@ struct ElectricalEditorView: View {
         }
     }
 
-    private var topBar: some View {
+    @ViewBuilder
+    private func electricalChrome(size: CGSize) -> some View {
+        let compactLandscape = size.width > size.height
+
+        VStack(spacing: compactLandscape ? 8 : 12) {
+            topBar(compact: compactLandscape)
+            Spacer(minLength: 0)
+
+            if compactLandscape {
+                HStack(alignment: .bottom, spacing: 10) {
+                    instructionCard(compact: true)
+                    Spacer(minLength: 8)
+                    actionBar(compact: true)
+                }
+            } else {
+                instructionCard(compact: false)
+                actionBar(compact: false)
+            }
+        }
+        .padding(compactLandscape ? 10 : 16)
+    }
+
+    private func topBar(compact: Bool) -> some View {
         HStack {
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -135,28 +155,32 @@ struct ElectricalEditorView: View {
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 3) {
+            VStack(alignment: .trailing, spacing: compact ? 1 : 3) {
                 Text("توزيع الكهرباء")
-                    .font(.headline)
+                    .font(compact ? .subheadline.weight(.semibold) : .headline)
                 Text(
                     "\(project.points.count) نقطة • "
                         + "\(existingCeilingLightCount) إضاءة سقف موجودة • "
                         + "صور \(Int((project.photographicCoverage * 100).rounded()))% • "
                         + settings.designMode.title
                 )
-                .font(.caption)
+                .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, compact ? 10 : 14)
+            .padding(.vertical, compact ? 6 : 8)
             .background(.ultraThinMaterial, in: Capsule())
         }
     }
 
-    private var instructionCard: some View {
+    private func instructionCard(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Label(instructionText, systemImage: instructionIcon)
-                .font(.subheadline.weight(.semibold))
+                .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                .lineLimit(compact ? 2 : nil)
+                .minimumScaleFactor(compact ? 0.75 : 1)
 
             if let placementMessage {
                 Label(placementMessage, systemImage: "checkmark.circle.fill")
@@ -164,8 +188,11 @@ struct ElectricalEditorView: View {
                     .foregroundStyle(.green)
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(compact ? 9 : 12)
+        .frame(
+            maxWidth: compact ? 430 : .infinity,
+            alignment: .leading
+        )
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
@@ -187,53 +214,90 @@ struct ElectricalEditorView: View {
         settings.designMode == .existing ? "scope" : "ruler.fill"
     }
 
-    private var actionBar: some View {
-        VStack(spacing: 10) {
-            Button(action: startPhotographicScan) {
-                HStack(spacing: 12) {
+    @ViewBuilder
+    private func actionBar(compact: Bool) -> some View {
+        if compact {
+            HStack(spacing: 8) {
+                Button(action: startPhotographicScan) {
                     Image(systemName: "camera.viewfinder")
-                        .font(.title3)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("المسح الفوتوغرافي للجدران")
-                            .font(.headline)
-                        Text(
-                            "حرّك الهاتف في أي اتجاه • المتبقي "
-                                + "\(remainingPhotoSegmentCount) مربع"
-                        )
-                        .font(.caption)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.left")
-                        .font(.caption.weight(.bold))
+                        .frame(width: 42, height: 38)
                 }
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.indigo)
-            .disabled(cameraWorkspaceMode != .electrical)
+                .buttonStyle(.borderedProminent)
+                .tint(.indigo)
+                .disabled(cameraWorkspaceMode != .electrical)
+                .accessibilityLabel(
+                    "المسح الفوتوغرافي للجدران، المتبقي \(remainingPhotoSegmentCount) مربع"
+                )
 
-            HStack(spacing: 12) {
                 Button {
                     showBOQ = true
                 } label: {
-                    Label("الحصر", systemImage: "list.clipboard.fill")
-                        .frame(maxWidth: .infinity)
+                    Image(systemName: "list.clipboard.fill")
+                        .frame(width: 42, height: 38)
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityLabel("الحصر")
 
                 Button {
                     removeLastPoint()
                 } label: {
-                    Label("تراجع", systemImage: "arrow.uturn.backward")
-                        .frame(maxWidth: .infinity)
+                    Image(systemName: "arrow.uturn.backward")
+                        .frame(width: 42, height: 38)
                 }
                 .buttonStyle(.bordered)
                 .disabled(project.points.isEmpty && lastAddedCeilingLightID == nil)
+                .accessibilityLabel("تراجع")
             }
+            .padding(8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        } else {
+            VStack(spacing: 10) {
+                Button(action: startPhotographicScan) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "camera.viewfinder")
+                            .font(.title3)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("المسح الفوتوغرافي للجدران")
+                                .font(.headline)
+                            Text(
+                                "حرّك الهاتف في أي اتجاه • المتبقي "
+                                    + "\(remainingPhotoSegmentCount) مربع"
+                            )
+                            .font(.caption)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.left")
+                            .font(.caption.weight(.bold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.indigo)
+                .disabled(cameraWorkspaceMode != .electrical)
+
+                HStack(spacing: 12) {
+                    Button {
+                        showBOQ = true
+                    } label: {
+                        Label("الحصر", systemImage: "list.clipboard.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        removeLastPoint()
+                    } label: {
+                        Label("تراجع", systemImage: "arrow.uturn.backward")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(project.points.isEmpty && lastAddedCeilingLightID == nil)
+                }
+            }
+            .padding(10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
         }
-        .padding(10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
     private var remainingPhotoSegmentCount: Int {

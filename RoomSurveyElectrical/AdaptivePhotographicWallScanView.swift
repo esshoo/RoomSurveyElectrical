@@ -103,14 +103,9 @@ struct AdaptivePhotographicWallScanView: View {
             }
             .allowsHitTesting(false)
 
-            VStack(spacing: 12) {
-                topBar
-                progressCard
-                Spacer()
-                guidanceCard
-                bottomBar
+            GeometryReader { geometry in
+                adaptivePhotoChrome(size: geometry.size)
             }
-            .padding()
         }
         .background(Color.black)
         .onAppear(perform: prepareScan)
@@ -124,7 +119,31 @@ struct AdaptivePhotographicWallScanView: View {
         }
     }
 
-    private var topBar: some View {
+    @ViewBuilder
+    private func adaptivePhotoChrome(size: CGSize) -> some View {
+        let compactLandscape = size.width > size.height
+
+        VStack(spacing: compactLandscape ? 8 : 12) {
+            topBar(compact: compactLandscape)
+
+            if compactLandscape {
+                Spacer(minLength: 0)
+                HStack(alignment: .bottom, spacing: 10) {
+                    compactStatusCard
+                    Spacer(minLength: 8)
+                    compactBottomBar
+                }
+            } else {
+                progressCard
+                Spacer(minLength: 0)
+                guidanceCard
+                bottomBar
+            }
+        }
+        .padding(compactLandscape ? 10 : 16)
+    }
+
+    private func topBar(compact: Bool) -> some View {
         HStack {
             Button(action: finishAndClose) {
                 Image(systemName: "xmark")
@@ -136,17 +155,86 @@ struct AdaptivePhotographicWallScanView: View {
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 3) {
+            VStack(alignment: .trailing, spacing: compact ? 1 : 3) {
                 Text("المسح الفوتوغرافي الذكي")
-                    .font(.headline)
+                    .font(compact ? .subheadline.weight(.semibold) : .headline)
                 Text(activeWallName)
-                    .font(.caption)
+                    .font(compact ? .caption2 : .caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, compact ? 10 : 14)
+            .padding(.vertical, compact ? 6 : 8)
             .background(.ultraThinMaterial, in: Capsule())
         }
+    }
+
+    private var compactStatusCard: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Label(
+                    "المتبقي \(remainingCount) من \(totalCount)",
+                    systemImage: "square.grid.3x3.fill"
+                )
+                .font(.caption.weight(.semibold))
+
+                Text("\(Int((coverage * 100).rounded()))%")
+                    .font(.caption.monospacedDigit().weight(.bold))
+            }
+
+            ProgressView(value: coverage)
+                .tint(.green)
+
+            Label(
+                guidance.message,
+                systemImage: guidance.isReady ? "camera.fill" : "viewfinder"
+            )
+            .font(.caption2.weight(.semibold))
+            .lineLimit(2)
+            .minimumScaleFactor(0.72)
+        }
+        .padding(9)
+        .frame(maxWidth: 430, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var compactBottomBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                guard !isFinishing else { return }
+                autoCaptureEnabled.toggle()
+            } label: {
+                Image(
+                    systemName: autoCaptureEnabled
+                        ? "camera.badge.clock"
+                        : "pause.circle"
+                )
+                .frame(width: 42, height: 38)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(autoCaptureEnabled ? .blue : .gray)
+            .disabled(remainingCount == 0 || isFinishing)
+            .accessibilityLabel(
+                autoCaptureEnabled
+                    ? "إيقاف الالتقاط التلقائي"
+                    : "تشغيل الالتقاط التلقائي"
+            )
+
+            Button(action: finishAndClose) {
+                Image(systemName: "checkmark.circle.fill")
+                    .frame(width: 42, height: 38)
+            }
+            .buttonStyle(.bordered)
+            .disabled(isFinishing)
+            .accessibilityLabel(
+                remainingCount == 0
+                    ? "إنهاء والعودة للكهرباء"
+                    : "إنهاء الآن واستخدام الصور المحلية عند الحاجة"
+            )
+        }
+        .padding(8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
     private var progressCard: some View {

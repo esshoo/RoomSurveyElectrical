@@ -5,3 +5,6 @@ DerivedData/
 xcuserdata/
 *.ipa
 *.mobileprovision
+
+__pycache__/
+*.pyc

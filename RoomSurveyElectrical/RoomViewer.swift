@@ -73,6 +73,7 @@ private struct WeakPhotoRecaptureRequest: Identifiable {
 struct RoomViewerView: View {
     @EnvironmentObject private var store: ProjectStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.layoutDirection) private var interfaceLayoutDirection
 
     let surveyProjectID: UUID
     @State private var project: RoomProject
@@ -97,46 +98,8 @@ struct RoomViewerView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color(uiColor: .systemGroupedBackground)
-                .ignoresSafeArea()
-
-            switch mode {
-            case .plan2D:
-                Plan2DView(
-                    project: $project,
-                    layers: layers,
-                    onProjectChanged: persistViewerProject,
-                    initialHighlight: focusedWallID.map { .wall($0) }
-                )
-            case .model3D:
-                model3D
-            case .photos:
-                WallPhotosTabView(
-                    project: $project,
-                    onProjectChanged: persistViewerProject,
-                    onOpenWall2D: { wallID in
-                        focusedWallID = wallID
-                        mode = .plan2D
-                    },
-                    onOpenWall3D: { wallID in
-                        focusedWallID = wallID
-                        mode = .model3D
-                    },
-                    onRecaptureWeakSegments: { segmentIDs in
-                        guard ProjectRepository.hasWorldMap(project) else {
-                            errorMessage =
-                                "هذا المسح لا يحتوي على خريطة تتبع محفوظة. "
-                                + "أعد المسح كنسخة جديدة مرة واحدة بالإصدار الحالي، "
-                                + "أو استخدم رفع صورة محلية."
-                            return
-                        }
-                        weakPhotoRecaptureRequest = WeakPhotoRecaptureRequest(
-                            segmentIDs: segmentIDs
-                        )
-                    }
-                )
-            }
+        GeometryReader { geometry in
+            adaptiveViewerLayout(size: geometry.size)
         }
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -144,14 +107,6 @@ struct RoomViewerView: View {
             ToolbarItem(placement: .topBarLeading) {
                 optionsMenu
             }
-        }
-        .safeAreaInset(edge: .top) {
-            if let continuation = project.scanContinuationState {
-                savedScanContinuationBanner(continuation)
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            viewerControls
         }
         .overlay {
             if isExporting {
@@ -292,6 +247,87 @@ struct RoomViewerView: View {
         }
     }
 
+    @ViewBuilder
+    private func adaptiveViewerLayout(size: CGSize) -> some View {
+        let usesSideRail = size.width > size.height
+
+        VStack(spacing: 0) {
+            if let continuation = project.scanContinuationState {
+                savedScanContinuationBanner(continuation)
+            }
+
+            if usesSideRail {
+                HStack(spacing: 0) {
+                    viewerViewport
+                        .environment(
+                            \.layoutDirection,
+                            interfaceLayoutDirection
+                        )
+                    verticalViewerControls
+                        .environment(
+                            \.layoutDirection,
+                            interfaceLayoutDirection
+                        )
+                }
+                // The HStack itself is spatial: source order always means viewport
+                // then a physical right-side rail. Child interfaces keep the app's
+                // own language direction.
+                .environment(\.layoutDirection, .leftToRight)
+            } else {
+                horizontalViewerControls
+                viewerViewport
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    @ViewBuilder
+    private var viewerViewport: some View {
+        ZStack {
+            Color(uiColor: .systemGroupedBackground)
+
+            switch mode {
+            case .plan2D:
+                Plan2DView(
+                    project: $project,
+                    layers: layers,
+                    onProjectChanged: persistViewerProject,
+                    initialHighlight: focusedWallID.map { .wall($0) }
+                )
+            case .model3D:
+                model3D
+            case .photos:
+                WallPhotosTabView(
+                    project: $project,
+                    onProjectChanged: persistViewerProject,
+                    onOpenWall2D: { wallID in
+                        focusedWallID = wallID
+                        mode = .plan2D
+                    },
+                    onOpenWall3D: { wallID in
+                        focusedWallID = wallID
+                        mode = .model3D
+                    },
+                    onRecaptureWeakSegments: { segmentIDs in
+                        guard ProjectRepository.hasWorldMap(project) else {
+                            errorMessage =
+                                "هذا المسح لا يحتوي على خريطة تتبع محفوظة. "
+                                + "أعد المسح كنسخة جديدة مرة واحدة بالإصدار الحالي، "
+                                + "أو استخدم رفع صورة محلية."
+                            return
+                        }
+                        weakPhotoRecaptureRequest = WeakPhotoRecaptureRequest(
+                            segmentIDs: segmentIDs
+                        )
+                    }
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+    }
+
     private var workspaceSettings: ElectricalPlacementSettings {
         store.project(id: surveyProjectID)?.settings ?? .standard
     }
@@ -359,7 +395,6 @@ struct RoomViewerView: View {
                 layers: effectiveLayers,
                 focusedWallID: focusedWallID
             )
-            .ignoresSafeArea(edges: .bottom)
             .overlay(alignment: .top) {
                 Label(
                     "3D من نفس هندسة المشروع المستخدمة في 2D",
@@ -381,7 +416,6 @@ struct RoomViewerView: View {
                 layers: effectiveLayers,
                 focusedWallID: focusedWallID
             )
-                .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .top) {
                     Label(
                         "اسحب للتدوير • قرّب بإصبعين • اضغط مرتين لإعادة العرض",
@@ -402,68 +436,168 @@ struct RoomViewerView: View {
         }
     }
 
-    private var viewerControls: some View {
-        HStack(spacing: 12) {
-            Picker("طريقة العرض", selection: $mode) {
-                ForEach(ScanPresentationMode.allCases) { item in
-                    Label(item.title, systemImage: item.systemImage).tag(item)
+    private var horizontalViewerControls: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                Picker("طريقة العرض", selection: $mode) {
+                    ForEach(ScanPresentationMode.allCases) { item in
+                        Label(item.title, systemImage: item.systemImage).tag(item)
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
+                .pickerStyle(.segmented)
 
-            Menu {
-                Toggle(isOn: $layers.floor) {
-                    Label("الأرضية", systemImage: "square.fill")
+                layerVisibilityMenu(compact: true)
+            }
+
+            HStack(spacing: 8) {
+                ForEach(ScanPresentationMode.allCases) { item in
+                    modeButton(item, compact: true)
                 }
-                .disabled(workspaceLayerLocked(.originalScan))
-                Toggle(isOn: $layers.walls) {
-                    Label("الحوائط", systemImage: "rectangle.split.3x1.fill")
+                Spacer(minLength: 4)
+                layerVisibilityMenu(compact: true)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+
+    private var verticalViewerControls: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 9) {
+                ForEach(ScanPresentationMode.allCases) { item in
+                    modeButton(item, compact: false)
                 }
-                .disabled(workspaceLayerLocked(.originalScan))
-                Toggle(isOn: $layers.openings) {
-                    Label("الأبواب والشبابيك", systemImage: "door.left.hand.open")
+
+                Divider()
+                    .padding(.vertical, 2)
+
+                layerVisibilityMenu(compact: false)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 10)
+        }
+        .frame(width: 82)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .leading) {
+            Divider()
+        }
+    }
+
+    private func modeButton(
+        _ item: ScanPresentationMode,
+        compact: Bool
+    ) -> some View {
+        Button {
+            mode = item
+        } label: {
+            if compact {
+                Image(systemName: item.systemImage)
+                    .font(.headline)
+                    .frame(width: 42, height: 34)
+            } else {
+                VStack(spacing: 4) {
+                    Image(systemName: item.systemImage)
+                        .font(.headline)
+                    Text(item.title)
+                        .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
                 }
-                .disabled(workspaceLayerLocked(.originalScan))
-                Toggle(isOn: $layers.furniture) {
-                    Label("الأثاث", systemImage: "chair.lounge.fill")
-                }
-                .disabled(workspaceLayerLocked(.furnitureAndDesign))
-                Toggle(isOn: $layers.electrical) {
-                    Label("الكهرباء", systemImage: "bolt.circle.fill")
-                }
-                .disabled(
-                    workspaceLayerLocked(.existingElectrical)
-                        || workspaceLayerLocked(.proposedElectrical)
-                )
-                Toggle(isOn: $layers.ceilingLighting) {
-                    Label("إضاءة السقف", systemImage: "light.recessed")
-                }
-                .disabled(workspaceLayerLocked(.ceilingLighting))
-                Toggle(isOn: $layers.wallPhotos) {
-                    Label("صور وألوان الجدران", systemImage: "photo.on.rectangle")
-                }
-                .disabled(workspaceLayerLocked(.photosAndMaterials))
-                if mode == .plan2D {
-                    Toggle(isOn: $layers.dimensions) {
-                        Label("الأبعاد", systemImage: "ruler.fill")
-                    }
-                    .disabled(workspaceLayerLocked(.dimensionsAndAnnotations))
-                    Toggle(isOn: $layers.electricalDimensions) {
-                        Label("أبعاد الكهرباء", systemImage: "ruler")
-                    }
-                    .disabled(workspaceLayerLocked(.dimensionsAndAnnotations))
-                }
-            } label: {
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(mode == item ? Color.white : Color.primary)
+        .background(
+            mode == item ? Color.accentColor : Color.clear,
+            in: RoundedRectangle(cornerRadius: 11)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 11))
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(mode == item ? .isSelected : [])
+    }
+
+    private func layerVisibilityMenu(compact: Bool) -> some View {
+        Menu {
+            layerVisibilityMenuContent
+        } label: {
+            if compact {
                 Image(systemName: "square.3.layers.3d")
                     .font(.headline)
                     .frame(width: 42, height: 34)
+            } else {
+                VStack(spacing: 4) {
+                    Image(systemName: "square.3.layers.3d")
+                        .font(.headline)
+                    Text("الطبقات")
+                        .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
             }
-            .buttonStyle(.bordered)
-            .accessibilityLabel("طبقات العرض")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .buttonStyle(.bordered)
+        .accessibilityLabel("طبقات العرض")
+    }
+
+    @ViewBuilder
+    private var layerVisibilityMenuContent: some View {
+        Toggle(isOn: $layers.floor) {
+            Label("الأرضية", systemImage: "square.fill")
+        }
+        .disabled(workspaceLayerLocked(.originalScan))
+
+        Toggle(isOn: $layers.walls) {
+            Label("الحوائط", systemImage: "rectangle.split.3x1.fill")
+        }
+        .disabled(workspaceLayerLocked(.originalScan))
+
+        Toggle(isOn: $layers.openings) {
+            Label("الأبواب والشبابيك", systemImage: "door.left.hand.open")
+        }
+        .disabled(workspaceLayerLocked(.originalScan))
+
+        Toggle(isOn: $layers.furniture) {
+            Label("الأثاث", systemImage: "chair.lounge.fill")
+        }
+        .disabled(workspaceLayerLocked(.furnitureAndDesign))
+
+        Toggle(isOn: $layers.electrical) {
+            Label("الكهرباء", systemImage: "bolt.circle.fill")
+        }
+        .disabled(
+            workspaceLayerLocked(.existingElectrical)
+                || workspaceLayerLocked(.proposedElectrical)
+        )
+
+        Toggle(isOn: $layers.ceilingLighting) {
+            Label("إضاءة السقف", systemImage: "light.recessed")
+        }
+        .disabled(workspaceLayerLocked(.ceilingLighting))
+
+        Toggle(isOn: $layers.wallPhotos) {
+            Label("صور وألوان الجدران", systemImage: "photo.on.rectangle")
+        }
+        .disabled(workspaceLayerLocked(.photosAndMaterials))
+
+        if mode == .plan2D {
+            Toggle(isOn: $layers.dimensions) {
+                Label("الأبعاد", systemImage: "ruler.fill")
+            }
+            .disabled(workspaceLayerLocked(.dimensionsAndAnnotations))
+
+            Toggle(isOn: $layers.electricalDimensions) {
+                Label("أبعاد الكهرباء", systemImage: "ruler")
+            }
+            .disabled(workspaceLayerLocked(.dimensionsAndAnnotations))
+        }
     }
 
     private func savedScanContinuationBanner(
@@ -1091,7 +1225,7 @@ private struct Plan2DView: View {
                     }
                 )
 
-                controlsOverlay
+                controlsOverlay(viewSize: geometry.size)
             }
             .coordinateSpace(name: "plan2D")
             .onAppear {
@@ -1149,99 +1283,107 @@ private struct Plan2DView: View {
         }
     }
 
-    private var controlsOverlay: some View {
-        VStack(spacing: 10) {
-            HStack {
-                PlanLegendView(layers: layers)
-                Spacer()
+    private func controlsOverlay(viewSize: CGSize) -> some View {
+        let compactHeight = viewSize.height < 500
 
-                if lastAddition != nil {
-                    Button(action: undoLastAddition) {
-                        Image(systemName: "arrow.uturn.backward")
+        return ZStack {
+            VStack(spacing: compactHeight ? 6 : 10) {
+                HStack(spacing: 8) {
+                    PlanLegendView(layers: layers, compact: compactHeight)
+                    Spacer(minLength: 8)
+
+                    if lastAddition != nil {
+                        Button(action: undoLastAddition) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .frame(width: 38, height: 38)
+                                .background(.ultraThinMaterial, in: Circle())
+                        }
+                        .accessibilityLabel("التراجع عن آخر إضافة")
+                    }
+
+                    Button(action: resetView) {
+                        Image(systemName: "arrow.counterclockwise")
                             .frame(width: 38, height: 38)
                             .background(.ultraThinMaterial, in: Circle())
                     }
-                    .accessibilityLabel("التراجع عن آخر إضافة")
+                    .accessibilityLabel("إعادة ضبط المخطط")
                 }
 
-                Button(action: resetView) {
-                    Image(systemName: "arrow.counterclockwise")
-                        .frame(width: 38, height: 38)
-                        .background(.ultraThinMaterial, in: Circle())
-                }
-                .accessibilityLabel("إعادة ضبط المخطط")
+                planStatusOverlay(
+                    compactHeight: compactHeight,
+                    availableWidth: viewSize.width
+                )
+
+                Spacer(minLength: 0)
             }
 
+            if allowsEditing {
+                VStack {
+                    Spacer(minLength: 0)
+                    HStack {
+                        Spacer(minLength: 0)
+                        editMenu(compact: compactHeight)
+                    }
+                }
+            }
+        }
+        .padding(compactHeight ? 8 : 12)
+    }
+
+    @ViewBuilder
+    private func planStatusOverlay(
+        compactHeight: Bool,
+        availableWidth: CGFloat
+    ) -> some View {
+        let maximumWidth = compactHeight
+            ? max(180, availableWidth - 116)
+            : min(560, availableWidth - 24)
+
+        Group {
             if activeHighlight != nil {
                 Label(
                     "تم تحديد العنصر على المخطط • المس الشاشة لإيقاف الوميض",
                     systemImage: "scope"
                 )
-                .font(.caption.weight(.semibold))
                 .foregroundStyle(.orange)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(.ultraThinMaterial, in: Capsule())
-            }
-
-            if let tool = activeTool, allowsEditing {
+            } else if let tool = activeTool, allowsEditing {
                 HStack(spacing: 8) {
                     Label(
-                        tool.placementInstruction,
-                        systemImage: tool.systemImage
+                        feedbackText ?? tool.placementInstruction,
+                        systemImage: feedbackText == nil
+                            ? tool.systemImage
+                            : "exclamationmark.triangle.fill"
                     )
-                    .font(.caption.weight(.semibold))
-                    Spacer()
+                    Spacer(minLength: 4)
                     Button("إلغاء") {
                         activeTool = nil
                         feedbackText = nil
                     }
                     .font(.caption.weight(.semibold))
                 }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
-
-            if let feedbackText {
-                Label(
-                    feedbackText,
-                    systemImage: activeTool == nil
-                        ? "checkmark.circle.fill"
-                        : "exclamationmark.triangle.fill"
-                    )
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(activeTool == nil ? Color.green : Color.orange)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(.ultraThinMaterial, in: Capsule())
-            } else if activeTool == nil && activeHighlight == nil {
+            } else if let feedbackText {
+                Label(feedbackText, systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else {
                 Label(
                     allowsEditing
                         ? "انقر على العنصر لتعديله • اضغط مطولًا واسحب لنقله"
                         : "يمكنك التحريك والتكبير لمراجعة موضع العنصر",
                     systemImage: allowsEditing ? "hand.tap.fill" : "hand.draw.fill"
                 )
-                .font(.caption2.weight(.medium))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 7)
-                .background(.ultraThinMaterial, in: Capsule())
-            }
-
-            Spacer()
-
-            if allowsEditing {
-                HStack {
-                    Spacer()
-                    editMenu
-                }
             }
         }
-        .padding(12)
+        .font(compactHeight ? .caption2.weight(.semibold) : .caption.weight(.semibold))
+        .lineLimit(compactHeight ? 1 : 2)
+        .minimumScaleFactor(compactHeight ? 0.72 : 0.9)
+        .padding(.horizontal, compactHeight ? 9 : 12)
+        .padding(.vertical, compactHeight ? 6 : 9)
+        .frame(maxWidth: maximumWidth)
+        .background(.ultraThinMaterial, in: Capsule())
     }
 
-    private var editMenu: some View {
+    private func editMenu(compact: Bool) -> some View {
         Menu {
             Section("فتحات معمارية") {
                 editToolButton(.door)
@@ -1299,10 +1441,16 @@ private struct Plan2DView: View {
                 editToolButton(.ceilingLightManual)
             }
         } label: {
-            Label("إضافة", systemImage: "plus")
-                .font(.headline)
-                .padding(.horizontal, 16)
-                .frame(height: 44)
+            if compact {
+                Image(systemName: "plus")
+                    .font(.headline)
+                    .frame(width: 44, height: 44)
+            } else {
+                Label("إضافة", systemImage: "plus")
+                    .font(.headline)
+                    .padding(.horizontal, 16)
+                    .frame(height: 44)
+            }
         }
         .buttonStyle(.borderedProminent)
     }
@@ -4000,9 +4148,10 @@ private struct ColorOptionPicker: View {
 
 private struct PlanLegendView: View {
     let layers: ViewerLayerVisibility
+    var compact = false
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: compact ? 7 : 9) {
             if layers.walls { legendDot(.blue, title: "حائط") }
             if layers.openings {
                 legendDot(.orange, title: "باب")
@@ -4014,16 +4163,20 @@ private struct PlanLegendView: View {
             }
         }
         .font(.caption2)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, compact ? 8 : 10)
+        .padding(.vertical, compact ? 6 : 7)
         .background(.ultraThinMaterial, in: Capsule())
+        .accessibilityElement(children: .combine)
     }
 
     private func legendDot(_ color: Color, title: String) -> some View {
         HStack(spacing: 3) {
             Circle().fill(color).frame(width: 7, height: 7)
-            Text(title)
+            if !compact {
+                Text(title)
+            }
         }
+        .accessibilityLabel(title)
     }
 }
 
