@@ -33,7 +33,7 @@ enum ApplicationFileLayout {
         }
     }
 
-    static var appDirectory: URL {
+    static var privateAppDirectory: URL {
         get throws {
             try brandDirectory
                 .appendingPathComponent(
@@ -43,68 +43,61 @@ enum ApplicationFileLayout {
         }
     }
 
+    static var appDirectory: URL {
+        ThreeEStorageManager.shared.appRootURL
+    }
+
     static var workspaceProjectsDirectory: URL {
-        get throws {
-            try appDirectory
-                .appendingPathComponent("Projects", isDirectory: true)
-                .appendingPathComponent("Workspaces", isDirectory: true)
-        }
+        appDirectory
+            .appendingPathComponent("Projects", isDirectory: true)
+            .appendingPathComponent("Workspaces", isDirectory: true)
     }
 
     static var roomScansDirectory: URL {
-        get throws {
-            try appDirectory
-                .appendingPathComponent("Projects", isDirectory: true)
-                .appendingPathComponent("Scans", isDirectory: true)
-        }
+        appDirectory
+            .appendingPathComponent("Projects", isDirectory: true)
+            .appendingPathComponent("Scans", isDirectory: true)
     }
 
     static var exportsDirectory: URL {
-        get throws {
-            try appDirectory.appendingPathComponent(
-                "Exports",
-                isDirectory: true
-            )
-        }
+        appDirectory.appendingPathComponent(
+            "Exports",
+            isDirectory: true
+        )
     }
 
     static var importsDirectory: URL {
-        get throws {
-            try appDirectory.appendingPathComponent(
-                "Opened Files",
-                isDirectory: true
-            )
-        }
+        appDirectory.appendingPathComponent(
+            "Opened Files",
+            isDirectory: true
+        )
     }
 
     static var previewsDirectory: URL {
-        get throws {
-            try appDirectory.appendingPathComponent(
-                "Previews",
-                isDirectory: true
-            )
-        }
+        appDirectory.appendingPathComponent(
+            "Previews",
+            isDirectory: true
+        )
     }
 
     static var indexDirectory: URL {
-        get throws {
-            try appDirectory.appendingPathComponent(
-                "Index",
-                isDirectory: true
-            )
-        }
+        appDirectory.appendingPathComponent(
+            "Index",
+            isDirectory: true
+        )
     }
 
     static func prepare() throws {
+        try ThreeEStorageManager.shared.ensureDirectories()
+
         let directories = [
-            try brandDirectory,
-            try appDirectory,
-            try workspaceProjectsDirectory,
-            try roomScansDirectory,
-            try exportsDirectory,
-            try importsDirectory,
-            try previewsDirectory,
-            try indexDirectory
+            appDirectory,
+            workspaceProjectsDirectory,
+            roomScansDirectory,
+            exportsDirectory,
+            importsDirectory,
+            previewsDirectory,
+            indexDirectory
         ]
 
         for directory in directories {
@@ -114,11 +107,11 @@ enum ApplicationFileLayout {
             )
         }
 
-        try migrateLegacyDirectory(
+        try copyLegacyDirectoryIfNeeded(
             named: "3ERoomElectricalProjects",
             to: workspaceProjectsDirectory
         )
-        try migrateLegacyDirectory(
+        try copyLegacyDirectoryIfNeeded(
             named: "RoomSurveyProjects",
             to: roomScansDirectory
         )
@@ -148,7 +141,7 @@ enum ApplicationFileLayout {
         }
     }
 
-    private static func migrateLegacyDirectory(
+    private static func copyLegacyDirectoryIfNeeded(
         named legacyName: String,
         to destination: URL
     ) throws {
@@ -164,33 +157,45 @@ enum ApplicationFileLayout {
             return
         }
 
-        let legacyContents = try fileManager.contentsOfDirectory(
-            at: legacy,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
+        try copyMissingContents(from: legacy, to: destination)
+    }
+
+    private static func copyMissingContents(
+        from sourceDirectory: URL,
+        to destinationDirectory: URL
+    ) throws {
+        try fileManager.createDirectory(
+            at: destinationDirectory,
+            withIntermediateDirectories: true
+        )
+        let children = try fileManager.contentsOfDirectory(
+            at: sourceDirectory,
+            includingPropertiesForKeys: [
+                .isDirectoryKey,
+                .isRegularFileKey,
+                .isSymbolicLinkKey
+            ],
+            options: []
         )
 
-        for source in legacyContents {
-            let target = destination.appendingPathComponent(
-                source.lastPathComponent
+        for source in children {
+            let values = try source.resourceValues(forKeys: [
+                .isDirectoryKey,
+                .isRegularFileKey,
+                .isSymbolicLinkKey
+            ])
+            guard values.isSymbolicLink != true else { continue }
+
+            let target = destinationDirectory.appendingPathComponent(
+                source.lastPathComponent,
+                isDirectory: values.isDirectory == true
             )
-            guard !fileManager.fileExists(atPath: target.path) else {
-                continue
-            }
-            do {
-                try fileManager.moveItem(at: source, to: target)
-            } catch {
+            if values.isDirectory == true {
+                try copyMissingContents(from: source, to: target)
+            } else if values.isRegularFile == true,
+                      !fileManager.fileExists(atPath: target.path) {
                 try fileManager.copyItem(at: source, to: target)
             }
-        }
-
-        let remaining = try? fileManager.contentsOfDirectory(
-            at: legacy,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )
-        if remaining?.isEmpty == true {
-            try? fileManager.removeItem(at: legacy)
         }
     }
 }

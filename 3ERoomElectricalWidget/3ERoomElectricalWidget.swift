@@ -3,7 +3,7 @@ import UIKit
 import WidgetKit
 
 private enum WidgetSharedConfiguration {
-    static let appGroupIdentifier = "group.com.essam.threeroomelectrical"
+    static let appGroupIdentifier = "group.com.essam.3e"
     static let widgetKind = "3ERoomElectricalRecentProjects"
     static let dataFolderName = "3ERoomElectricalWidgetData"
     static let snapshotFileName = "recent-projects.json"
@@ -21,7 +21,7 @@ private struct WidgetProjectSnapshot: Codable, Identifiable {
 
     var id: UUID { projectID }
     var destinationURL: URL? {
-        URL(string: "3eroomelectrical://projects?project=\(projectID.uuidString)")
+        URL(string: "electrical://open?project=\(projectID.uuidString)")
     }
 }
 
@@ -148,13 +148,13 @@ private struct RecentProjectsWidgetView: View {
     }
 
     private var emptyView: some View {
-        Link(destination: URL(string: "3eroomelectrical://projects")!) {
+        Link(destination: URL(string: "electrical://open")!) {
             ZStack {
                 backgroundGradient
                 VStack(spacing: 10) {
                     Image(systemName: "viewfinder.rectangular")
                         .font(.system(size: 30, weight: .bold))
-                    Text("3E Room Electrical")
+                    Text("3ERoomElectrical")
                         .font(.headline)
                     Text("افتح التطبيق مرة واحدة لإظهار آخر المشروعات")
                         .font(.caption)
@@ -173,7 +173,7 @@ private struct RecentProjectsWidgetView: View {
     ) -> some View {
         Link(
             destination: project.destinationURL
-                ?? URL(string: "3eroomelectrical://projects")!
+                ?? URL(string: "electrical://open")!
         ) {
             content()
         }

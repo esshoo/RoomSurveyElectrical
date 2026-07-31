@@ -2,7 +2,7 @@ import Foundation
 import WidgetKit
 
 enum HomeWidgetSharedConfiguration {
-    static let appGroupIdentifier = "group.com.essam.threeroomelectrical"
+    static let appGroupIdentifier = "group.com.essam.3e"
     static let widgetKind = "3ERoomElectricalRecentProjects"
     static let dataFolderName = "3ERoomElectricalWidgetData"
     static let snapshotFileName = "recent-projects.json"

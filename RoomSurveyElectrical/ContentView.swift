@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var store = ProjectStore()
+    @ObservedObject private var threeEStorage = ThreeEStorageManager.shared
     @State private var showNewProject = false
     @State private var showGlobalSettings = false
     @State private var showProjectImporter = false
@@ -13,6 +14,9 @@ struct ContentView: View {
     @State private var pendingExternalDocument: ExternalDocumentInspection?
     @State private var packageNotice: ProjectPackageNotice?
     @State private var pendingWidgetProject: SurveyProject?
+    @State private var showThreeEFolderPicker = false
+    @State private var showThreeEReselectionAlert = false
+    @State private var pendingThreeEURLAfterFolderSelection: URL?
 
     var body: some View {
         NavigationStack {
@@ -150,9 +154,52 @@ struct ContentView: View {
         .sheet(isPresented: $showGlobalSettings) {
             ElectricalSettingsView(
                 title: "الإعدادات",
-                initialSettings: GlobalSettingsRepository.load()
+                initialSettings: GlobalSettingsRepository.load(),
+                showsThreeEStorage: true,
+                onStorageChanged: {
+                    try? ApplicationFileLayout.prepare()
+                    store.reload()
+                }
             ) { settings in
                 GlobalSettingsRepository.save(settings)
+            }
+        }
+        .sheet(isPresented: $showThreeEFolderPicker) {
+            ThreeEFolderPicker { result in
+                showThreeEFolderPicker = false
+                switch result {
+                case .success(let url):
+                    do {
+                        try threeEStorage.connectToSelectedThreeEFolder(url)
+                        try ApplicationFileLayout.prepare()
+                        store.reload()
+                        if let pendingURL =
+                            pendingThreeEURLAfterFolderSelection {
+                            pendingThreeEURLAfterFolderSelection = nil
+                            handleThreeEURL(pendingURL)
+                        } else {
+                            packageNotice = ProjectPackageNotice(
+                                title: "تم ربط مجلد 3E",
+                                message:
+                                    "تم تسجيل 3ERoomElectrical داخل System/registry.json واستخدام Apps/RoomElectrical للتخزين."
+                            )
+                        }
+                    } catch {
+                        packageNotice = ProjectPackageNotice(
+                            title: "تعذر ربط مجلد 3E",
+                            message: error.localizedDescription
+                        )
+                    }
+                case .failure(let error):
+                    if error is CancellationError {
+                        pendingThreeEURLAfterFolderSelection = nil
+                    } else {
+                        packageNotice = ProjectPackageNotice(
+                            title: "تعذر اختيار المجلد",
+                            message: error.localizedDescription
+                        )
+                    }
+                }
             }
         }
         .sheet(item: $pendingImport) { package in
@@ -227,23 +274,168 @@ struct ContentView: View {
                 dismissButton: .default(Text("حسنًا"))
             )
         }
-        .onAppear(perform: store.reload)
+        .alert(
+            "إعادة ربط مجلد 3E",
+            isPresented: $showThreeEReselectionAlert
+        ) {
+            Button("اختيار مجلد 3E") {
+                threeEStorage.clearFolderReselectionRequest()
+                showThreeEFolderPicker = true
+            }
+            Button("لاحقًا", role: .cancel) {
+                threeEStorage.clearFolderReselectionRequest()
+            }
+        } message: {
+            Text(
+                "تعذر استعادة صلاحية المجلد السابق. اختر مجلد 3E نفسه المستخدم في تطبيقات المجموعة."
+            )
+        }
+        .onAppear {
+            store.reload()
+            showThreeEReselectionAlert =
+                threeEStorage.needsFolderReselection
+        }
+        .onChange(of: threeEStorage.needsFolderReselection) {
+            _, needsReselection in
+            if needsReselection {
+                showThreeEReselectionAlert = true
+            }
+        }
     }
 
     private func handleOpenedURL(_ url: URL) {
-        if url.scheme?.lowercased() == "3eroomelectrical" {
-            store.reload()
-            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            let projectValue = components?.queryItems?.first(
-                where: { $0.name == "project" }
-            )?.value
-            if let projectValue,
-               let projectID = UUID(uuidString: projectValue),
-               let project = store.project(id: projectID) {
-                pendingWidgetProject = project
-            }
+        let scheme = url.scheme?.lowercased()
+        if scheme == ThreeEStorageConstants.urlScheme {
+            handleThreeEURL(url)
             return
         }
+        if scheme == ThreeEStorageConstants.legacyURLScheme {
+            handleLegacyDeepLink(url)
+            return
+        }
+        handleDocumentURL(url)
+    }
+
+    private func handleThreeEURL(_ url: URL) {
+        do {
+            let command = try ThreeEURLRouter.command(for: url)
+            switch command {
+            case .open(let relativePath, let projectID):
+                store.reload()
+
+                if let projectID,
+                   let project = store.project(id: projectID) {
+                    pendingWidgetProject = project
+                    return
+                }
+
+                guard let relativePath else {
+                    return
+                }
+                let target = try ThreeEURLRouter.target(
+                    for: relativePath,
+                    storage: threeEStorage
+                )
+                handleThreeEOpenTarget(target)
+            }
+        } catch ThreeEStorageError.sharedFolderNotConnected {
+            pendingThreeEURLAfterFolderSelection = url
+            showThreeEFolderPicker = true
+        } catch {
+            packageNotice = ProjectPackageNotice(
+                title: "تعذر تنفيذ رابط 3E",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func handleLegacyDeepLink(_ url: URL) {
+        store.reload()
+        let components = URLComponents(
+            url: url,
+            resolvingAgainstBaseURL: false
+        )
+        let projectValue = components?.queryItems?.first(
+            where: { $0.name == "project" }
+        )?.value
+        if let projectValue,
+           let projectID = UUID(uuidString: projectValue),
+           let project = store.project(id: projectID) {
+            pendingWidgetProject = project
+        }
+    }
+
+    private func handleThreeEOpenTarget(_ target: ThreeEOpenTarget) {
+        if target.isDirectory {
+            openProjectOrDocumentDirectory(target.url)
+        } else {
+            handleDocumentURL(target.url)
+        }
+    }
+
+    private func openProjectOrDocumentDirectory(_ directory: URL) {
+        store.reload()
+
+        let workspaceURL = directory.appendingPathComponent("workspace.json")
+        if let data = try? Data(contentsOf: workspaceURL) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            if let workspace = try? decoder.decode(
+                SurveyProject.self,
+                from: data
+            ), let project = store.project(id: workspace.id) {
+                pendingWidgetProject = project
+                return
+            }
+        }
+
+        if let identifier = UUID(uuidString: directory.lastPathComponent) {
+            if let project = store.project(id: identifier) {
+                pendingWidgetProject = project
+                return
+            }
+            if let owner = store.projects.first(where: { project in
+                project.scans.contains(where: { $0.id == identifier })
+            }) {
+                pendingWidgetProject = owner
+                return
+            }
+        }
+
+        let requestedName = directory.lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if let project = store.projects.first(where: {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() == requestedName
+        }) {
+            pendingWidgetProject = project
+            return
+        }
+
+        let supportedFiles = ((try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []).filter {
+            ["3eroom", "pdf", "dxf"].contains(
+                $0.pathExtension.lowercased()
+            )
+        }
+
+        if supportedFiles.count == 1, let file = supportedFiles.first {
+            handleDocumentURL(file)
+            return
+        }
+
+        packageNotice = ProjectPackageNotice(
+            title: "تعذر تحديد المشروع",
+            message:
+                "المجلد مفتوح داخل 3E، لكنه لا يطابق مشروعًا محفوظًا ولا يحتوي ملف .3eroom أوPDF أوDXF واحدًا يمكن فتحه مباشرة."
+        )
+    }
+
+    private func handleDocumentURL(_ url: URL) {
         switch url.pathExtension.lowercased() {
         case "3eroom":
             prepareProjectImport(from: url)
@@ -263,6 +455,11 @@ struct ContentView: View {
                     )
                 }
             }
+        case "json"
+            where url.lastPathComponent == "workspace.json":
+            openProjectOrDocumentDirectory(
+                url.deletingLastPathComponent()
+            )
         default:
             packageNotice = ProjectPackageNotice(
                 title: "نوع ملف غير مدعوم",
@@ -2329,19 +2526,28 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
 
 struct ElectricalSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var threeEStorage = ThreeEStorageManager.shared
     @State private var settings: ElectricalPlacementSettings
     @State private var selectedCategory: SettingsCategory = .general
+    @State private var showThreeEFolderPicker = false
+    @State private var threeEFolderError: String?
 
     let title: String
+    let showsThreeEStorage: Bool
+    let onStorageChanged: () -> Void
     let onSave: (ElectricalPlacementSettings) -> Void
 
     init(
         title: String,
         initialSettings: ElectricalPlacementSettings,
+        showsThreeEStorage: Bool = false,
+        onStorageChanged: @escaping () -> Void = {},
         onSave: @escaping (ElectricalPlacementSettings) -> Void
     ) {
         self.title = title
         _settings = State(initialValue: initialSettings)
+        self.showsThreeEStorage = showsThreeEStorage
+        self.onStorageChanged = onStorageChanged
         self.onSave = onSave
     }
 
@@ -2369,6 +2575,38 @@ struct ElectricalSettingsView: View {
             }
         }
         .environment(\.layoutDirection, .rightToLeft)
+        .sheet(isPresented: $showThreeEFolderPicker) {
+            ThreeEFolderPicker { result in
+                showThreeEFolderPicker = false
+                switch result {
+                case .success(let url):
+                    do {
+                        try threeEStorage.connectToSelectedThreeEFolder(url)
+                        try ApplicationFileLayout.prepare()
+                        onStorageChanged()
+                    } catch {
+                        threeEFolderError = error.localizedDescription
+                    }
+                case .failure(let error):
+                    if !(error is CancellationError) {
+                        threeEFolderError = error.localizedDescription
+                    }
+                }
+            }
+        }
+        .alert(
+            "تعذر ربط مجلد 3E",
+            isPresented: Binding(
+                get: { threeEFolderError != nil },
+                set: { if !$0 { threeEFolderError = nil } }
+            )
+        ) {
+            Button("حسنًا", role: .cancel) {
+                threeEFolderError = nil
+            }
+        } message: {
+            Text(threeEFolderError ?? "حدث خطأ غير معروف.")
+        }
     }
 
     private var settingsTabs: some View {
@@ -2507,6 +2745,15 @@ struct ElectricalSettingsView: View {
 
     @ViewBuilder
     private var appInformationSections: some View {
+        if showsThreeEStorage {
+            ThreeEStorageSettingsSection(
+                storage: threeEStorage,
+                chooseFolder: {
+                    showThreeEFolderPicker = true
+                }
+            )
+        }
+
         Section("المسح المكاني") {
             Picker(
                 "محتوى المسح",
@@ -2674,7 +2921,7 @@ struct ElectricalSettingsView: View {
         }
 
         Section("حول التطبيق") {
-            LabeledContent("الاسم", value: "3E Room Electrical")
+            LabeledContent("الاسم", value: "3ERoomElectrical")
             LabeledContent("الإصدار", value: appVersion)
             LabeledContent("رقم البناء", value: appBuild)
             LabeledContent("Bundle ID", value: appBundleIdentifier)

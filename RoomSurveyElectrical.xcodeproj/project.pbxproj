@@ -353,7 +353,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.9.26;
-				PRODUCT_BUNDLE_IDENTIFIER = com.essam.threeroomelectrical;
+				PRODUCT_BUNDLE_IDENTIFIER = com.essam.3E.roomelectrical;
 				PRODUCT_NAME = "3ERoomElectrical";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -377,7 +377,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.9.26;
-				PRODUCT_BUNDLE_IDENTIFIER = com.essam.threeroomelectrical;
+				PRODUCT_BUNDLE_IDENTIFIER = com.essam.3E.roomelectrical;
 				PRODUCT_NAME = "3ERoomElectrical";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -403,7 +403,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.9.26;
-				PRODUCT_BUNDLE_IDENTIFIER = com.essam.threeroomelectrical.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.essam.3E.roomelectrical.widget;
 				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -431,7 +431,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.9.26;
-				PRODUCT_BUNDLE_IDENTIFIER = com.essam.threeroomelectrical.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.essam.3E.roomelectrical.widget;
 				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

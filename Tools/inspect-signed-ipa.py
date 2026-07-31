@@ -16,7 +16,7 @@ from typing import Any
 
 WIDGET_NAME = "3ERoomElectricalWidgetExtension.appex"
 EXTENSION_POINT = "com.apple.widgetkit-extension"
-APP_GROUP = "group.com.personal.roomsurveyelectrical"
+APP_GROUP = "group.com.essam.3e"
 
 
 def fail(message: str) -> None:
@@ -160,8 +160,9 @@ def main() -> int:
             ok("Both provisioning profiles authorize the shared App Group")
         else:
             warn(
-                "The widget may still appear, but recent-project data cannot be "
-                "shared unless both profiles authorize the same App Group"
+                "App Group sharing is intentionally optional for free signing. "
+                "Recent-project widget data becomes available only when both "
+                "profiles authorize group.com.essam.3e."
             )
 
     if failures:

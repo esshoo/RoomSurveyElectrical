@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>3E Room Electrical</string>
+	<string>3ERoomElectrical</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -141,9 +141,10 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>com.personal.roomsurveyelectrical</string>
+			<string>com.essam.3E.roomelectrical</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
+				<string>electrical</string>
 				<string>3eroomelectrical</string>
 			</array>
 		</dict>

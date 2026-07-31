@@ -83,7 +83,8 @@ def main() -> int:
     print(f"Widget executable: {executable}")
     print(
         "Note: this verifies packaging only. The signer must sign both the "
-        "main app and the .appex and provision the shared App Group."
+        "main app and the .appex. App Group provisioning is intentionally "
+        "optional for the current free-signing build."
     )
     return 0
 
