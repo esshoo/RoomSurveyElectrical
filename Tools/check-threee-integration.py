@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static acceptance checks for Build 47.2 shared 3E integration."""
+"""Static acceptance checks for Build 48 3E registry compatibility."""
 from __future__ import annotations
 
 import json
@@ -26,24 +26,36 @@ def text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def normalize_apps(raw_apps: object) -> dict[str, dict[str, object]]:
+    if isinstance(raw_apps, dict):
+        result: dict[str, dict[str, object]] = {}
+        for dictionary_key, raw_entry in raw_apps.items():
+            if not isinstance(raw_entry, dict):
+                raise ValueError("invalid apps dictionary entry")
+            entry = dict(raw_entry)
+            app_key = str(entry.get("appKey") or dictionary_key).strip()
+            if not app_key:
+                raise ValueError("missing appKey")
+            entry["appKey"] = app_key
+            result[app_key] = entry
+        return result
+
+    if isinstance(raw_apps, list):
+        result = {}
+        for raw_entry in raw_apps:
+            if not isinstance(raw_entry, dict):
+                raise ValueError("invalid apps array entry")
+            entry = dict(raw_entry)
+            app_key = str(entry.get("appKey") or "").strip()
+            if not app_key:
+                raise ValueError("missing appKey")
+            result[app_key] = entry
+        return result
+
+    raise ValueError("apps is neither a list nor an object")
+
+
 def test_registry_merge_contract() -> None:
-    # Mirrors the JSON merge contract implemented in ThreeERegistry.swift.
-    root = {
-        "schemaVersion": 3,
-        "futureRootField": {"preserve": True},
-        "apps": [
-            {
-                "appKey": "lidarLab",
-                "displayName": "3ELiDAR",
-                "custom": "keep-me",
-            },
-            {
-                "appKey": "roomElectrical",
-                "displayName": "old",
-                "futureAppField": 7,
-            },
-        ],
-    }
     expected = {
         "appKey": "roomElectrical",
         "displayName": "3ERoomElectrical",
@@ -51,25 +63,66 @@ def test_registry_merge_contract() -> None:
         "urlScheme": "electrical",
         "folder": "Apps/RoomElectrical",
     }
-    apps = root["apps"]
-    index = next(i for i, item in enumerate(apps) if item.get("appKey") == "roomElectrical")
-    updated = dict(apps[index])
-    updated.update(expected)
-    apps[index] = updated
 
-    with tempfile.TemporaryDirectory() as tmp:
-        destination = Path(tmp) / "registry.json"
-        temporary = destination.with_suffix(".tmp")
-        temporary.write_text(json.dumps(root, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-        temporary.replace(destination)
-        loaded = json.loads(destination.read_text(encoding="utf-8"))
+    fixtures = [
+        {
+            "schemaVersion": 3,
+            "futureRootField": {"preserve": True},
+            "apps": [
+                {
+                    "appKey": "lidar",
+                    "displayName": "3ELiDAR",
+                    "custom": "keep-me",
+                },
+                {
+                    "appKey": "roomElectrical",
+                    "displayName": "old",
+                    "futureAppField": 7,
+                },
+            ],
+        },
+        {
+            "schemaVersion": 3,
+            "futureRootField": {"preserve": True},
+            "apps": {
+                "lidar": {
+                    "appKey": "lidar",
+                    "displayName": "3ELiDAR",
+                    "custom": "keep-me",
+                },
+                "roomElectrical": {
+                    "appKey": "roomElectrical",
+                    "displayName": "old",
+                    "futureAppField": 7,
+                },
+            },
+        },
+    ]
 
-    check(loaded["schemaVersion"] == 3, "registry preserves existing schemaVersion")
-    check(loaded["futureRootField"] == {"preserve": True}, "registry preserves unknown root fields")
-    check(loaded["apps"][0]["custom"] == "keep-me", "registry preserves other app records")
-    room = next(item for item in loaded["apps"] if item["appKey"] == "roomElectrical")
-    check(room["futureAppField"] == 7, "registry preserves unknown roomElectrical fields")
-    check(all(room[key] == value for key, value in expected.items()), "registry updates only required roomElectrical values")
+    for fixture_index, root in enumerate(fixtures):
+        apps = normalize_apps(root["apps"])
+        updated = dict(apps.get("roomElectrical", {}))
+        updated.update(expected)
+        apps["roomElectrical"] = updated
+        root["apps"] = apps
+
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "registry.json"
+            temporary = destination.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(root, ensure_ascii=False, sort_keys=True),
+                encoding="utf-8",
+            )
+            temporary.replace(destination)
+            loaded = json.loads(destination.read_text(encoding="utf-8"))
+
+        prefix = f"registry fixture {fixture_index + 1}"
+        check(loaded["schemaVersion"] == 3, f"{prefix} preserves schemaVersion")
+        check(loaded["futureRootField"] == {"preserve": True}, f"{prefix} preserves unknown root fields")
+        check(loaded["apps"]["lidar"]["custom"] == "keep-me", f"{prefix} preserves other app records")
+        room = loaded["apps"]["roomElectrical"]
+        check(room["futureAppField"] == 7, f"{prefix} preserves unknown roomElectrical fields")
+        check(all(room[key] == value for key, value in expected.items()), f"{prefix} updates required roomElectrical values")
 
 
 def main() -> int:
@@ -123,8 +176,10 @@ def main() -> int:
     check("case .filesFolder" in storage and "case .privateSandbox" in storage, "Files and private fallback sources exist")
     check("ThreeERegistry.registerRoomElectricalApp" in storage, "storage registers app in registry")
     check("options: .atomic" in registry, "registry uses atomic write")
-    check("var updatedEntry = apps[index]" in registry, "registry preserves unknown app-entry fields")
+    check("var updatedEntry = apps[appKey] ?? [:]" in registry, "registry preserves unknown app-entry fields")
     check("rootObject = dictionary" in registry, "registry reads existing root before updating")
+    check("normalizedApps" in registry, "registry accepts list and dictionary app formats")
+    check("[String: [String: Any]]" in registry, "registry writes canonical app-keyed dictionary")
 
     for path in [
         "Projects/Workspaces",
