@@ -335,8 +335,9 @@ struct RoomViewerView: View {
     private var effectiveLayers: ViewerLayerVisibility {
         var resolved = layers
         let originalScanVisible = workspaceLayerVisible(.originalScan)
+        let correctionsVisible = workspaceLayerVisible(.architecturalCorrections)
         resolved.floor = resolved.floor && originalScanVisible
-        resolved.walls = resolved.walls && originalScanVisible
+        resolved.walls = resolved.walls && (originalScanVisible || correctionsVisible)
         resolved.openings = resolved.openings && originalScanVisible
         resolved.furniture = resolved.furniture
             && workspaceLayerVisible(.furnitureAndDesign)
@@ -375,8 +376,9 @@ struct RoomViewerView: View {
 
     private func applyWorkspaceLayerVisibility() {
         let originalScanVisible = workspaceLayerVisible(.originalScan)
+        let correctionsVisible = workspaceLayerVisible(.architecturalCorrections)
         layers.floor = originalScanVisible
-        layers.walls = originalScanVisible
+        layers.walls = originalScanVisible || correctionsVisible
         layers.openings = originalScanVisible
         layers.furniture = workspaceLayerVisible(.furnitureAndDesign)
         layers.electrical = workspaceLayerVisible(.existingElectrical)

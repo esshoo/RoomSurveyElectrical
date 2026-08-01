@@ -37,6 +37,13 @@ jobs:
           plutil -lint Support/RoomSurveyElectrical.entitlements
           plutil -lint Support/3ERoomElectricalWidget.entitlements
 
+      - name: Verify Build 49.1 architectural corrections
+        shell: bash
+        run: |
+          python3 Tools/check-adaptive-layout.py
+          python3 Tools/check-threee-integration.py
+          python3 Tools/check-architectural-corrections.py
+
       - name: Build for a physical iPhone
         id: xcodebuild
         shell: bash

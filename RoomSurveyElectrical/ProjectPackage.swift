@@ -623,6 +623,20 @@ enum ProjectPackageService {
             wallPhotoSegments: source.wallPhotoSegments,
             photographicScanProgress: source.photographicScanProgress,
             scanContinuationState: source.scanContinuationState,
+            originalWalls: source.originalWalls,
+            architecturalCorrections: source.architecturalCorrections?.map {
+                ArchitecturalWallCorrection(
+                    id: $0.id,
+                    changeSetID: $0.changeSetID,
+                    scanID: id,
+                    wallID: $0.wallID,
+                    source: $0.source,
+                    beforeState: $0.beforeState,
+                    afterState: $0.afterState,
+                    appliedAt: $0.appliedAt,
+                    note: $0.note
+                )
+            },
             snapshotGeometryRevision: source.snapshotGeometryRevision
         )
     }

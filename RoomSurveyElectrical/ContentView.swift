@@ -1358,7 +1358,7 @@ private struct ScanReferenceRow: View {
                     .foregroundStyle(.secondary)
         if scan.resolvedSpatialAlignmentState == .independentNeedsAlignment {
           Label(
-            "مسح مستقل — المحاذاة في Build 49",
+            "مسح مستقل — المحاذاة في Build 50",
             systemImage: scan.resolvedSpatialAlignmentState.systemImage
           )
           .font(.caption2)

@@ -602,7 +602,7 @@ struct SurveyProject: Codable, Identifiable, Equatable {
         scans: [ScanReference] = [],
         isImportedArchive: Bool = false,
         isArchived: Bool? = nil,
-        foundationSchemaVersion: Int? = 2,
+        foundationSchemaVersion: Int? = 3,
         projectSettings: ProjectSettings? = nil,
         roomSettings: [RoomSettings]? = nil,
         elementOverrides: [ElementSettingsOverride]? = nil,

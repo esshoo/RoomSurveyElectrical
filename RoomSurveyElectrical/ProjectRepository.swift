@@ -181,6 +181,7 @@ enum ProjectRepository {
 
     static func save(_ project: RoomProject) throws {
         var normalizedProject = project
+        normalizedProject.normalizeArchitecturalCorrections()
         normalizedProject.normalizeWallPhotoMetadata()
         let projectDirectory = try directory(for: normalizedProject.id, create: true)
         let data = try storageEncoder.encode(normalizedProject)
@@ -250,6 +251,7 @@ enum ProjectRepository {
             return nil
         }
 
+        project.normalizeArchitecturalCorrections()
         project.normalizeWallPhotoMetadata()
 
         if project.floors == nil || project.objects == nil,
@@ -382,6 +384,20 @@ enum ProjectRepository {
             wallPhotoSegments: source.wallPhotoSegments,
             photographicScanProgress: source.photographicScanProgress,
             scanContinuationState: source.scanContinuationState,
+            originalWalls: source.originalWalls,
+            architecturalCorrections: source.architecturalCorrections?.map {
+                ArchitecturalWallCorrection(
+                    id: $0.id,
+                    changeSetID: $0.changeSetID,
+                    scanID: newID,
+                    wallID: $0.wallID,
+                    source: $0.source,
+                    beforeState: $0.beforeState,
+                    afterState: $0.afterState,
+                    appliedAt: $0.appliedAt,
+                    note: $0.note
+                )
+            },
             snapshotGeometryRevision: source.snapshotGeometryRevision
         )
         try save(copy)

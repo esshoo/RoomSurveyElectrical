@@ -29,6 +29,13 @@ enum RoomProjectGeometryMerger {
         referenceWall: SpatialWallReference? = nil,
         requiresReferenceWallMatch: Bool = false
     ) -> MergeOutcome {
+        if source.hasArchitecturalCorrections {
+            return rejected(
+                source: source,
+                transform: incomingWorldTransform ?? matrix_identity_float4x4,
+                message: "هذا المسح يحتوي على تصحيحات معمارية معتمدة. احفظ الجلسة الجديدة كمسح مستقل إلى أن تتوفر مقارنة إعادة المسح في Build 49.4."
+            )
+        }
         let initial = incomingWorldTransform ?? matrix_identity_float4x4
         guard SpatialCoordinateContract.validateProjectMapping(initial).isSafeRigidTransform else {
             return rejected(
@@ -159,6 +166,13 @@ enum RoomProjectGeometryMerger {
         into source: RoomProject,
         includeFurniture: Bool
     ) -> MergeOutcome {
+        if source.hasArchitecturalCorrections {
+            return rejected(
+                source: source,
+                transform: matrix_identity_float4x4,
+                message: "لا يمكن دمج نقطة استرداد هندسية فوق تصحيحات معمارية معتمدة. احتُفظ بالحالتين دون تغيير."
+            )
+        }
         let maximumTilt = checkpoint.walls.map(wallTiltDegrees).max() ?? 0
         guard checkpoint.walls.allSatisfy({
             SpatialCoordinateContract.wallIsVertical($0.matrix)

@@ -71,6 +71,7 @@ enum WorkspaceRepository {
         case changeSetNotFound
         case scanNotFound
         case invalidChangeRecord
+        case architecturalConflict
 
         var errorDescription: String? {
             switch self {
@@ -91,7 +92,9 @@ enum WorkspaceRepository {
             case .scanNotFound:
                 "المسح المرتبط بجلسة المراجعة غير موجود."
             case .invalidChangeRecord:
-                "سجل تعديل العنصر غير صالح أو لا يطابق المسح المحدد."
+                "سجل التعديل غير صالح أو لا يطابق المسح المحدد."
+            case .architecturalConflict:
+                "تغيرت هندسة الحائط منذ بدء الجلسة. حدّث الجلسة من أحدث حالة قبل الاعتماد."
             }
         }
     }
@@ -433,7 +436,8 @@ enum WorkspaceRepository {
            !project.scans.contains(where: { $0.id == targetScanID }) {
             throw RepositoryError.scanNotFound
         }
-        if mode == .elementUpdate, targetScanID == nil {
+        if (mode == .elementUpdate || mode == .architecturalUpdate),
+           targetScanID == nil {
             throw RepositoryError.scanNotFound
         }
 
@@ -484,6 +488,218 @@ enum WorkspaceRepository {
             targetScanID: scanID,
             electricalDesignMode: designMode
         )
+    }
+
+    static func beginArchitecturalCorrectionSession(
+        projectID: UUID,
+        scanID: UUID,
+        name: String,
+        notes: String?
+    ) throws -> SurveyProject {
+        guard let project = loadStoredProject(projectID: projectID),
+              project.scans.contains(where: { $0.id == scanID }),
+              ProjectRepository.load(projectID: scanID) != nil else {
+            throw RepositoryError.scanNotFound
+        }
+        let existingDraft = (project.changeSets ?? []).contains {
+            $0.mode == .architecturalUpdate
+                && $0.targetScanID == scanID
+                && $0.status == .draft
+        }
+        guard !existingDraft else {
+            throw RepositoryError.operationNotAllowed
+        }
+        return try beginChangeSet(
+            projectID: projectID,
+            name: name,
+            mode: .architecturalUpdate,
+            notes: notes,
+            targetScanID: scanID
+        )
+    }
+
+    static func upsertArchitecturalWallChangeRecord(
+        projectID: UUID,
+        changeSetID: UUID,
+        record: ProjectChangeRecord
+    ) throws -> SurveyProject {
+        guard record.entityKind == .architecturalElement,
+              record.action == .modify,
+              let recordScanID = record.scanID,
+              let entityID = record.entityID else {
+            throw RepositoryError.invalidChangeRecord
+        }
+        let previous = try ProjectChangePayloadCoder.decode(
+            ArchitecturalWallState.self,
+            from: record.previousState
+        )
+        let next = try ProjectChangePayloadCoder.decode(
+            ArchitecturalWallState.self,
+            from: record.newState
+        )
+        guard previous.wallID == entityID,
+              next.wallID == entityID,
+              previous != next,
+              previous.isValid,
+              next.isValid else {
+            throw RepositoryError.invalidChangeRecord
+        }
+
+        guard var project = loadStoredProject(projectID: projectID),
+              var changeSets = project.changeSets,
+              let index = changeSets.firstIndex(where: {
+                  $0.id == changeSetID
+              }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        guard changeSets[index].status == .draft,
+              changeSets[index].mode == .architecturalUpdate,
+              changeSets[index].targetScanID == recordScanID else {
+            throw RepositoryError.operationNotAllowed
+        }
+
+        if let existingIndex = changeSets[index].changes.firstIndex(where: {
+            $0.entityKind == .architecturalElement
+                && $0.entityID == entityID
+                && $0.scanID == recordScanID
+        }) {
+            var replacement = record
+            replacement.previousState =
+                changeSets[index].changes[existingIndex].previousState
+                    ?? record.previousState
+            changeSets[index].changes[existingIndex] = replacement
+        } else {
+            changeSets[index].changes.append(record)
+        }
+        changeSets[index].updatedAt = Date()
+        project.changeSets = changeSets
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func removeArchitecturalWallChangeRecord(
+        projectID: UUID,
+        changeSetID: UUID,
+        wallID: UUID
+    ) throws -> SurveyProject {
+        guard var project = loadStoredProject(projectID: projectID),
+              var changeSets = project.changeSets,
+              let index = changeSets.firstIndex(where: {
+                  $0.id == changeSetID
+              }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        guard changeSets[index].status == .draft,
+              changeSets[index].mode == .architecturalUpdate else {
+            throw RepositoryError.operationNotAllowed
+        }
+        changeSets[index].changes.removeAll {
+            $0.entityKind == .architecturalElement
+                && $0.entityID == wallID
+        }
+        changeSets[index].updatedAt = Date()
+        project.changeSets = changeSets
+        project.updatedAt = Date()
+        try save(project)
+        return project
+    }
+
+    static func applyArchitecturalChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws -> SurveyProject {
+        guard var workspace = loadStoredProject(projectID: projectID),
+              var changeSets = workspace.changeSets,
+              let changeSetIndex = changeSets.firstIndex(where: {
+                  $0.id == changeSetID
+              }) else {
+            throw RepositoryError.changeSetNotFound
+        }
+        let changeSet = changeSets[changeSetIndex]
+        guard changeSet.status == .draft,
+              changeSet.mode == .architecturalUpdate,
+              let scanID = changeSet.targetScanID,
+              workspace.scans.contains(where: { $0.id == scanID }),
+              var room = ProjectRepository.load(projectID: scanID) else {
+            throw RepositoryError.scanNotFound
+        }
+        guard changeSet.changes.allSatisfy({
+            $0.entityKind == .architecturalElement
+                && $0.scanID == scanID
+                && $0.action == .modify
+        }) else {
+            throw RepositoryError.invalidChangeRecord
+        }
+        let architecturalRecords = changeSet.changes
+            .sorted { $0.createdAt < $1.createdAt }
+        guard !architecturalRecords.isEmpty else {
+            throw RepositoryError.operationNotAllowed
+        }
+
+        let originalRoom = room
+        var changedWallIDs: Set<UUID> = []
+        do {
+            for record in architecturalRecords {
+                guard record.action == .modify,
+                      record.scanID == scanID,
+                      let wallID = record.entityID else {
+                    throw RepositoryError.invalidChangeRecord
+                }
+                let previous = try ProjectChangePayloadCoder.decode(
+                    ArchitecturalWallState.self,
+                    from: record.previousState
+                )
+                let next = try ProjectChangePayloadCoder.decode(
+                    ArchitecturalWallState.self,
+                    from: record.newState
+                )
+                guard previous.wallID == wallID,
+                      next.wallID == wallID,
+                      previous.isValid,
+                      next.isValid,
+                      let currentWall = room.walls.first(where: {
+                          $0.id == wallID
+                      }),
+                      ArchitecturalWallState(wall: currentWall) == previous else {
+                    throw RepositoryError.architecturalConflict
+                }
+
+                let correction = ArchitecturalWallCorrection(
+                    changeSetID: changeSetID,
+                    scanID: scanID,
+                    wallID: wallID,
+                    beforeState: previous,
+                    afterState: next,
+                    note: record.note
+                )
+                do {
+                    try room.applyArchitecturalCorrection(correction)
+                } catch ArchitecturalCorrectionError.staleWall {
+                    throw RepositoryError.architecturalConflict
+                } catch {
+                    throw RepositoryError.invalidChangeRecord
+                }
+                changedWallIDs.insert(wallID)
+            }
+
+            room.refreshElectricalPointsForCorrectedWalls(changedWallIDs)
+            room.normalizeWallPhotoMetadata()
+            room.snapshotGeometryRevision =
+                (room.snapshotGeometryRevision ?? 0) + 1
+            try ProjectRepository.save(room)
+
+            changeSets[changeSetIndex].status = .applied
+            changeSets[changeSetIndex].updatedAt = Date()
+            workspace.changeSets = changeSets
+            workspace.preferredWorkspaceMode = .architecturalUpdate
+            workspace.updatedAt = Date()
+            try save(workspace)
+        } catch {
+            try? ProjectRepository.save(originalRoom)
+            throw error
+        }
+        return workspace
     }
 
     static func upsertElectricalChangeRecord(
@@ -1667,6 +1883,58 @@ final class ProjectStore: ObservableObject {
             name: name,
             mode: mode,
             notes: notes
+        )
+        reload()
+    }
+
+    func beginArchitecturalCorrectionSession(
+        projectID: UUID,
+        scanID: UUID,
+        name: String,
+        notes: String?
+    ) throws {
+        _ = try WorkspaceRepository.beginArchitecturalCorrectionSession(
+            projectID: projectID,
+            scanID: scanID,
+            name: name,
+            notes: notes
+        )
+        reload()
+    }
+
+    func upsertArchitecturalWallChangeRecord(
+        projectID: UUID,
+        changeSetID: UUID,
+        record: ProjectChangeRecord
+    ) throws {
+        _ = try WorkspaceRepository.upsertArchitecturalWallChangeRecord(
+            projectID: projectID,
+            changeSetID: changeSetID,
+            record: record
+        )
+        reload()
+    }
+
+    func removeArchitecturalWallChangeRecord(
+        projectID: UUID,
+        changeSetID: UUID,
+        wallID: UUID
+    ) throws {
+        _ = try WorkspaceRepository.removeArchitecturalWallChangeRecord(
+            projectID: projectID,
+            changeSetID: changeSetID,
+            wallID: wallID
+        )
+        reload()
+    }
+
+    func applyArchitecturalChangeSet(
+        projectID: UUID,
+        changeSetID: UUID
+    ) throws {
+        _ = try WorkspaceRepository.applyArchitecturalChangeSet(
+            projectID: projectID,
+            changeSetID: changeSetID
         )
         reload()
     }

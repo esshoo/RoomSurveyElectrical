@@ -781,6 +781,12 @@ struct RoomProject: Codable, Identifiable, Equatable {
     var wallPhotoSegments: [WallPhotoSegment]? = nil
     var photographicScanProgress: WallPhotographicScanProgress? = nil
     var scanContinuationState: SpatialScanContinuationState? = nil
+    /// Immutable copy of the architecture that existed before the first
+    /// manual correction. `walls` remains the materialized effective geometry
+    /// for compatibility with the current 2D/3D and export pipeline.
+    var originalWalls: [WallSnapshot]? = nil
+    /// Applied corrections are stored independently from the original scan.
+    var architecturalCorrections: [ArchitecturalWallCorrection]? = nil
     /// Increments whenever architecture is merged from another RoomPlan
     /// session. A positive revision tells the 3D viewer to render the app-owned
     /// snapshots instead of the original, now-stale RoomPlan USDZ envelope.

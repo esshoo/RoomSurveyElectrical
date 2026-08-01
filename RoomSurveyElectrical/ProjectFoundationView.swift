@@ -209,6 +209,31 @@ struct ProjectFoundationView: View {
             }
 
             Section {
+                NavigationLink {
+                    ArchitecturalCorrectionHubView(projectID: projectID)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("جلسات التصحيح المعماري")
+                                .font(.headline)
+                            Text("تعديل طول وارتفاع وموضع وزاوية الحائط مع Before/After وRecovery")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "building.2.crop.circle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
+            } header: {
+                Text("Build 49 — التصحيح المعماري")
+            } footer: {
+                Text(
+                    "تُحفظ الهندسة الأصلية بصورة مستقلة، ولا تُطبق التعديلات على المسح قبل اعتماد Change Set المرتبط به."
+                )
+            }
+
+            Section {
                 LabeledContent(
                     "مصدر الكهرباء والمسح",
                     value: project.projectSettings?.usesInheritedElectricalSettings == false
@@ -376,6 +401,12 @@ struct ProjectFoundationView: View {
                                             projectID: projectID,
                                             changeSetID: changeSet.id
                                         )
+                                    } else if changeSet.mode == .architecturalUpdate,
+                                              changeSet.targetScanID != nil {
+                                        try store.applyArchitecturalChangeSet(
+                                            projectID: projectID,
+                                            changeSetID: changeSet.id
+                                        )
                                     } else {
                                         try store.completeChangeSet(
                                             projectID: projectID,
@@ -394,7 +425,7 @@ struct ProjectFoundationView: View {
                 Text("سجل التعديلات")
             } footer: {
                 Text(
-                    "كل جلسة جديدة تنشئ نقطة استعادة قبل بدايتها. جلسات الكهرباء المرتبطة بمسح واحد متاحة الآن في Build 47."
+                    "كل جلسة جديدة تنشئ نقطة استعادة قبل بدايتها. جلسات الكهرباء متاحة من Build 47، والتصحيح المعماري المرتبط بمسح واحد متاح في Build 49."
                 )
             }
 
@@ -447,11 +478,15 @@ struct ProjectFoundationView: View {
     }
 
     private func modeAvailabilityText(_ mode: ProjectWorkspaceMode) -> String {
-        switch mode.implementationBuild {
-        case 45:
-            return "تم تجهيز الأساس في Build 45"
-        case 47:
+        switch mode {
+        case .elementUpdate:
             return "متاح الآن داخل كل مسح مستقل"
+        case .architecturalUpdate:
+            return "متاح الآن لتصحيح الحوائط في Build 49"
+        case .continueScan:
+            return "متاح من Build 46"
+        case .photosAndMaterials, .history:
+            return "تم تجهيز الأساس في Build 45"
         default:
             return "الأدوات التنفيذية مخططة لـ Build \(mode.implementationBuild)"
         }
@@ -558,7 +593,9 @@ private struct NewProjectChangeSetSheet: View {
                 Section("الجلسة") {
                     TextField("اسم الجلسة", text: $name)
                     Picker("النوع", selection: $mode) {
-                        ForEach(ProjectWorkspaceMode.allCases.filter { $0 != .elementUpdate }) { mode in
+                        ForEach(ProjectWorkspaceMode.allCases.filter {
+                            $0 != .elementUpdate && $0 != .architecturalUpdate
+                        }) { mode in
                             Label(mode.title, systemImage: mode.systemImage)
                                 .tag(mode)
                         }

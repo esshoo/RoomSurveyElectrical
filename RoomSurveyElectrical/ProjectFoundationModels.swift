@@ -550,15 +550,15 @@ enum ProjectWorkspaceMode: String, Codable, CaseIterable, Identifiable {
 
     var implementationBuild: Int {
         switch self {
-        case .presentation: 50
+        case .presentation: 51
         case .elementUpdate: 47
-        case .architecturalUpdate: 48
+        case .architecturalUpdate: 49
         case .continueScan: 46
-        case .floorEditor: 49
-        case .furnitureDesign: 51
+        case .floorEditor: 50
+        case .furnitureDesign: 52
         case .photosAndMaterials: 45
         case .history: 45
-        case .sharing: 52
+        case .sharing: 53
         }
     }
 }
@@ -679,7 +679,7 @@ struct ProjectWorldMapSummary: Equatable {
 
 extension SurveyProject {
     mutating func normalizeFoundation(appDefaults: ProjectAppDefaults) {
-        foundationSchemaVersion = max(foundationSchemaVersion ?? 0, 2)
+        foundationSchemaVersion = max(foundationSchemaVersion ?? 0, 3)
 
         if projectSettings == nil {
             let legacyOverride = ElectricalPlacementOverrides.difference(
